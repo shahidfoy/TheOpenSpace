@@ -81,6 +81,9 @@ export class MapView {
 
     // one layer of orbits / belts / ecliptic grid per distance scale
     this.scaleMode = 'visible';
+    // line overlays the player can switch off (remembered between sessions)
+    const pref = (k) => { try { return localStorage.getItem(`openspace_${k}`) !== '0'; } catch { return true; } };
+    this.show = { constellations: pref('constellations'), orbits: pref('orbits') };
     this.layers = {};
     for (const mode of ['visible', 'true']) {
       const layer = (this.layers[mode] = { group: new THREE.Group(), orbits: {}, belts: [] });
@@ -94,6 +97,7 @@ export class MapView {
     this.buildDrift();
     this.buildGalaxy();
     this.buildCosmos();
+    this.applyLines();
 
     this.sel = new THREE.Mesh(new THREE.RingGeometry(1, 1.1, 48), new THREE.MeshBasicMaterial({ color: col(0xffb347, 1.1), side: THREE.DoubleSide, transparent: true, depthWrite: false }));
     this.sel.visible = false;
@@ -130,6 +134,25 @@ export class MapView {
   radiusOf(id) {
     const it = this.items[id];
     return it.body.mapSize * it.group.scale.x;
+  }
+
+  // Constellation figures (+ bright-star names) and solar-system lines (orbits, ecliptic grid,
+  // drop lines, drift trails) can be toggled independently.
+  toggleLines(kind) {
+    this.show[kind] = !this.show[kind];
+    try { localStorage.setItem(`openspace_${kind}`, this.show[kind] ? '1' : '0'); } catch {}
+    this.applyLines();
+  }
+  applyLines() {
+    const sky = this.sky.userData;
+    if (sky.lines) sky.lines.visible = this.show.constellations;
+    if (sky.names) sky.names.visible = this.show.constellations;
+    for (const k in this.layers) {
+      const l = this.layers[k];
+      for (const id in l.orbits) l.orbits[id].visible = this.show.orbits;
+      if (l.grid) l.grid.visible = this.show.orbits;
+    }
+    for (const id in this.trails) this.trails[id].visible = this.show.orbits;
   }
 
   setScale(mode) {
@@ -206,6 +229,7 @@ export class MapView {
       const a = (k / 12) * Math.PI * 2, R = this.rOf(40, mode);
       g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(Math.cos(a) * R, 0, Math.sin(a) * R)]), mat));
     }
+    layer.grid = g;
     layer.group.add(g);
   }
 
@@ -603,7 +627,7 @@ export class MapView {
       dp.setXYZ(0, it.group.position.x, it.group.position.y, it.group.position.z);
       dp.setXYZ(1, it.group.position.x, 0, it.group.position.z);
       dp.needsUpdate = true;
-      it.drop.visible = this.view === 'system' && Math.abs(it.group.position.y) > 0.05;
+      it.drop.visible = this.view === 'system' && this.show.orbits && Math.abs(it.group.position.y) > 0.05;
       const hasBase = !!s.bases[id];
       it.el.classList.toggle('has-base', hasBase);
       it.el.classList.toggle('here', s.presence === id);

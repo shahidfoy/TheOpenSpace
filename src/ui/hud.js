@@ -53,6 +53,7 @@ const TEMPLATE = `
   <button class="goal" id="goal" data-open="goals"></button>
   <div class="mapbar" id="mapbar">
     <div class="seg"><button data-act="mapView" data-arg="system">SYSTEM</button><button data-act="mapView" data-arg="drift">DRIFT</button><button data-act="mapView" data-arg="galaxy">GALAXY</button><button data-act="mapView" data-arg="cosmos">COSMOS</button></div>
+    <div class="seg" id="line-seg"><button data-act="mapLines" data-arg="constellations">CONSTELLATIONS</button><button data-act="mapLines" data-arg="orbits">ORBITS</button></div>
     <div class="seg" id="scale-seg"><button data-act="mapScale" data-arg="visible">ILLUSTRATIVE</button><button data-act="mapScale" data-arg="true">TRUE SCALE</button></div>
     <div class="legend" id="legend"></div>
   </div>
@@ -157,6 +158,7 @@ export class Hud {
       case 'voyage': this.close(); notify('success'); this.app.startVoyage(arg, [...this.escortSel]); return;
       case 'mapView': this.close(); this.app.mapView.setView(arg); this.syncNav(); return;
       case 'mapScale': this.app.mapView.setScale(arg); this.syncNav(); return;
+      case 'mapLines': this.app.mapView.toggleLines(arg); this.syncNav(); return;
       case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
       case 'descend': this.app.setMode('earth'); return;
       case 'toOrbit': this.app.hud.flash(); this.app.setMode('local'); this.toast('Back in orbit · Halo Station', 'good'); return;
@@ -216,6 +218,9 @@ export class Hud {
     const sm = this.app.mapView?.scaleMode || 'visible';
     this.root.querySelectorAll('.mapbar .seg button').forEach((b) => b.classList.toggle('on', b.dataset.act === 'mapScale' ? b.dataset.arg === sm : b.dataset.arg === v));
     this.$('scale-seg').style.display = v === 'system' ? '' : 'none';
+    this.$('line-seg').style.display = v === 'system' || v === 'drift' ? '' : 'none';
+    const sh = this.app.mapView?.show || {};
+    this.root.querySelectorAll('#line-seg button').forEach((b) => b.classList.toggle('on', !!sh[b.dataset.arg]));
     this.$('legend').innerHTML = v === 'drift'
       ? '<b>THE SUN LEADS · REAL TIME</b>Every world is where it is right now. The trails are the real corkscrews they carved over recent years as the Sun hauls everything toward Cygnus at 230 km/s (helix pitch ~8x compressed). <span id="drift-km"></span>'
       : v === 'galaxy' ? '<b>THE MILKY WAY AS MAPPED TODAY</b>Thin but not flat: a ~1,000 ly thin disc inside a thicker one, a warped and flaring edge, a peanut-shaped bulge 10,000 ly tall and a halo of globular clusters. The Sun bobs through the disc every ~65 million years (bob drawn 5x taller). Drag to tilt.'
