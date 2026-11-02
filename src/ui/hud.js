@@ -5,6 +5,7 @@ import * as S from '../sim/state.js';
 import { backButton, haptic, notify } from '../telegram.js';
 import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
 import { FUTURE_CITIES } from '../render/futureEarth.js';
+import { TUTORIAL, isTouch } from './tutorial.js';
 
 // ---------- formatting ----------
 export function fmt(n) {
@@ -46,6 +47,7 @@ const TEMPLATE = `
   <div class="top-row">
     <button class="loc" id="loc" data-open="base"></button>
     <div class="wallet"><span class="pill">${resIcon('credits')}<b id="w-cr">0</b></span><span class="pill">${resIcon('rp')}<b id="w-rp">0</b></span>
+      <button class="icon-btn help" data-act="help" aria-label="How to play">?</button>
       <button class="icon-btn" data-open="settings" aria-label="Settings">${ICONS.gear}</button></div>
   </div>
   <div class="res-row" id="res-row"></div>
@@ -161,7 +163,7 @@ export class Hud {
       case 'mapLines': this.app.mapView.toggleLines(arg); this.syncNav(); return;
       case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
       case 'descend': this.app.setMode('earth'); return;
-      case 'toOrbit': this.app.hud.flash(); this.app.setMode('local'); this.toast('Back in orbit · Halo Station', 'good'); return;
+      case 'toOrbit': this.app.hud.flash(); this.app.setMode('local'); this.toast('Back in orbit · Eden', 'good'); return;
       case 'earthTarget': this.app.earthView.setTarget(arg); this.close(); return;
       case 'autopilot': this.app.earthView.setAutopilot(!this.app.earthView.autopilot); return;
       case 'quality': this.app.setQuality(arg); break;
@@ -169,7 +171,13 @@ export class Hud {
       case 'reset':
         if (confirm('Erase your save and start over?')) this.app.resetGame();
         return;
-      case 'start': s.seenIntro = true; this.$('overlay').classList.remove('show'); this.app.save(); return;
+      case 'start': s.seenIntro = true; this.app.save(); this.showTutorial(0); return;
+      case 'help': this.close(); this.showTutorial(0); return;
+      case 'tutNext': this.tutStep < TUTORIAL.length - 1 ? this.showTutorial(this.tutStep + 1) : this.endTutorial(); return;
+      case 'tutBack': this.showTutorial(Math.max(0, this.tutStep - 1)); return;
+      case 'tutGo': this.showTutorial(+arg); return;
+      case 'tutDevice': this.tutDevice = arg; this.showTutorial(this.tutStep); return;
+      case 'tutEnd': this.endTutorial(); return;
       case 'closeWin': this.$('overlay').classList.remove('show'); return;
     }
     this.renderSheet();
@@ -455,7 +463,7 @@ export class Hud {
       html: `<div class="power ${p.f < 1 ? 'low' : ''}"><div class="pw-h"><span>POWER GRID</span><b>${fmt(p.prod)} / ${fmt(p.use)} MW</b></div><div class="bar"><i style="width:${pct(p.use ? p.prod / p.use : 1)}"></i></div>${p.f < 1 ? `<small>Brownout · production at ${(p.f * 100).toFixed(0)}%</small>` : ''}</div>
         <div class="field"><span>ORBITAL FIELD</span><b>${f.name}</b><div class="costs">${Object.keys(f.res).map((r) => `<span class="cost">${resIcon(r)}</span>`).join('')}</div></div>
         <h3>Stores <small>cap ${fmt(cap)} t each</small></h3><div class="store-grid">${store}</div>
-        ${id !== 'earth' ? '<p class="note">Builds here use local stores first, then draw the rest from Halo Station.</p>' : ''}
+        ${id !== 'earth' ? '<p class="note">Builds here use local stores first, then draw the rest from Eden.</p>' : ''}
         <h3>Modules</h3>${cards}`,
     };
   }
@@ -510,7 +518,7 @@ export class Hud {
       if (sh.status === 'fleet') return `<div class="ship fleet"><b>${SHIPS[sh.type].name} #${sh.id}</b><span>Flying in your convoy</span></div>`;
       return `<div class="ship"><b>${SHIPS[sh.type].name} #${sh.id}</b><span>Docked at ${BODY[sh.at || 'earth'].base}</span>
         <button class="btn sm" data-act="pickLaunch" data-arg="${sh.id}">SEND</button></div>`;
-    }).join('') || '<p class="note">No ships yet. Build an Orbital Shipyard at Halo Station, then build ships here.</p>';
+    }).join('') || '<p class="note">No ships yet. Build an Orbital Shipyard at Eden, then build ships here.</p>';
     return {
       title: 'Fleet', kicker: `${S.drive(s).name} · ${fmt(S.drive(s).kms)} km/s`,
       html: `${voyage}<p class="note">To fly with your ships, open MAP, pick a world and tap AUTOPILOT FLEET. The convoy cruises at the speed of its slowest hull.</p>
@@ -528,7 +536,7 @@ export class Hud {
       return `<div class="row"><span>${b.name}<small>${b.base}</small></span><span>${fmtKm(km)}</span><b>${fmtDur(S.travelMs(s, from, b.id, t, S.shipKms(s, ship.type)))}</b>
         <button class="btn sm" data-act="launch" data-arg="${ship.id}" data-arg2="${b.id}">GO</button></div>`;
     }).join('') || '<p class="note">No valid destinations.</p>';
-    return { title: `Send ${SHIPS[ship.type].name}`, kicker: `Unmanned · from ${BODY[from].base}`, html: `<p class="note">${ship.type === 'seed' ? 'Pick a world without a base. The ship is consumed to found the outpost.' : 'Pick an outpost to collect cargo from. The hauler returns to Halo Station automatically.'}</p><div class="table launch">${rows}</div>` };
+    return { title: `Send ${SHIPS[ship.type].name}`, kicker: `Unmanned · from ${BODY[from].base}`, html: `<p class="note">${ship.type === 'seed' ? 'Pick a world without a base. The ship is consumed to found the outpost.' : 'Pick an outpost to collect cargo from. The hauler returns to Eden automatically.'}</p><div class="table launch">${rows}</div>` };
   }
 
   pMarket() {
@@ -537,7 +545,7 @@ export class Hud {
       <button class="btn sm ghost" data-act="sell" data-arg="${r}" data-arg2="10" ${st[r] >= 1 ? '' : 'disabled'}>SELL 10</button>
       <button class="btn sm" data-act="sell" data-arg="${r}" data-arg2="all" ${st[r] >= 1 ? '' : 'disabled'}>ALL</button>
       ${MARKET.buy[r] ? `<button class="btn sm buy" data-act="buy" data-arg="${r}" data-arg2="10">BUY 10 · ₡${MARKET.buy[r] * 10}</button>` : ''}</div>`).join('');
-    return { title: 'Earth Market', kicker: 'Halo Station exchange', html: `<p class="note">Earth sells only what it can launch: metal, silicon and water, at a steep price per tonne. Everything else has to come from space.</p>${rows}` };
+    return { title: 'Earth Market', kicker: 'Eden exchange', html: `<p class="note">Earth sells only what it can launch: metal, silicon and water, at a steep price per tonne. Everything else has to come from space.</p>${rows}` };
   }
 
   pBody(id) {
@@ -594,6 +602,7 @@ export class Hud {
       title: 'Settings', kicker: 'System',
       html: `<h3>Graphics</h3><div class="seg wide">${['ultra', 'high', 'low'].map((k) => `<button class="${q === k ? 'on' : ''}" data-act="quality" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
         <p class="note">ULTRA: 4x MSAA, high-DPI, lens effects, sharp shadows. HIGH: bloom and lens effects. LOW: no post-processing, for older phones. Resolution adapts automatically to hold a smooth frame rate${this.app.fps ? ` (now ${this.app.fps.toFixed(0)} fps)` : ''}.</p>${dev}
+        <h3>How to play</h3><button class="btn big ghost" data-act="help">OPEN THE TUTORIAL</button>
         <h3>Save</h3><p class="note">Progress saves automatically, and to Telegram Cloud when played inside Telegram.</p>
         <button class="btn danger" data-act="reset">RESET GAME</button>
         <h3>About</h3><p class="note">Planet positions use real inclined orbital elements, so every distance and travel time is computed from where the planets really are right now. Planet maps: Solar System Scope (CC BY 4.0) and NASA/USGS/JPL. Star catalogue: Hipparcos/BSC via d3-celestial. Prototype v0.3.</p>`,
@@ -603,10 +612,50 @@ export class Hud {
   showIntro() {
     const o = this.$('overlay');
     o.innerHTML = `<div class="card-lg"><div class="kicker">YEAR 2087 · LOW EARTH ORBIT · 400 KM</div><h1>THE OPEN<br>SPACE</h1>
-      <p>You run a one-skiff salvage outfit out of <b>Halo Station</b>. Low orbit is a junkyard of dead satellites and spent rocket stages. That scrap is your first fortune.</p>
+      <p>You run a one-skiff salvage outfit out of <b>Eden</b>. Low orbit is a junkyard of dead satellites and spent rocket stages. That scrap is your first fortune.</p>
       <p>Build robot swarms, found outposts, and fly your fleet across the real solar system in <b>real time</b>. Push your drives from 15 km/s to the <b>speed of light</b>: at c, the Sun is 8.3 minutes away.</p>
       <button class="btn big" data-act="start">ENGAGE</button></div>`;
     o.classList.add('show');
+  }
+
+  // ---------- tutorial: one card per system, controls for touch or keyboard + mouse ----------
+  showTutorial(step) {
+    this.tutStep = step;
+    this.tutDevice = this.tutDevice || (isTouch() ? 'mobile' : 'desktop');
+    const T = TUTORIAL[step], dev = this.tutDevice;
+    const rows = T[dev].map(([inp, what]) => {
+      const keyboard = inp.startsWith('k:'), label = inp.slice(2);
+      const chips = keyboard ? label.replace(/\[([^\]]+)\]/g, '<kbd>$1</kbd>') : `<span class="gest">${label}</span>`;
+      return `<div class="tut-row"><div class="tut-in">${chips}</div><div class="tut-do">${what}</div></div>`;
+    }).join('');
+    const dots = TUTORIAL.map((_, i) => `<button class="tut-dot ${i === step ? 'on' : i < step ? 'done' : ''}" data-act="tutGo" data-arg="${i}" aria-label="Step ${i + 1}"></button>`).join('');
+    const o = this.$('overlay');
+    o.innerHTML = `<div class="card-lg tut">
+      <div class="tut-top"><div class="kicker">HOW TO PLAY · ${step + 1}/${TUTORIAL.length} · ${T.kicker}</div><button class="tut-skip" data-act="tutEnd">SKIP</button></div>
+      <h1>${T.title}</h1>
+      <p>${T.body}</p>
+      <div class="seg wide tut-dev"><button class="${dev === 'mobile' ? 'on' : ''}" data-act="tutDevice" data-arg="mobile">MOBILE · TOUCH</button><button class="${dev === 'desktop' ? 'on' : ''}" data-act="tutDevice" data-arg="desktop">DESKTOP · KEYBOARD</button></div>
+      <div class="tut-rows">${rows}</div>
+      <div class="tut-dots">${dots}</div>
+      <div class="tut-nav">${step ? '<button class="btn ghost" data-act="tutBack">BACK</button>' : '<span></span>'}<button class="btn" data-act="tutNext">${step === TUTORIAL.length - 1 ? "LET'S GO" : 'NEXT'}</button></div>
+    </div>`;
+    o.classList.add('show');
+    if (!this.tutKeys) {
+      // desktop: ← / → or Enter to page through, Esc to close
+      this.tutKeys = (e) => {
+        if (this.tutStep == null || !this.$('overlay').classList.contains('show')) return;
+        if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); this.act('tutNext'); }
+        else if (e.key === 'ArrowLeft') { e.preventDefault(); this.act('tutBack'); }
+        else if (e.key === 'Escape') this.act('tutEnd');
+      };
+      addEventListener('keydown', this.tutKeys);
+    }
+  }
+  endTutorial() {
+    this.tutStep = null;
+    this.$('overlay').classList.remove('show');
+    this.app.state.seenTutorial = true;
+    this.app.save();
   }
 
   showWin() {

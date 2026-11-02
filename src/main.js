@@ -138,7 +138,7 @@ async function boot() {
   };
 
   app.canLand = () => !state.aboard && app.localView.mode === 'base' && !!SURFACES[state.presence];
-  // Halo Station: drop into Earth's atmosphere below the station's real ground track
+  // Eden: drop into Earth's atmosphere below the station's real ground track
   app.canDescend = () => !state.aboard && app.localView.mode === 'base' && state.presence === 'earth';
   app.setMode = (m) => {
     if (m === 'surface' && !app.canLand()) return;

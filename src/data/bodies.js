@@ -31,7 +31,7 @@ export const BODIES = [
   {
     id: 'earth', name: 'Earth', kind: 'planet', i: 0.00005, node: -11.26, a: 1.000003, e: 0.016709, varpi: 102.9373, L0: 100.4645, period: 365.256,
     radiusKm: 6371, mapSize: 0.85, look: { type: 1, a: 0x3a7bd5, b: 0x2d5a27, c: 0xffffff }, atmo: 0x4fa8ff,
-    base: 'Halo Station', drones: { ore: 4, silicon: 1.5 },
+    base: 'Eden', drones: { ore: 4, silicon: 1.5 },
     desc: 'Home. Low Earth orbit is littered with ~10,000 t of dead satellites and rocket stages — your first salvage field. Everything else must be launched up the gravity well at great cost.',
   },
   {

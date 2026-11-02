@@ -67,7 +67,7 @@ export function buildCost(key, lvl) {
   return o;
 }
 
-// Outposts spend local stores first, then draw the rest from Halo Station.
+// Outposts spend local stores first, then draw the rest from Eden.
 export function available(s, res, baseId) {
   if (res === 'credits') return s.wallet.credits;
   if (res === 'rp') return s.wallet.rp;
@@ -175,7 +175,7 @@ function resolveTrip(s, tr) {
     for (const r in tr.cargo) { s.bases.earth.store[r] += tr.cargo[r]; n += tr.cargo[r]; }
     s.stats.hauled += n;
     if (ship) { ship.status = 'docked'; ship.at = 'earth'; }
-    emit('toast', { text: `Hauler docked at Halo Station with ${Math.round(n)} t.`, kind: 'good' });
+    emit('toast', { text: `Hauler docked at Eden with ${Math.round(n)} t.`, kind: 'good' });
   }
   emit('changed');
   emit('stationChanged', tr.to);
@@ -282,7 +282,7 @@ export function launch(s, shipId, target) {
   if (!ship || ship.status !== 'docked' || target === from) return;
   if (ship.type === 'seed' && s.bases[target]) return emit('toast', { text: 'Already have a base there', kind: 'bad' });
   if (ship.type === 'hauler' && !s.bases[target]) return emit('toast', { text: 'No base there to collect from', kind: 'bad' });
-  if (ship.type === 'hauler' && target === 'earth') return emit('toast', { text: 'Haulers deliver to Halo Station · pick an outpost', kind: 'bad' });
+  if (ship.type === 'hauler' && target === 'earth') return emit('toast', { text: 'Haulers deliver to Eden · pick an outpost', kind: 'bad' });
   const t = simNow(s);
   s.trips.push({
     id: s.nextId++, shipId, type: ship.type === 'seed' ? 'found' : 'collect',

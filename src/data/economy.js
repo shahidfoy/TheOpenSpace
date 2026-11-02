@@ -69,18 +69,18 @@ export const SKIFF = { name: 'Kestrel Skiff', cargo: 30, speed: 1 };
 
 export const SHIPS = {
   hauler: { name: 'Mule Hauler', cargo: 150, speed: 0.8, cost: { metal: 80, silicon: 25, credits: 900 },
-    desc: 'Container hauler. Sent alone it fetches the most valuable 150 t from an outpost and returns to Halo Station; in your fleet it adds 150 t of hold. Cruises at 80% of drive speed.' },
+    desc: 'Container hauler. Sent alone it fetches the most valuable 150 t from an outpost and returns to Eden; in your fleet it adds 150 t of hold. Cruises at 80% of drive speed.' },
   seed: { name: 'Seed Ship', speed: 0.6, cost: { metal: 150, silicon: 80, ice: 30, credits: 2000 },
     desc: 'One-way colony lander. On arrival it unfolds into an outpost with solar power and a drone swarm. Heavy: cruises at 60% of drive speed.' },
 };
 
 const any = (s, k) => Object.values(s.bases).some((b) => (b.buildings[k] || 0) > 0);
 export const GOALS = [
-  { title: 'First Salvage', text: 'In PILOT, fly into the LEO debris belt and hold MINE on a dead satellite or spent rocket stage. Bring 20 t of salvage back to Halo Station.', check: (s) => s.stats.mined >= 20, reward: 600 },
+  { title: 'First Salvage', text: 'In PILOT, fly into the LEO debris belt and hold MINE on a dead satellite or spent rocket stage. Bring 20 t of salvage back to Eden.', check: (s) => s.stats.mined >= 20, reward: 600 },
   { title: 'Robot Workforce', text: 'Open BASE and build a Robot Drone Swarm.', check: (s) => (s.bases.earth.buildings.drones || 0) >= 1, reward: 600 },
   { title: 'Science', text: 'Build a Research Lab to generate research data.', check: (s) => any(s, 'lab'), reward: 800 },
   { title: 'Plasma Age', text: 'Research the Plasma Ion Drive in TECH.', check: (s) => !!s.techs.ion, reward: 1500 },
-  { title: 'The Yards', text: 'Build an Orbital Shipyard at Halo Station.', check: (s) => any(s, 'shipyard'), reward: 1000 },
+  { title: 'The Yards', text: 'Build an Orbital Shipyard at Eden.', check: (s) => any(s, 'shipyard'), reward: 1000 },
   { title: 'Moonshot', text: 'Build a Seed Ship in FLEET and launch it to the Moon.', check: (s) => !!s.bases.moon || s.trips.some((t) => t.type === 'found' && t.to === 'moon'), reward: 1000 },
   { title: 'Tycho Yards', text: 'Your Seed Ship travels in real time. When it lands, teleport there from the MAP.', check: (s) => !!s.bases.moon, reward: 3000 },
   { title: 'Moonwalker', text: 'At Tycho Yards, tap DEPLOY MECH. Walk the regolith in 1/6 g, drill glowing deposits and bring 20 t back to the landing pad.', check: (s) => (s.stats.surface || 0) >= 20, reward: 2500 },

@@ -621,7 +621,7 @@ def build_mech():
     return root
 
 
-# ================================================================ STATION CORE  (Halo Station)
+# ================================================================ STATION CORE  (Eden)
 def build_station():
     rng = random.Random(21)
     g = Group('station', uvscale=0.5)
