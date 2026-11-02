@@ -35,7 +35,7 @@ Every world uses a real surface map (Solar System Scope CC BY 4.0 and NASA/USGS 
 
 ## Ship it as a Telegram Mini App
 
-1. Host `dist/` on any HTTPS static host (Cloudflare Pages, Netlify, Vercel, GitHub Pages).
+1. Host `dist/` on any HTTPS static host. This repo includes a DigitalOcean App Platform spec (`.do/app.yaml`): a static site that runs `npm run build`, serves `dist/`, and redeploys on every push to `main`.
 2. In @BotFather: `/newbot`, then `/newapp` (or Bot Settings → Menu Button) and paste the HTTPS URL.
 3. Saves go to `localStorage` and Telegram CloudStorage (chunked), so progress follows the player across devices.
 

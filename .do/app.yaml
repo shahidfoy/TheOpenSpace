@@ -1,0 +1,15 @@
+# DigitalOcean App Platform spec: a static site rebuilt and redeployed on every push to main.
+# Create the app from this file (doctl apps create --spec .do/app.yaml) or paste it into
+# the App Platform "App Spec" editor.
+name: the-open-space
+region: nyc
+static_sites:
+  - name: web
+    github:
+      repo: shahidfoy/TheOpenSpace
+      branch: main
+      deploy_on_push: true
+    environment_slug: node-js
+    build_command: npm run build
+    output_dir: dist
+    catchall_document: index.html
