@@ -148,6 +148,7 @@ export class LocalView {
     const k = tmp.copy(E).multiplyScalar(Math.cos(o.inc)).addScaledVector(P, Math.sin(o.inc));
     const r = v3().copy(Q).multiplyScalar(Math.cos(u)).addScaledVector(k, Math.sin(u));
     const v = v3().copy(Q).multiplyScalar(-Math.sin(u)).addScaledVector(k, Math.cos(u));
+    o.r = r; // station's radial direction (scene frame): its ground point is where a descent begins
     // world → local: radial out = +Y, along-track = +Z, then tilt so the world sits below and ahead
     const qL2W = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(v3().crossVectors(r, v), r, v));
     const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, -1, 0), o.nadir).multiply(qL2W.invert());

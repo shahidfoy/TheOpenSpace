@@ -63,6 +63,9 @@ function tex(name, data = false) {
   t.anisotropy = 4;
   return (CACHE[name] = t);
 }
+// Shared surface map (e.g. the 2k Earth map as a fallback under streamed satellite tiles).
+export const planetTexture = (name) => tex(name);
+
 // Small maps for the strategic map, preloaded at boot (~300 KB for every world).
 export function preloadPlanets(ids) {
   return Promise.all(ids.map((id) => new Promise((res) => {

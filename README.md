@@ -33,6 +33,10 @@ node scripts/build-sky.mjs package/data
 
 Every world uses a real surface map (Solar System Scope CC BY 4.0 and NASA/USGS public-domain mosaics; credits in `public/planets/CREDITS.txt`). Earth has day, city lights, clouds and ocean glint. Each body is oriented with its IAU pole direction and rotates to its true prime-meridian angle for the current moment, so the real hemisphere faces the Sun; Saturn's rings sit in its true equatorial plane (nearly edge-on in 2025-26). Station views fly a real-time orbit (Earth: ~105 min), and the Sun and parent worlds sit at their real directions and angular sizes. The map's TRUE SCALE switch shows real distances and real sizes together.
 
+## Flying down to Earth
+
+At Halo Station tap **DESCEND TO EARTH**: you enter the atmosphere 100 km above the station's real ground point and fly a spaceplane over the real planet. Terrain heights stream from AWS Terrain Tiles (Terrarium: SRTM/GMTED/ETOPO1) and imagery from Sentinel-2 cloudless 2016 by EOX (CC BY 4.0), as level-of-detail Web-Mercator tiles around a floating origin with the horizon curved in the shader. The Sun sits where it really is for that place and moment (night side shows city lights). Pick real **Destinations** (Singapore, Mount Fuji, Tokyo, Everest, Dubai, Paris, New York, Rio, Sydney…) and fly yourself or use **AUTOPILOT**: long legs climb into the hypersonic corridor (~7.6 km/s at 60–85 km) and glide down on approach, so Singapore → Mount Fuji takes ~25 minutes of real time. Climb above 80 km to return to orbit. Code: `src/render/earthView.js`.
+
 ## Ship it as a Telegram Mini App
 
 1. Host `dist/` on any HTTPS static host. This repo includes a DigitalOcean App Platform spec (`.do/app.yaml`): a static site that runs `npm run build`, serves `dist/`, and redeploys on every push to `main`.

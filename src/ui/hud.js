@@ -3,6 +3,7 @@ import { BODIES, C_KMS, AU_KM, FIELDS } from '../data/bodies.js';
 import { BODY, distKm } from '../sim/orbits.js';
 import * as S from '../sim/state.js';
 import { backButton, haptic, notify } from '../telegram.js';
+import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
 
 // ---------- formatting ----------
 export function fmt(n) {
@@ -66,6 +67,8 @@ const TEMPLATE = `
   <div class="zone" id="zone"></div>
   <div class="fuel" id="fuel"><span id="grav"></span><div class="bar"><i id="fuel-b"></i></div></div>
   <button class="land" id="land" data-act="land"></button>
+  <div class="earthnav" id="earthnav"></div>
+  <div class="attrib" id="attrib"></div>
 </div>
 <div class="controls" id="controls">
   <div class="joy" id="joy"><div class="knob" id="knob"></div></div>
@@ -154,6 +157,10 @@ export class Hud {
       case 'mapView': this.close(); this.app.mapView.setView(arg); this.syncNav(); return;
       case 'mapScale': this.app.mapView.setScale(arg); this.syncNav(); return;
       case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
+      case 'descend': this.app.setMode('earth'); return;
+      case 'toOrbit': this.app.hud.flash(); this.app.setMode('local'); this.toast('Back in orbit · Halo Station', 'good'); return;
+      case 'earthTarget': this.app.earthView.setTarget(arg); this.close(); return;
+      case 'autopilot': this.app.earthView.setAutopilot(!this.app.earthView.autopilot); return;
       case 'quality': this.app.setQuality(arg); break;
       case 'scale': S.setTimeScale(s, +arg); this.toast(`Time warp ×${arg}`); break;
       case 'reset':
@@ -192,10 +199,15 @@ export class Hud {
     this.root.classList.toggle('mode-surface', this.app.mode === 'surface');
     this.root.classList.toggle('mode-map', this.app.mode === 'map');
     this.root.classList.toggle('mode-voyage', voyage);
+    const earth = this.app.mode === 'earth';
+    this.root.classList.toggle('mode-earth', earth);
     const surf = this.app.mode === 'surface';
-    this.root.querySelector('.hold.mine span').textContent = surf ? 'DRILL' : voyage ? 'SALVAGE' : 'MINE';
+    this.root.querySelector('.hold.mine span').textContent = earth ? 'BRAKE' : surf ? 'DRILL' : voyage ? 'SALVAGE' : 'MINE';
     this.root.querySelector('.hold.boost').textContent = surf ? 'SPRINT' : 'BOOST';
-    this.$('hint').textContent = surf
+    this.$('attrib').textContent = earth ? ATTRIBUTION : '';
+    this.$('hint').textContent = earth
+      ? 'Stick: turn and climb · ▲ throttle · BOOST burn · BRAKE · drag to look'
+      : surf
       ? 'Stick to walk · drag to look · ▲ jetpack · hold DRILL at glowing deposits'
       : voyage ? 'Fleet on autopilot · fly around your convoy · salvage what drifts past'
         : 'Drag to steer · stick to fly · hold MINE on salvage and rock';
@@ -242,7 +254,8 @@ export class Hud {
       if (voyage !== this.root.classList.contains('mode-voyage')) this.syncNav();
     }
     if (this.panel && (this.sheetAcc > 1 || this.dirty)) this.renderSheet();
-    if (this.app.mode !== 'map') this.updatePilot();
+    if (this.app.mode === 'earth') this.updateEarth();
+    else if (this.app.mode !== 'map') this.updatePilot();
     if (s.won && !this.winShown) this.showWin();
   }
 
@@ -323,9 +336,43 @@ export class Hud {
       this.$('fuel-b').style.width = `${info.fuel}%`;
     }
     const land = this.$('land');
-    const can = this.app.canLand();
-    land.style.display = can || surf ? '' : 'none';
-    if (can || surf) land.textContent = surf ? '⬆ RETURN TO ORBIT' : `⬇ DEPLOY MECH · ${BODY[this.app.state.presence].name.toUpperCase()}`;
+    const can = this.app.canLand(), desc = this.app.canDescend();
+    land.style.display = can || surf || desc ? '' : 'none';
+    land.dataset.act = desc && !surf ? 'descend' : 'land';
+    land.disabled = false;
+    if (desc && !surf) land.textContent = '⬇ DESCEND TO EARTH';
+    else if (can || surf) land.textContent = surf ? '⬆ RETURN TO ORBIT' : `⬇ DEPLOY MECH · ${BODY[this.app.state.presence].name.toUpperCase()}`;
+  }
+
+  // Atmospheric flight over Earth
+  updateEarth() {
+    const e = this.app.earthView, info = e.info;
+    this.$('bracket').style.display = 'none';
+    this.updateMarkers(info.markers);
+    const altTxt = info.alt >= 10000 ? `${(info.alt / 1000).toFixed(1)} km` : `${Math.round(info.alt).toLocaleString()} m`;
+    this.$('spd').innerHTML = `<b>${Math.round(info.speed * 3.6).toLocaleString()}</b><small>KM/H · MACH ${info.mach.toFixed(1)}</small><span>ALT ${altTxt} · AGL ${Math.max(0, info.agl / 1000).toFixed(1)} km</span>`;
+    const la = info.lat, lo = info.lon;
+    this.$('zone').textContent = `${Math.abs(la).toFixed(3)}°${la >= 0 ? 'N' : 'S'} ${Math.abs(lo).toFixed(3)}°${lo >= 0 ? 'E' : 'W'} · ${info.local}`;
+    const t = info.target;
+    this.$('earthnav').innerHTML = (t ? `<div class="en-t"><span>NAV</span><b>${t.name}</b><em>${fmt(t.km)} km · ETA ${fmtDur(t.eta * 1000)}</em></div>` : '<div class="en-t"><span>NAV</span><b>No destination</b></div>')
+      + `<div class="en-b"><button class="btn sm ghost" data-open="earthnav">DESTINATIONS</button>${t ? `<button class="btn sm ${info.autopilot ? '' : 'ghost'}" data-act="autopilot">${info.autopilot ? 'AUTOPILOT ON' : 'AUTOPILOT'}</button>` : ''}</div>`;
+    const land = this.$('land');
+    land.style.display = '';
+    land.dataset.act = info.canOrbit ? 'toOrbit' : '';
+    land.disabled = !info.canOrbit;
+    land.textContent = info.canOrbit ? '⬆ RETURN TO ORBIT' : '▲ CLIMB ABOVE 80 KM TO REACH ORBIT';
+  }
+
+  pEarthNav() {
+    const e = this.app.earthView, { lat, lon } = e.info;
+    const rows = PLACES.map((p) => {
+      const { d } = gc(lat, lon, p.lat, p.lon);
+      // hypersonic leg at ~7 km/s plus ~12 min climbing out and descending
+      const eta = d > 300e3 ? d / 7000 + 720 : d / 250;
+      return { p, d, eta };
+    }).sort((a, b) => a.d - b.d).map(({ p, d, eta }) => `<div class="row"><span>${p.name}<small>${Math.abs(p.lat).toFixed(2)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(2)}°${p.lon >= 0 ? 'E' : 'W'}</small></span><span>${fmt(d / 1000)} km</span><b>${fmtDur(eta * 1000)}</b>
+      <button class="btn sm" data-act="earthTarget" data-arg="${p.id}">SET</button></div>`).join('');
+    return { title: 'Destinations', kicker: 'Real places · real distances', html: `<p class="note">Set a target, then fly there yourself or tap AUTOPILOT. Long legs climb into the hypersonic corridor (~7 km/s at 60–90 km) and descend on approach, so Singapore → Mount Fuji (5,200 km) takes about 25 minutes in real time.</p><div class="table launch">${rows}</div>` };
   }
 
   updateMarkers(list) {
@@ -365,7 +412,7 @@ export class Hud {
     const [name, arg] = this.panel.split(':');
     const body = this.$('sheet-body');
     const keep = body.scrollTop;
-    const fn = { base: this.pBase, tech: this.pTech, fleet: this.pFleet, market: this.pMarket, body: this.pBody, launch: this.pLaunch, goals: this.pGoals, settings: this.pSettings }[name];
+    const fn = { base: this.pBase, tech: this.pTech, fleet: this.pFleet, market: this.pMarket, body: this.pBody, launch: this.pLaunch, goals: this.pGoals, settings: this.pSettings, earthnav: this.pEarthNav }[name];
     const { title, kicker = '', html } = fn.call(this, arg);
     this.$('sheet-title').textContent = title;
     this.$('sheet-kicker').textContent = kicker;

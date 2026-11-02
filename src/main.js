@@ -13,6 +13,7 @@ import { initTelegram, cloudLoad, cloudSave, cloudWipe, haptic, tg } from './tel
 import { LocalView } from './render/localView.js';
 import { MapView } from './render/mapView.js';
 import { SurfaceView, SURFACES } from './render/surfaceView.js';
+import { EarthView } from './render/earthView.js';
 import { loadAssets } from './render/assets.js';
 import { setAnisotropy } from './render/materials.js';
 import { LensShader, SanitizeShader } from './render/post.js';
@@ -68,7 +69,8 @@ async function boot() {
   app.localView = new LocalView(app);
   app.mapView = new MapView(app);
   app.surfaceView = new SurfaceView(app);
-  for (const sc of [app.localView.scene, app.mapView.scene, app.surfaceView.scene]) {
+  app.earthView = new EarthView(app);
+  for (const sc of [app.localView.scene, app.mapView.scene, app.surfaceView.scene, app.earthView.scene]) {
     sc.environment = env;
     sc.environmentIntensity = 0.35;
   }
@@ -105,7 +107,7 @@ async function boot() {
       lens.uniforms.uAspect.value = w / h;
     }
     labels.setSize(w, h);
-    for (const cam of [app.localView.camera, app.mapView.camera, app.surfaceView.camera]) { cam.aspect = w / h; cam.updateProjectionMatrix(); }
+    for (const cam of [app.localView.camera, app.mapView.camera, app.surfaceView.camera, app.earthView.camera]) { cam.aspect = w / h; cam.updateProjectionMatrix(); }
   }
   function resize() {
     pr = Math.min(devicePixelRatio, QUALITY[app.quality].maxPR);
@@ -136,8 +138,18 @@ async function boot() {
   };
 
   app.canLand = () => !state.aboard && app.localView.mode === 'base' && !!SURFACES[state.presence];
+  // Halo Station: drop into Earth's atmosphere below the station's real ground track
+  app.canDescend = () => !state.aboard && app.localView.mode === 'base' && state.presence === 'earth';
   app.setMode = (m) => {
     if (m === 'surface' && !app.canLand()) return;
+    if (m === 'earth' && app.mode !== 'earth') {
+      if (!app.canDescend()) return;
+      if (app.localView.cargoTotal()) app.localView.unload();
+      const sp = EarthView.subPoint(app.localView.orbit.r, S.simNow(state));
+      app.hud.flash();
+      app.earthView.enter(sp.lat, sp.lon);
+      app.hud.toast(`Atmospheric entry at ${Math.abs(sp.lat).toFixed(1)}°${sp.lat >= 0 ? 'N' : 'S'} ${Math.abs(sp.lon).toFixed(1)}°${sp.lon >= 0 ? 'E' : 'W'} · pick a destination`, 'good');
+    }
     if (app.mode === 'surface' && m !== 'surface' && app.surfaceView.cargoTotal()) app.surfaceView.unload();
     if (m === 'surface' && app.mode !== 'surface') {
       app.hud.flash();
@@ -243,7 +255,7 @@ async function boot() {
     saveAcc += dt;
     if (saveAcc > 10) { saveAcc = 0; app.save(); }
 
-    const view = app.mode === 'local' ? app.localView : app.mode === 'surface' ? app.surfaceView : app.mapView;
+    const view = app.mode === 'local' ? app.localView : app.mode === 'surface' ? app.surfaceView : app.mode === 'earth' ? app.earthView : app.mapView;
     if (app.mode === 'map') view.update(dt, S.simNow(state));
     else view.update(dt, app.input);
 

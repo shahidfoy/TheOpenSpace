@@ -145,7 +145,8 @@ export function makeSky({ lines = false, names = false, mw = 0.16, stars = 1 } =
   const mat = new THREE.ShaderMaterial({
     uniforms: { uPR: { value: 1 }, uScale: { value: 1 }, uGain: { value: stars * 1.3 } },
     vertexShader: STAR_VERT, fragmentShader: STAR_FRAG, vertexColors: true,
-    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+    // depth-tested so planets and terrain hide the stars behind them
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true,
   });
   const pts = new THREE.Points(geo, mat);
   pts.renderOrder = -9;
@@ -159,7 +160,7 @@ export function makeSky({ lines = false, names = false, mw = 0.16, stars = 1 } =
     for (const l of DATA.lines) for (let i = 1; i < l.length; i++) {
       seg.push(eqToScene(l[i - 1][0], l[i - 1][1]).multiplyScalar(SKY_R * 0.99), eqToScene(l[i][0], l[i][1]).multiplyScalar(SKY_R * 0.99));
     }
-    const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg), new THREE.LineBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.09, depthWrite: false, depthTest: false }));
+    const ls = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(seg), new THREE.LineBasicMaterial({ color: 0x7fd4ff, transparent: true, opacity: 0.09, depthWrite: false, depthTest: true }));
     ls.renderOrder = -9;
     ls.frustumCulled = false;
     g.add(ls);

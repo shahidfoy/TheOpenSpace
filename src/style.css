@@ -161,6 +161,21 @@ b, strong { font-weight: 600; }
 .land { position: absolute; right: 12px; bottom: calc(var(--bot) + 300px); padding: 9px 13px; font-weight: 700; font-size: 11px; letter-spacing: 0.1em; color: #10131a; background: var(--amber); clip-path: var(--cut); box-shadow: 0 0 18px rgba(255,179,71,0.35); }
 .mode-surface .land { background: var(--ice); }
 
+/* ---------- earth flight ---------- */
+.earthnav { display: none; position: absolute; left: 12px; right: 12px; bottom: calc(var(--bot) + 228px); }
+.mode-earth .earthnav { display: grid; gap: 6px; max-width: 250px; }
+.en-t { display: grid; padding: 7px 10px; background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); border: 1px solid var(--line); border-left: 2px solid var(--amber); clip-path: var(--cut); }
+.en-t span { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.16em; color: var(--amber); }
+.en-t b { font-size: 14px; }
+.en-t em { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.en-b { display: flex; gap: 6px; }
+.mode-earth .gauge, .mode-earth .dockline, .mode-earth .reticle { display: none; }
+.mode-earth .zone { display: block; }
+.attrib { display: none; position: absolute; left: 8px; right: 8px; bottom: calc(var(--bot) + 66px); font-size: 8.5px; color: rgba(233,237,241,0.4); text-align: center; }
+.mode-earth .attrib { display: block; }
+.mode-earth .hint { bottom: calc(var(--bot) + 78px); }
+.land:disabled { background: rgba(255,255,255,0.1); color: var(--dim); box-shadow: none; }
+
 /* ---------- touch controls ---------- */
 .controls .joy { position: absolute; left: 20px; bottom: calc(var(--bot) + 84px); width: 124px; height: 124px; border-radius: 50%; border: 1px solid var(--line-2); background: radial-gradient(circle, rgba(255,255,255,0.05), rgba(255,255,255,0.01) 70%); touch-action: none; }
 .controls .joy::before { content: ''; position: absolute; inset: 10px; border-radius: 50%; border: 1px dashed rgba(255,255,255,0.12); }
