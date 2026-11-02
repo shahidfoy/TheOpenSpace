@@ -26,7 +26,7 @@ varying vec3 vP; varying vec3 vN; varying vec3 vW;
 void main(){
   vec3 N = normalize(vN);
   vec3 V = normalize(cameraPosition - vW);
-  float f = pow(1.0 - abs(dot(N, V)), 1.6);
+  float f = pow(max(1.0 - abs(dot(N, V)), 0.0), 1.6);
   float s = clamp(dot(N, normalize(uSunDir))*0.8 + 0.3, 0.0, 1.0);
   gl_FragColor = vec4(uColor*f*s*1.4, 1.0);
 }`;

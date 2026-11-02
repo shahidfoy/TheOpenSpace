@@ -79,29 +79,31 @@ uniform vec3 uGX; uniform vec3 uGY; uniform vec3 uGZ; uniform float uK;
 uniform vec3 uLMC; uniform vec3 uSMC; uniform vec3 uM31;
 varying vec3 vP;
 ${NOISE}
-float blob(vec3 d, vec3 c, float r){ float a = acos(clamp(dot(d, c), -1.0, 1.0)); return exp(-pow(a / r, 2.0)); }
+// x*x, never pow(x, 2.0): pow() of a negative base is NaN on Direct3D/ANGLE GPUs, and bloom smears NaN into black blocks
+float sq(float x){ return x * x; }
+float blob(vec3 d, vec3 c, float r){ float a = acos(clamp(dot(d, c), -1.0, 1.0)); return exp(-sq(a / r)); }
 void main(){
   vec3 d = normalize(vP);
   float l = atan(dot(d, uGY), dot(d, uGX));
   float b = asin(clamp(dot(d, uGZ), -1.0, 1.0));
   float n = fbm(d * 7.0), n2 = fbm(d * 22.0 + 3.0), n3 = fbm(d * 3.0 + 9.0), n4 = fbm(d * 13.0 + 5.0), n5 = fbm(d * 48.0 + 1.0);
-  float bulge = exp(-pow(l / 0.42, 2.0));
+  float bulge = exp(-sq(l / 0.42));
   float width = 0.075 + 0.11 * bulge + 0.03 * n3;
-  float disk = exp(-pow((b + 0.01 * sin(l * 3.0)) / width, 2.0));
+  float disk = exp(-sq((b + 0.01 * sin(l * 3.0)) / width));
   float along = 0.32 + 0.38 * (0.5 + 0.5 * cos(l)) + 0.9 * bulge;
   float clump = 0.3 + 1.6 * n * n2 * (0.6 + 0.8 * n5);
   // Great Rift: dust lane from Cygnus (l ~ 80°) down through Aquila to Sagittarius
-  float rift = exp(-pow((b - 0.02 - 0.05 * (n3 - 0.5) - 0.02 * (n4 - 0.5)) / (0.012 + 0.03 * n4), 2.0)) * smoothstep(-0.45, -0.05, l) * smoothstep(1.55, 1.15, l);
+  float rift = exp(-sq((b - 0.02 - 0.05 * (n3 - 0.5) - 0.02 * (n4 - 0.5)) / (0.012 + 0.03 * n4))) * smoothstep(-0.45, -0.05, l) * smoothstep(1.55, 1.15, l);
   rift *= smoothstep(0.3, 0.6, n4 + 0.25 * n5);
   float dust = smoothstep(0.45, 0.75, fbm(d * 30.0 + 7.0)) * disk * 0.45;
   // Coalsack (l 301°, b -1°) and general dust mottling
-  float coal = exp(-pow(length(vec2(l + 1.0297, b + 0.0175)) / 0.06, 2.0));
+  float coal = exp(-sq(length(vec2(l + 1.0297, b + 0.0175)) / 0.06));
   float I = disk * along * clump * (1.0 - 0.85 * rift) * (1.0 - 0.7 * coal) * (1.0 - dust) * (0.75 + 0.5 * n2);
   vec3 col = mix(vec3(0.55, 0.62, 0.8), vec3(1.0, 0.8, 0.58), bulge * 0.8 + 0.2 * n3) * I;
   col += vec3(0.72, 0.74, 0.85) * (blob(d, uLMC, 0.07) * (0.5 + 0.9 * n2) * 0.55 + blob(d, uSMC, 0.035) * 0.4);
   col += vec3(0.85, 0.82, 0.75) * blob(d, uM31, 0.018) * 0.5;
   col += vec3(0.003, 0.003, 0.006);
-  gl_FragColor = vec4(col * uK, 1.0);
+  gl_FragColor = vec4(max(col * uK, vec3(0.0)), 1.0);
 }`;
 
 export function makeSky({ lines = false, names = false, mw = 0.16, stars = 1 } = {}) {

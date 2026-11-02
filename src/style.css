@@ -186,6 +186,8 @@ b, strong { font-weight: 600; }
 /* ---------- sheet ---------- */
 .sheet { position: absolute; left: 0; right: 0; bottom: calc(var(--bot) + 62px); max-height: 70%; display: flex; flex-direction: column; background: linear-gradient(180deg, rgba(18,23,31,0.94), rgba(10,13,18,0.96)); border-top: 1px solid var(--line-2); transform: translateY(115%); transition: transform 0.32s cubic-bezier(.2,.8,.2,1); z-index: 4; backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); clip-path: polygon(0 14px, 14px 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%); }
 .sheet.open { transform: none; }
+/* fully hide when closed: on wide screens a translated sheet can still peek above the dock */
+.sheet:not(.open) { visibility: hidden; transition: transform 0.32s cubic-bezier(.2,.8,.2,1), visibility 0s 0.32s; }
 .grip { width: 38px; height: 3px; margin: 8px auto 0; background: var(--line-2); border-radius: 2px; }
 .sheet header { display: flex; align-items: center; padding: 6px 16px 10px; border-bottom: 1px solid var(--line); }
 .sheet header small { display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--amber); text-transform: uppercase; }

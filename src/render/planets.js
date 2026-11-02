@@ -90,7 +90,7 @@ void main(){
   vec2 uv = vec2(fract(vUv.x + uLon0), vUv.y);
   vec3 N = normalize(vN), L = normalize(uSunDir), V = normalize(cameraPosition - vW);
   vec3 col = texture2D(uMap, uv).rgb;
-  float mu = max(dot(N, V), 0.0);
+  float mu = clamp(dot(N, V), 0.0, 1.0);
   if (uKind == 2) { gl_FragColor = vec4(col * (0.3 + 0.7 * pow(mu, 0.55)) * 3.2, 1.0); return; } // limb-darkened Sun
   float ndl = dot(N, L);
   float diff = clamp(ndl * 1.04 + 0.02, 0.0, 1.0);
