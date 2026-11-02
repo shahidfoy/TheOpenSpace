@@ -15,3 +15,5 @@ Resized to 2048x1024 (close-up) and 512x256 (map) JPEGs.
 Live clouds (downloaded at runtime, not bundled):
   NASA Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS).
   VIIRS Corrected Reflectance (True Color), Suomi-NPP and NOAA-20. Open data, no restrictions on use.
+
+Submarine cables (public/data/cables.json): TeleGeography Submarine Cable Map, https://www.submarinecablemap.com, CC BY-NC-SA 3.0.

@@ -8,6 +8,7 @@ import { FUTURE_CITIES } from '../render/futureEarth.js';
 import { TUTORIAL, isTouch } from './tutorial.js';
 import { cyber, placeOf } from '../render/cyberView.js';
 import { US_STATES } from '../data/usStates.js';
+import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
 
 // ---------- formatting ----------
@@ -408,7 +409,7 @@ export class Hud {
     const keys = Object.keys(cyber.byCountry);
     const countries = new Set(keys.map((k) => k.slice(0, 2))).size, states = keys.filter((k) => k.startsWith('US-')).length;
     const online = d.botnets.filter((b) => b.status === 'online').length;
-    return `<b>LIVE CYBER THREATS · ${ago(d.updated)}</b><span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button>`;
+    return `<b>LIVE CYBER THREATS · ${ago(d.updated)}</b><span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="o"></i>${d.ransomware.filter((v) => groupOrigin(v.group)).length} with a reported origin (cable routes)</span><span class="cy-k"><i class="c"></i>submarine cables (TeleGeography)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button>`;
   }
 
   pCyber(cc) {
@@ -417,7 +418,8 @@ export class Hud {
     const flag = (c) => (c && COUNTRIES[c] ? COUNTRIES[c][2] : 'Unknown');
     // where an item is: "Texas, USA" for located US incidents, else the country
     const where = (x) => (x.country === 'US' && x.region && US_STATES[x.region] ? `${US_STATES[x.region][2]}, USA` : flag(x.country));
-    const rRow = (v) => `<div class="row"><span>${v.sector}<small>${v.group} · ${where(v)}</small></span><b>${ago(v.t)}</b></div>`;
+    const from = (g) => { const o = groupOrigin(g); return o ? ` · from ${flag(o.cc)} (reported)` : ''; };
+    const rRow = (v) => `<div class="row"><span>${v.sector}<small>${v.group}${from(v.group)} → ${where(v)}</small></span><b>${ago(v.t)}</b></div>`;
     const aRow = (a) => `<div class="row"><span>${a.as || a.ip}<small>${a.ip}${a.city ? ` · ${a.city}` : ''}</small></span><b>${fmt(a.attacks)} targets</b></div>`;
     if (cc === 'US') {
       // the whole US, broken down by state
@@ -458,6 +460,9 @@ export class Hud {
       html: `<div class="cy-stats"><div><b>${d.ransomware.length}</b><span>ransomware posts · 72 h</span></div><div><b>${d.attackers.length}</b><span>top attack sources</span></div><div><b>${d.botnets.filter((b) => b.status === 'online').length}</b><span>botnet C2 online</span></div><div><b>${d.exploits.length}</b><span>new exploited CVEs</span></div></div>
         <h3>Most active ransomware groups</h3><div class="costs">${top(groups, 8)}</div>
         <h3>Most targeted</h3><div class="costs">${top(places, 8, flag)}</div>${Object.keys(states).length ? `<h3>Most targeted US states <small><button class="btn sm ghost" data-act="cyberPlace" data-arg="US">ALL STATES</button></small></h3><div class="costs">${top(states, 10, (k) => US_STATES[k][2])}</div>` : ''}<div class="costs" style="margin-top:4px">${top(sectors, 6)}</div>
+        <h3>Reported origins <small>routed on the globe</small></h3><div class="costs">${(() => { const o = {}; let unk = 0; for (const v of d.ransomware) { const g = groupOrigin(v.group); if (g) o[g.cc] = (o[g.cc] || 0) + 1; else unk++; } return top(o, 6, flag) + `<span class="cost">origin unknown <b>${unk}</b></span>`; })()}</div>
+        ${(cyber.routes || []).length ? `<h3>Paths through the cables <small>shortest route over the real network</small></h3><div class="table">${cyber.routes.slice(0, 8).map((r) => `<div class="row"><span>${flag(r.from)} → ${r.to}<small>${r.cables.slice(0, 4).join(' · ')}${r.cables.length > 4 ? ` +${r.cables.length - 4} more` : ''}</small></span><b>${fmt(r.km)} km</b></div>`).join('')}</div>` : ''}
+        <p class="note">Pulses run from a group's publicly reported base to its victims, only for groups with solid public attribution (government actions or major research). That reporting is about where operators are believed to be, not proof or state sponsorship; most groups stay "origin unknown". Each path follows real submarine cables (TeleGeography's Submarine Cable Map) from the origin's main internet hub, with straight links standing in for land fibre between landing stations. It is the shortest plausible path over the network, not a traced one: actual routes aren't public and attackers usually relay through VPNs and proxies elsewhere.</p>
         <h3>Latest ransomware incidents</h3><div class="table">${d.ransomware.slice(0, 30).map(rRow).join('')}</div>
         <h3>Newly exploited vulnerabilities <small>CISA KEV</small></h3><div class="table">${d.exploits.map((x) => `<div class="row"><span>${x.vendor} ${x.product}<small>${x.cve}${x.ransomware ? ' · used by ransomware' : ''}</small></span><b>${x.t}</b></div>`).join('')}</div>
         <h3>Top attack sources <small>SANS ISC sensors</small></h3><div class="table">${d.attackers.slice(0, 15).map((a) => `<div class="row"><span>${where(a)}<small>${a.as || ''} · ${a.ip}${a.city ? ` · ${a.city}` : ''}</small></span><b>${fmt(a.attacks)} targets</b></div>`).join('')}</div>

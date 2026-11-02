@@ -114,9 +114,13 @@ b, strong { font-weight: 600; }
 .legend .cy-k i { width: 8px; height: 8px; border-radius: 50%; }
 .legend .cy-k i.m { background: #ff2bd6; box-shadow: 0 0 6px #ff2bd6; }
 .legend .cy-k i.a { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.legend .cy-k i.c { background: linear-gradient(90deg, #3fd0ff, #b46bff, #3fffa0); border-radius: 1px; width: 14px; height: 2px; opacity: 0.7; }
+.legend .cy-k i.o { background: linear-gradient(90deg, #ff2a3a, #ff2bd6); border-radius: 2px; width: 14px; height: 3px; }
 .legend .cy-k i.r { background: #ff2a3a; transform: rotate(45deg); border-radius: 1px; }
 .legend .btn { margin-top: 6px; pointer-events: auto; }
 .cyber-label { display: grid; font-family: var(--mono); font-size: 9.5px; color: #ffc6f1; text-align: center; text-shadow: 0 0 6px #000, 0 0 2px #000; white-space: nowrap; pointer-events: none; }
+.cyber-label.origin { color: #ff9aa4; }
+.cyber-label.origin b { color: #ff5a66; }
 .cyber-label b { font-weight: 400; color: #fff; letter-spacing: 0.08em; text-transform: uppercase; }
 .cy-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .cy-stats div { display: grid; padding: 8px 10px; background: rgba(255,43,214,0.06); border-left: 2px solid #ff2bd6; }

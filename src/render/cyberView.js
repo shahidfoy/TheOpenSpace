@@ -3,6 +3,8 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { BODY, helioAU } from '../sim/orbits.js';
 import { COUNTRIES } from '../data/countries.js';
 import { US_STATES } from '../data/usStates.js';
+import { groupOrigin, ORIGIN_HUBS } from '../data/ransomwareGroups.js';
+import { loadCables, route, cableNet } from './cableNet.js';
 import { planetMaterial, bodyQuat } from './planets.js';
 import { atmosphereMaterial } from './shaders.js';
 
@@ -62,6 +64,19 @@ export function latLon(lat, lon, r, out = new THREE.Vector3()) {
   const la = lat * D2R, lo = lon * D2R;
   return out.set(Math.cos(la) * Math.cos(lo), Math.sin(la), -Math.cos(la) * Math.sin(lo)).multiplyScalar(r);
 }
+
+// Route: a pulse travels along the cables from the reported origin (t = 0) to the victim (t = 1)
+// at a constant speed over the globe, with a fixed-length trail.
+const ARC_SPEED = 0.35; // radians of the globe per second
+const ARC_VERT = /* glsl */ `attribute float aT; varying float vT; void main(){ vT = aT; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const ARC_FRAG = /* glsl */ `uniform float uTime; uniform float uPhase; uniform float uK; uniform float uLen; varying float vT;
+void main(){
+  float head = fract(uTime * ${ARC_SPEED.toFixed(2)} / uLen + uPhase);
+  float d = (head - vT) * uLen; // radians behind the pulse
+  float trail = d > 0.0 ? exp(-d * 5.0) : 0.0;
+  vec3 c = mix(vec3(1.0, 0.16, 0.24), vec3(1.0, 0.17, 0.84), vT);
+  gl_FragColor = vec4(c * (0.18 * uK + 2.6 * trail * (0.5 + 0.5 * uK)), 1.0);
+}`;
 
 const COLUMN_VERT = /* glsl */ `varying float vY; void main(){ vY = uv.y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 const COLUMN_FRAG = /* glsl */ `uniform vec3 uColor; uniform float uTime; uniform float uPhase; varying float vY;
@@ -190,6 +205,113 @@ export class CyberGlobe {
       this.hits.push({ pos: base.clone().addScaledVector(n, 0.3), cc });
     }
     this.columns = cols;
+    this.buildArcs(data);
+  }
+
+  // Reported origin → victim arcs, aggregated per (origin country, victim country/state).
+  buildArcs(data) {
+    this.arcs = [];
+    const pairs = {}, origins = {};
+    for (const v of data.ransomware) {
+      const o = groupOrigin(v.group);
+      if (!o || !COUNTRIES[o.cc]) continue;
+      const tk = keyOf(v.country, v.region), tp = placeOf(tk);
+      (origins[o.cc] = origins[o.cc] || new Set()).add(v.group);
+      if (!tp || tk === o.cc) continue;
+      const key = `${o.cc}>${tk}`;
+      const p = (pairs[key] = pairs[key] || { cc: o.cc, to: tp, n: 0, groups: new Set() });
+      p.n++;
+      p.groups.add(v.group);
+    }
+    const list = Object.values(pairs);
+    cyber.routes = [];
+    const markers = this.markers;
+    loadCables().then(() => {
+      if (this.markers !== markers) return; // rebuilt meanwhile
+      this.drawCables();
+      const maxN = Math.max(1, ...list.map((p) => p.n));
+      const rnd = (x) => { const y = Math.sin(x * 78.233) * 43758.5453; return y - Math.floor(y); };
+      list.forEach((p, i) => {
+        const r = route(ORIGIN_HUBS[p.cc] || COUNTRIES[p.cc], p.to);
+        if (!r) return;
+        cyber.routes.push({ from: p.cc, to: p.to[2], n: p.n, groups: [...p.groups], km: r.km, stations: r.stations, cables: [...new Set(r.legs.map((l) => l.cable).filter(Boolean))] });
+        // follow each leg on the surface, splitting long hops along the great circle
+        const pts = [], len = [];
+        const a = new THREE.Vector3(), b = new THREE.Vector3();
+        for (const leg of r.legs) for (let j = 1; j < leg.pts.length; j++) {
+          latLon(leg.pts[j - 1][0], leg.pts[j - 1][1], 1, a);
+          latLon(leg.pts[j][0], leg.pts[j][1], 1, b);
+          const ang = a.angleTo(b), steps = Math.max(1, Math.ceil(ang / 0.02));
+          for (let k = pts.length ? 1 : 0; k <= steps; k++) {
+            const t = k / steps;
+            const q = ang < 1e-6 ? a.clone() : a.clone().multiplyScalar(Math.sin((1 - t) * ang)).addScaledVector(b, Math.sin(t * ang)).divideScalar(Math.sin(ang)).normalize();
+            len.push(pts.length ? len[len.length - 1] + q.angleTo(pts[pts.length - 1]) : 0);
+            pts.push(q);
+          }
+        }
+        const total = len[len.length - 1] || 1;
+        for (const q of pts) q.multiplyScalar(GLOBE_R * 1.004);
+        const ts = new Float32Array(len.map((x) => x / total));
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        geo.setAttribute('aT', new THREE.BufferAttribute(ts, 1));
+        const kk = 0.35 + 0.65 * (p.n / maxN);
+        const line = new THREE.Line(geo, new THREE.ShaderMaterial({
+          uniforms: { uTime: { value: this.time }, uPhase: { value: rnd(i + 1) }, uK: { value: kk }, uLen: { value: total } },
+          vertexShader: ARC_VERT, fragmentShader: ARC_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+        }));
+        this.markers.add(line);
+        const head = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xff3cb0).multiplyScalar(1.8), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+        head.scale.setScalar(0.18 + 0.16 * kk);
+        this.markers.add(head);
+        this.arcs.push({ pts, ts, head, phase: rnd(i + 1), len: total });
+      });
+      cyber.routes.sort((x, y) => y.n - x.n);
+    });
+    // reported bases: a red hexagon at the country's main internet hub + label naming the groups
+    for (const cc in origins) {
+      const [la, lo] = ORIGIN_HUBS[cc] || COUNTRIES[cc], name = COUNTRIES[cc][2];
+      const pos = latLon(la, lo, GLOBE_R), n = pos.clone().normalize();
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.5, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2a3a).multiplyScalar(2.4), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+      ring.position.copy(pos).addScaledVector(n, 0.04);
+      ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+      ring.userData = { pulse: true, s: 1.4, phase: 0.5 };
+      this.markers.add(ring);
+      const el = document.createElement('div');
+      el.className = 'cyber-label origin';
+      el.innerHTML = `<b>REPORTED BASE · ${name}</b>${[...origins[cc]].join(', ')}`;
+      const l = new CSS2DObject(el);
+      l.position.copy(pos).addScaledVector(n, 0.9);
+      this.markers.add(l);
+      this.labels.push(l);
+    }
+    this.arcStats = { pairs: list.length, attributed: list.reduce((x, p) => x + p.n, 0) };
+  }
+
+  // the whole submarine cable network, faint, in each cable's own map colour
+  drawCables() {
+    if (this.cables) return;
+    const net = cableNet(), pos = [], col = [];
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), q = new THREE.Vector3(), prev = new THREE.Vector3(), c = new THREE.Color(), tint = new THREE.Color(0x00e5ff);
+    for (const [, color, paths] of net.cables) {
+      c.set(color).lerp(tint, 0.35);
+      for (const p of paths) for (let i = 1; i < p.length; i++) {
+        latLon(net.lat(p[i - 1]), net.lon(p[i - 1]), 1, a);
+        latLon(net.lat(p[i]), net.lon(p[i]), 1, b);
+        const steps = Math.max(1, Math.ceil(a.angleTo(b) / 0.03));
+        prev.copy(a);
+        for (let k = 1; k <= steps; k++) {
+          q.copy(a).lerp(b, k / steps).normalize();
+          pos.push(prev.x * GLOBE_R * 1.002, prev.y * GLOBE_R * 1.002, prev.z * GLOBE_R * 1.002, q.x * GLOBE_R * 1.002, q.y * GLOBE_R * 1.002, q.z * GLOBE_R * 1.002);
+          col.push(c.r, c.g, c.b, c.r, c.g, c.b);
+          prev.copy(q);
+        }
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    this.cables = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.group.add(this.cables);
   }
 
   // real day/night: the Sun's direction in Earth-fixed coordinates = globe local frame
@@ -207,6 +329,12 @@ export class CyberGlobe {
     const k = (this.time * 0.08) % 1;
     this.scan.position.y = Math.cos(k * Math.PI) * GLOBE_R;
     this.scan.scale.setScalar(Math.max(0.02, Math.sin(k * Math.PI)));
+    for (const a of this.arcs || []) {
+      const f = (this.time * ARC_SPEED / a.len + a.phase) % 1;
+      let lo = 0, hi = a.ts.length - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (a.ts[m] <= f) lo = m; else hi = m; }
+      a.head.position.lerpVectors(a.pts[lo], a.pts[hi], (f - a.ts[lo]) / (a.ts[hi] - a.ts[lo] || 1));
+    }
     for (const m of this.markers.children) {
       if (m.userData.pulse) {
         const f = (this.time * 0.6 + m.userData.phase) % 1;
