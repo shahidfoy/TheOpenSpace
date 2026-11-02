@@ -201,7 +201,7 @@ export class CyberGlobe {
         if (k >= Math.max(2, maxR * 0.15)) {
           const el = document.createElement('div');
           el.className = 'cyber-label';
-          el.innerHTML = `<b>${cc === 'US' ? 'USA · state unknown' : name.replace(', USA', '')}</b>${k} ransomware`;
+          el.innerHTML = `<b>${cc === 'US' ? 'USA · state unknown' : name.replace(', USA', '')}</b><small>${k} ransomware</small>`;
           const l = new CSS2DObject(el);
           l.position.copy(base).addScaledVector(n, h + 0.25);
           this.markers.add(l);
@@ -315,7 +315,7 @@ export class CyberGlobe {
       this.markers.add(ring);
       const el = document.createElement('div');
       el.className = 'cyber-label origin';
-      el.innerHTML = `<b>REPORTED BASE · ${name}</b>${[...origins[cc]].join(', ')}`;
+      el.innerHTML = `<b>REPORTED BASE · ${name}</b><small>${[...origins[cc]].join(', ')}</small>`;
       const l = new CSS2DObject(el);
       l.position.copy(pos).addScaledVector(n, 0.9);
       l.userData.layer = 'routes';

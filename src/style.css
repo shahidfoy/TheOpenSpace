@@ -131,6 +131,27 @@ b, strong { font-weight: 600; }
 .row b.bad { color: var(--bad); }
 .row.tap { cursor: pointer; }
 .row.tap:active { background: rgba(255,43,214,0.12); }
+.legend .lg-head { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; width: 100%; text-align: left; padding: 0; background: none; color: inherit; font: inherit; }
+.legend .lg-head b { grid-column: 1; }
+.legend .lg-sum { grid-column: 1; font-family: var(--mono); font-size: 11px; color: #c3ccd5; }
+.legend .chev { grid-column: 2; grid-row: 1 / span 2; align-self: center; width: 7px; height: 7px; border-right: 1.5px solid var(--ice); border-bottom: 1.5px solid var(--ice); transform: rotate(45deg); transition: transform 0.2s; margin: 0 2px 4px; }
+.mapbar.open .legend .chev { transform: rotate(-135deg); margin: 4px 2px 0; }
+.cyber-label small { font-size: inherit; }
+/* phones: map bar shows the view picker + a one-line summary; tap it for layers, options and the full legend */
+@media (max-width: 899px) {
+  .legend { order: 1; max-width: min(300px, 100%); }
+  .mapbar .opt { order: 2; }
+  .mapbar:not(.open) .opt { display: none !important; }
+  .mapbar:not(.open) .lg-body { display: none; }
+  .mapbar.open .lg-sum { display: none; }
+  .mapbar .seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .mapbar .seg button { flex: none; }
+  .cyber-label small { display: none; }
+}
+@media (min-width: 900px) {
+  #ui .legend .lg-head { pointer-events: none; }
+  .legend .lg-sum, .legend .chev { display: none; }
+}
 .legend b { display: block; font-family: var(--mono); font-weight: 400; font-size: 10px; letter-spacing: 0.14em; color: var(--ice); margin-bottom: 2px; }
 
 /* ---------- pilot HUD ---------- */
