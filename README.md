@@ -39,6 +39,10 @@ At Eden tap **DESCEND TO EARTH**: you enter the atmosphere 100 km above the stat
 
 **Earth, 2087** (`src/render/futureEarth.js`): on top of the real planet sits an imagined cyberpunk future. Real cities grow procedural neon megacities placed only on real land (glass megatowers up to 2.8 km, neon corner tubes and crowns, holographic billboards, sky-traffic lanes, glowing street grids and purple light pollution at night). A space elevator rises from the strait off Singapore (1.3° from the equator) to an equatorial orbital ring at 600 km that arcs across the sky. Day and night still follow the real Sun.
 
+## Live weather
+
+Earth's clouds are real: after boot the game downloads the latest global true-colour mosaics from NASA GIBS (VIIRS on Suomi-NPP and NOAA-20, no API key, CORS-enabled), lays today's passes over yesterday's full map with feathered seams, and extracts cloud cover by comparing against the cloud-free Earth map (so deserts and ice caps aren't read as cloud). Each region shows its latest satellite pass, typically under 24 hours old; it refreshes every 30 minutes and falls back to a static cloud map offline. The same map drives the globe in orbit/map views and, during Earth flight, a cloud deck at ~2.2 km where real cover is filled in with fractal detail. Code: `src/render/weather.js`.
+
 ## Ship it as a Telegram Mini App
 
 1. Host `dist/` on any HTTPS static host. This repo includes a DigitalOcean App Platform spec (`.do/app.yaml`): a static site that runs `npm run build`, serves `dist/`, and redeploys on every push to `main`.

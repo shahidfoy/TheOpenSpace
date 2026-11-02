@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { makeSky } from './sky.js';
-import { glowSprite } from './shaders.js';
+import { glowSprite, NOISE } from './shaders.js';
+import { weather, WEATHER_CREDIT } from './weather.js';
 import { makeSkiff, setThrust } from './models.js';
 import { bodyQuat, planetTexture } from './planets.js';
 import { BODY, helioAU } from '../sim/orbits.js';
@@ -17,7 +18,7 @@ import { FutureEarth, FUTURE_CITIES } from './futureEarth.js';
 const R = 6371000, D2R = Math.PI / 180;
 const IMAGERY = (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/${z}/${y}/${x}.jpg`;
 const TERRAIN = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
-export const ATTRIBUTION = 'Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0, modified Copernicus data) · Terrain: AWS Terrain Tiles (SRTM, GMTED, ETOPO1)';
+export const ATTRIBUTION = `Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0, modified Copernicus data) · Terrain: AWS Terrain Tiles (SRTM, GMTED, ETOPO1) · ${WEATHER_CREDIT}`;
 const SEG = 32; // quads per tile edge (+1 skirt ring)
 const K = 2; // tiles each side of the player per level (5 x 5)
 const RECENTER = 30000;
@@ -150,7 +151,7 @@ void main(){
 const TERRAIN_FRAG = /* glsl */ `
 uniform sampler2D uMap; uniform sampler2D uGlobal; uniform sampler2D uLights; uniform float uHasMap;
 uniform vec4 uHole; uniform vec3 uSun; uniform float uDay; uniform vec3 uCam; uniform vec3 uFog; uniform float uFogK; uniform vec3 uSky;
-uniform vec4 uCities[4]; uniform float uTime;
+uniform vec4 uCities[4]; uniform float uTime; uniform sampler2D uClouds;
 float gridLine(float x, float s, float w){ float d = abs(fract(x / s + 0.5) - 0.5) * s; return 1.0 - smoothstep(w, w + fwidth(x) * 1.5, d); }
 varying vec2 vUv; varying vec2 vMerc; varying vec2 vGeo; varying float vWater; varying vec3 vN; varying vec3 vW; varying float vDist;
 void main(){
@@ -181,11 +182,50 @@ void main(){
     vec3 neon = vec3(0.0, 0.75, 1.0) * minor * 0.22 + vec3(1.0, 0.15, 0.8) * major * (0.8 + pulse * 2.0);
     col += neon * k * (0.08 + 1.0 * (1.0 - uDay));
   }
+  // seen from high up, today's real cloud cover lies over the distant ground
+  float cov = texture2D(uClouds, vec2(fract(vGeo.y / 360.0 + 0.5), 0.5 + vGeo.x / 180.0)).r;
+  float farC = smoothstep(90000.0, 160000.0, vDist);
+  col = mix(col, vec3(0.88) * (max(uSun.y, 0.0) * 0.75 * uDay + 0.16 * uDay + 0.02), cov * farC * 0.92);
   float f = 1.0 - exp(-vDist * uFogK); // aerial perspective
   gl_FragColor = vec4(mix(col, uFog, clamp(f, 0.0, 1.0)), 1.0);
 }`;
 
 // ---------------------------------------------------------------- sky
+// Cloud deck ~2.2 km up: where real satellite cover says "cloudy", fractal noise fills in the
+// shapes; clear skies stay clear. Noise runs in absolute metres so it doesn't jump on recentring.
+const CLOUD_VERT = /* glsl */ `
+uniform vec3 uCam;
+varying vec3 vW; varying float vDist;
+void main(){
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vec2 d = w.xz - uCam.xz;
+  w.y -= dot(d, d) / (2.0 * 6371000.0);
+  vW = w.xyz;
+  vDist = distance(w.xyz, uCam);
+  gl_Position = projectionMatrix * viewMatrix * w;
+}`;
+const CLOUD_FRAG = /* glsl */ `
+uniform sampler2D uClouds; uniform vec2 uOrigin; uniform vec2 uOffset; uniform vec3 uSun; uniform float uDay;
+uniform vec3 uFog; uniform float uFogK; uniform float uTime;
+varying vec3 vW; varying float vDist;
+${NOISE}
+void main(){
+  float lat = uOrigin.x + (-vW.z / 6371000.0) * 57.29578;
+  float lon = uOrigin.y + (vW.x / (6371000.0 * cos(uOrigin.x * 0.0174533))) * 57.29578;
+  float cov = texture2D(uClouds, vec2(fract(lon / 360.0 + 0.5), 0.5 + lat / 180.0)).r;
+  vec2 m = vW.xz + uOffset + vec2(uTime * 12.0, uTime * 3.0); // drifting with the wind
+  float n = fbm(vec3(m / 5200.0, 0.0)) * 0.62 + fbm(vec3(m / 1400.0, 3.1)) * 0.28 + noise(vec3(m / 380.0, 7.7)) * 0.1;
+  float a = smoothstep(0.66 - 0.5 * cov, 0.84 - 0.5 * cov, n) * smoothstep(0.03, 0.18, cov);
+  a *= 1.0 - smoothstep(110000.0, 160000.0, vDist);
+  if (a < 0.01) discard;
+  float lit = max(uSun.y, 0.0) * 0.72 * uDay + 0.16 * uDay + 0.02;
+  // billowy tops: brighter crests, grey-blue hollows
+  float shape = smoothstep(0.25, 0.95, n + noise(vec3(m / 900.0, 2.0)) * 0.25);
+  vec3 col = mix(vec3(0.55, 0.6, 0.7), vec3(1.0, 0.99, 0.97), shape) * lit;
+  col = mix(col, uFog, clamp(1.0 - exp(-vDist * uFogK), 0.0, 1.0));
+  gl_FragColor = vec4(col, a * 0.92);
+}`;
+
 const SKY_FRAG = /* glsl */ `
 uniform vec3 uSun; uniform float uAlt; uniform float uDay; uniform vec3 uGlow;
 varying vec3 vP;
@@ -241,6 +281,16 @@ export class EarthView {
     this.skiff.add(this.plasma);
     this.plasma.position.set(0, -0.3, 2.6);
 
+    this.cloudDeck = new THREE.Mesh(new THREE.PlaneGeometry(330000, 330000, 120, 120).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({
+      uniforms: {
+        uClouds: { value: weather.texture }, uCam: { value: new THREE.Vector3() }, uOrigin: { value: new THREE.Vector2() }, uOffset: { value: new THREE.Vector2() },
+        uSun: { value: new THREE.Vector3(0, 1, 0) }, uDay: { value: 1 }, uFog: { value: new THREE.Color() }, uFogK: { value: 0 }, uTime: { value: 0 },
+      },
+      vertexShader: CLOUD_VERT, fragmentShader: CLOUD_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    }));
+    this.cloudDeck.frustumCulled = false;
+    this.cloudDeck.renderOrder = 3;
+    this.scene.add(this.cloudDeck);
     this.terrain = new THREE.Group();
     this.scene.add(this.terrain);
     this.meshes = new Map();
@@ -256,6 +306,7 @@ export class EarthView {
   enter(lat, lon, alt = 100000) {
     this.origin = { lat, lon };
     this.pos = new THREE.Vector3(0, alt, 0);
+    this.originM = { x: 0, z: 0 };
     this.yaw = 60 * D2R; this.pitch = -0.12; this.speed = 7600;
     this.lookYaw = 0; this.lookPitch = 0;
     this.autopilot = false;
@@ -281,7 +332,7 @@ export class EarthView {
       uCam: { value: new THREE.Vector3() }, uHole: { value: new THREE.Vector4(2, 2, 2, 2) }, uSun: { value: new THREE.Vector3(0, 1, 0) },
       uDay: { value: 1 }, uFog: { value: new THREE.Color() }, uFogK: { value: 0 }, uSky: { value: new THREE.Color() },
       uGlobal: { value: this.globalTex }, uLights: { value: this.lightsTex },
-      uCities: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTime: { value: 0 },
+      uCities: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTime: { value: 0 }, uClouds: { value: weather.texture },
     };
     return (this.levelMats[i] = u);
   }
@@ -467,6 +518,8 @@ export class EarthView {
     // floating origin keeps float precision near the camera
     if (Math.hypot(this.pos.x, this.pos.z) > RECENTER) {
       this.origin = { lat: this.info.lat, lon: this.info.lon };
+      this.originM.x = (this.originM.x + this.pos.x) % 1e6;
+      this.originM.z = (this.originM.z + this.pos.z) % 1e6;
       this.pos.x = 0; this.pos.z = 0;
       this.tileAcc = 99;
     }
@@ -540,6 +593,13 @@ export class EarthView {
       lu.uSky.value.copy(skyCol);
     }
 
+    // cloud deck follows the camera at ~2.2 km (curvature is applied in its shader)
+    const cu = this.cloudDeck.material.uniforms;
+    this.cloudDeck.position.set(this.camera.position.x, 2200, this.camera.position.z);
+    cu.uCam.value.copy(this.camera.position);
+    cu.uOrigin.value.set(this.origin.lat, this.origin.lon);
+    cu.uOffset.value.set(this.originM.x, this.originM.z);
+    cu.uSun.value.copy(L); cu.uDay.value = day; cu.uFog.value.copy(fog); cu.uFogK.value = fogK; cu.uTime.value = this.time;
     if ((this.tileAcc += dt) > 0.25) { this.tileAcc = 0; this.updateTiles(); }
     // swap in imagery that has arrived
     for (const m of this.meshes.values()) {

@@ -11,3 +11,7 @@ Titan:   NASA/JPL/Space Science Institute, Cassini ISS global map (April 2011). 
 Pluto:   NASA / Johns Hopkins APL / SwRI, New Horizons colour global mosaic. Public domain.
 
 Resized to 2048x1024 (close-up) and 512x256 (map) JPEGs.
+
+Live clouds (downloaded at runtime, not bundled):
+  NASA Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS).
+  VIIRS Corrected Reflectance (True Color), Suomi-NPP and NOAA-20. Open data, no restrictions on use.

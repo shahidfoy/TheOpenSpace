@@ -18,6 +18,7 @@ import { loadAssets } from './render/assets.js';
 import { setAnisotropy } from './render/materials.js';
 import { LensShader, SanitizeShader } from './render/post.js';
 import { loadSky } from './render/sky.js';
+import { startWeather } from './render/weather.js';
 import { preloadPlanets } from './render/planets.js';
 import { BODIES } from './data/bodies.js';
 import { createInput } from './ui/input.js';
@@ -220,6 +221,7 @@ async function boot() {
   });
 
   makeComposer();
+  startWeather(); // real clouds download in the background
   app.hud = new Hud(app);
   app.setMode('local');
   resize();

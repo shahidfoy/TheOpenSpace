@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { J2000 } from '../data/bodies.js';
 import { eqToScene } from './sky.js';
+import { weather } from './weather.js';
 
 // Real surface maps (public/planets: Solar System Scope CC BY 4.0, NASA/USGS public domain)
 // and real orientation: IAU WGCCRE 2015 pole directions (RA/Dec) and prime-meridian angles,
@@ -90,7 +91,7 @@ uniform sampler2D uMap; uniform sampler2D uNight; uniform sampler2D uClouds; uni
 uniform int uKind; uniform vec3 uSunDir; uniform vec3 uAtmo; uniform float uAtmoK; uniform float uLight; uniform float uLon0;
 varying vec2 vUv; varying vec3 vN; varying vec3 vW;
 void main(){
-  vec2 uv = vec2(fract(vUv.x + uLon0), vUv.y);
+  vec2 uv = vec2(vUv.x + uLon0, vUv.y); // textures wrap (RepeatWrapping); fract() here caused a mipmap seam line
   vec3 N = normalize(vN), L = normalize(uSunDir), V = normalize(cameraPosition - vW);
   vec3 col = texture2D(uMap, uv).rgb;
   float mu = clamp(dot(N, V), 0.0, 1.0);
@@ -136,7 +137,7 @@ export function planetMaterial(body, { hi = false, light = 1 } = {}) {
   }
   if (id === 'earth') {
     u.uNight.value = tex('earth_night');
-    u.uClouds.value = tex('earth_clouds', true);
+    u.uClouds.value = weather.texture; // live satellite clouds (NASA GIBS), static map until loaded
     u.uSpec.value = tex('earth_spec', true);
   }
   const m = new THREE.ShaderMaterial({ uniforms: u, vertexShader: VERT, fragmentShader: FRAG });
