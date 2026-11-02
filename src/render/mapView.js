@@ -544,13 +544,18 @@ export class MapView {
   // ---------------- input ----------------
   bindInput(canvas) {
     const pts = new Map();
-    let down = null, pinch = 0;
+    let down = null, pinch = 0, two = null;
     const active = () => this.app.mode === 'map';
+    // two-finger gesture state: finger angle + midpoint, plus how much twist/tilt has built up before it engages
+    const twoState = () => {
+      const [a, b] = [...pts.values()];
+      return { ang: Math.atan2(b.y - a.y, b.x - a.x), my: (a.y + b.y) / 2, twist: 0, tilt: 0, rot: false, lean: false };
+    };
     canvas.addEventListener('pointerdown', (e) => {
       if (!active()) return;
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pts.size === 1) down = { x: e.clientX, y: e.clientY, moved: 0, btn: e.button };
-      if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); down = null; }
+      if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); down = null; two = twoState(); }
     });
     canvas.addEventListener('pointermove', (e) => {
       const p = pts.get(e.pointerId);
@@ -567,6 +572,19 @@ export class MapView {
         const d = Math.hypot(a.x - b.x, a.y - b.y);
         if (pinch > 0) this.zoom(pinch / d);
         pinch = d;
+        // twist two fingers to rotate the map, drag them up/down together to tilt it (touch has no right-drag).
+        // Each engages past a small threshold so a plain pinch doesn't wobble the view.
+        if (two) {
+          const ang = Math.atan2(b.y - a.y, b.x - a.x), my = (a.y + b.y) / 2;
+          let da = ang - two.ang;
+          if (da > Math.PI) da -= Math.PI * 2; else if (da < -Math.PI) da += Math.PI * 2;
+          const dmy = my - two.my;
+          two.ang = ang; two.my = my;
+          if (!two.rot) { two.twist += da; if (Math.abs(two.twist) > 0.12) { two.rot = true; da = two.twist; } }
+          if (two.rot) this.az += da;
+          if (!two.lean) { two.tilt += dmy; if (Math.abs(two.tilt) > 18 && !two.rot) { two.lean = true; } }
+          if (two.lean) this.elev = THREE.MathUtils.clamp(this.elev + dmy * 0.004, -1.4, 1.5);
+        }
       }
     });
     const up = (e) => {
@@ -578,7 +596,7 @@ export class MapView {
         if (cc) this.app.hud.open(`cyber:${cc}`);
       }
       pts.delete(e.pointerId);
-      if (pts.size < 2) pinch = 0;
+      if (pts.size < 2) { pinch = 0; two = null; }
     };
     canvas.addEventListener('pointerup', up);
     canvas.addEventListener('pointercancel', up);
