@@ -95,6 +95,15 @@ function glowTex() {
   return new THREE.CanvasTexture(c);
 }
 
+// View layers for the CYBER globe, and the presets the map bar offers.
+export const CYBER_LAYERS = ['earth', 'clouds', 'cables', 'routes', 'threats', 'labels'];
+export const CYBER_PRESETS = {
+  all: { earth: 1, clouds: 1, cables: 1, routes: 1, threats: 1, labels: 1 },
+  clear: { earth: 1, clouds: 0, cables: 1, routes: 1, threats: 1, labels: 1 },
+  cables: { earth: 0, clouds: 0, cables: 1, routes: 0, threats: 0, labels: 0 },
+  threats: { earth: 1, clouds: 0, cables: 0, routes: 1, threats: 1, labels: 1 },
+};
+
 export class CyberGlobe {
   constructor() {
     this.group = new THREE.Group();
@@ -121,6 +130,31 @@ export class CyberGlobe {
     this.time = 0;
     this.hits = []; // [{pos: Vector3 (local), cc}]
     this.labels = [];
+    this.labelsShown = false;
+    this.layers = { ...CYBER_PRESETS.all };
+    try { Object.assign(this.layers, JSON.parse(localStorage.getItem('openspace_cyber_layers') || '{}')); } catch {}
+  }
+
+  setLayer(k, on) {
+    this.layers[k] = on ? 1 : 0;
+    try { localStorage.setItem('openspace_cyber_layers', JSON.stringify(this.layers)); } catch {}
+    this.applyLayers();
+  }
+  setPreset(name) {
+    Object.assign(this.layers, CYBER_PRESETS[name]);
+    this.setLayer('earth', this.layers.earth);
+  }
+  preset() {
+    return Object.keys(CYBER_PRESETS).find((p) => CYBER_LAYERS.every((k) => !CYBER_PRESETS[p][k] === !this.layers[k])) || null;
+  }
+  applyLayers() {
+    const L = this.layers, u = this.globe.material.uniforms;
+    u.uDark.value = L.earth ? 0 : 1;
+    u.uCloudK.value = L.clouds && L.earth ? 1 : 0;
+    this.atmo.visible = !!L.earth;
+    if (this.cables) this.cables.visible = !!L.cables;
+    for (const o of this.markers.children) o.visible = !!L[o.userData.layer || 'threats'];
+    this.setLabelsVisible(this.labelsShown);
   }
 
   clear() {
@@ -259,13 +293,16 @@ export class CyberGlobe {
           uniforms: { uTime: { value: this.time }, uPhase: { value: rnd(i + 1) }, uK: { value: kk }, uLen: { value: total } },
           vertexShader: ARC_VERT, fragmentShader: ARC_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
         }));
+        line.userData.layer = 'routes';
         this.markers.add(line);
         const head = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xff3cb0).multiplyScalar(1.8), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
         head.scale.setScalar(0.18 + 0.16 * kk);
+        head.userData.layer = 'routes';
         this.markers.add(head);
         this.arcs.push({ pts, ts, head, phase: rnd(i + 1), len: total });
       });
       cyber.routes.sort((x, y) => y.n - x.n);
+      this.applyLayers();
     });
     // reported bases: a red hexagon at the country's main internet hub + label naming the groups
     for (const cc in origins) {
@@ -274,17 +311,19 @@ export class CyberGlobe {
       const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.5, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2a3a).multiplyScalar(2.4), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
       ring.position.copy(pos).addScaledVector(n, 0.04);
       ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-      ring.userData = { pulse: true, s: 1.4, phase: 0.5 };
+      ring.userData = { pulse: true, s: 1.4, phase: 0.5, layer: 'routes' };
       this.markers.add(ring);
       const el = document.createElement('div');
       el.className = 'cyber-label origin';
       el.innerHTML = `<b>REPORTED BASE · ${name}</b>${[...origins[cc]].join(', ')}`;
       const l = new CSS2DObject(el);
       l.position.copy(pos).addScaledVector(n, 0.9);
+      l.userData.layer = 'routes';
       this.markers.add(l);
       this.labels.push(l);
     }
     this.arcStats = { pairs: list.length, attributed: list.reduce((x, p) => x + p.n, 0) };
+    this.applyLayers();
   }
 
   // the whole submarine cable network, faint, in each cable's own map colour
@@ -311,6 +350,7 @@ export class CyberGlobe {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     this.cables = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.cables.visible = !!this.layers.cables;
     this.group.add(this.cables);
   }
 
@@ -319,7 +359,7 @@ export class CyberGlobe {
     this.time += dt;
     // CSS labels don't get hidden by the globe: hide those on the far side
     const camDir = camera.position.clone().normalize();
-    for (const l of this.labels) l.element.style.visibility = l.position.clone().normalize().dot(camDir) > 0.1 ? 'visible' : 'hidden';
+    for (const l of this.labels) l.element.style.visibility = this.layers.labels && l.position.clone().normalize().dot(camDir) > 0.1 ? 'visible' : 'hidden';
     const p = helioAU(BODY.earth, t);
     const sunW = new THREE.Vector3(-p[0], -p[2], p[1]).normalize();
     const s = sunW.applyQuaternion(bodyQuat('earth', t).invert());
@@ -360,6 +400,7 @@ export class CyberGlobe {
   }
 
   setLabelsVisible(on) {
+    this.labelsShown = on;
     for (const l of this.labels) l.element.style.display = on ? '' : 'none';
   }
 }

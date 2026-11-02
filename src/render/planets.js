@@ -89,6 +89,7 @@ void main(){
 const FRAG = /* glsl */ `
 uniform sampler2D uMap; uniform sampler2D uNight; uniform sampler2D uClouds; uniform sampler2D uSpec;
 uniform int uKind; uniform vec3 uSunDir; uniform vec3 uAtmo; uniform float uAtmoK; uniform float uLight; uniform float uLon0;
+uniform float uCloudK; uniform float uDark; // Earth only: cloud opacity, and a dark "hologram" globe (CYBER view)
 varying vec2 vUv; varying vec3 vN; varying vec3 vW;
 void main(){
   vec2 uv = vec2(vUv.x + uLon0, vUv.y); // textures wrap (RepeatWrapping); fract() here caused a mipmap seam line
@@ -103,7 +104,7 @@ void main(){
   if (uKind == 5) { col = mix(col, vec3(0.3, 0.31, 0.33), smoothstep(0.8, 0.94, abs(uv.y - 0.5) * 2.0)); } // Ceres' noisy poles
   vec3 o = col * diff * uLight;
   if (uKind == 1) {
-    float cl = texture2D(uClouds, uv).r;
+    float cl = texture2D(uClouds, uv).r * uCloudK;
     float ocean = texture2D(uSpec, uv).r;
     vec3 H = normalize(L + V + vec3(1e-4)); // never normalize a zero vector (L = -V)
     float sp = pow(max(dot(N, H), 0.0), 70.0) * ocean * (1.0 - cl) * step(0.0, ndl);
@@ -111,6 +112,12 @@ void main(){
     o *= mix(vec3(1.0), vec3(1.0, 0.7, 0.45), smoothstep(0.28, 0.0, ndl) * 0.55);
     vec3 lights = texture2D(uNight, uv).rgb;
     o += lights * lights * smoothstep(0.06, -0.18, ndl) * (1.0 - cl * 0.85) * vec3(1.6, 1.25, 0.8);
+    if (uDark > 0.0) {
+      // land as dark slate, oceans near black, a cyan rim; cities still faintly lit
+      vec3 holo = mix(vec3(0.05, 0.1, 0.15), vec3(0.008, 0.016, 0.03), ocean) + vec3(0.0, 0.22, 0.3) * pow(1.0 - mu, 4.0) + lights * 0.12;
+      gl_FragColor = vec4(mix(o, holo, uDark), 1.0);
+      return;
+    }
   }
   float rim = pow(1.0 - mu, 2.6);
   o += uAtmo * rim * uAtmoK * smoothstep(-0.25, 0.45, ndl);
@@ -128,7 +135,7 @@ export function planetMaterial(body, { hi = false, light = 1 } = {}) {
     uMap: { value: small }, uNight: { value: BLACK }, uClouds: { value: BLACK }, uSpec: { value: BLACK },
     uKind: { value: KIND[id] || 0 }, uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uAtmo: { value: new THREE.Color(body.atmo || 0x000000) }, uAtmoK: { value: body.atmo ? (id === 'earth' ? 0.9 : 0.5) : 0 },
-    uLight: { value: 1.25 * light }, uLon0: { value: iau ? iau[4] : 0 },
+    uLight: { value: 1.25 * light }, uLon0: { value: iau ? iau[4] : 0 }, uCloudK: { value: 1 }, uDark: { value: 0 },
   };
   if (hi) {
     const big = tex(id);

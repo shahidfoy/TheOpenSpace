@@ -6,7 +6,7 @@ import { backButton, haptic, notify } from '../telegram.js';
 import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
 import { FUTURE_CITIES } from '../render/futureEarth.js';
 import { TUTORIAL, isTouch } from './tutorial.js';
-import { cyber, placeOf } from '../render/cyberView.js';
+import { cyber, placeOf, CYBER_LAYERS } from '../render/cyberView.js';
 import { US_STATES } from '../data/usStates.js';
 import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
@@ -65,6 +65,8 @@ const TEMPLATE = `
     <div class="seg"><button data-act="mapView" data-arg="system">SYSTEM</button><button data-act="mapView" data-arg="drift">DRIFT</button><button data-act="mapView" data-arg="galaxy">GALAXY</button><button data-act="mapView" data-arg="cosmos">COSMOS</button><button data-act="mapView" data-arg="cyber">CYBER</button></div>
     <div class="seg" id="line-seg"><button data-act="mapLines" data-arg="constellations">CONSTELLATIONS</button><button data-act="mapLines" data-arg="orbits">ORBITS</button></div>
     <div class="seg" id="scale-seg"><button data-act="mapScale" data-arg="visible">ILLUSTRATIVE</button><button data-act="mapScale" data-arg="true">TRUE SCALE</button></div>
+    <div class="seg cy-seg" id="cy-preset"><button data-act="cyPreset" data-arg="all">ALL</button><button data-act="cyPreset" data-arg="clear">NO CLOUDS</button><button data-act="cyPreset" data-arg="cables">CABLES ONLY</button><button data-act="cyPreset" data-arg="threats">THREATS ONLY</button></div>
+    <div class="seg cy-seg" id="cy-layers">${CYBER_LAYERS.map((k) => `<button data-act="cyLayer" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
     <div class="legend" id="legend"></div>
   </div>
 </div>
@@ -169,6 +171,8 @@ export class Hud {
       case 'mapView': this.close(); this.app.mapView.setView(arg); this.syncNav(); return;
       case 'cyberPlace': this.open(`cyber:${arg}`); return;
       case 'mapScale': this.app.mapView.setScale(arg); this.syncNav(); return;
+      case 'cyPreset': this.app.mapView.cyber.setPreset(arg); this.syncNav(); return;
+      case 'cyLayer': { const c = this.app.mapView.cyber; c.setLayer(arg, !c.layers[arg]); this.syncNav(); return; }
       case 'mapLines': this.app.mapView.toggleLines(arg); this.syncNav(); return;
       case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
       case 'descend': this.app.setMode('earth'); return;
@@ -238,6 +242,13 @@ export class Hud {
     this.$('line-seg').style.display = v === 'system' || v === 'drift' ? '' : 'none';
     const sh = this.app.mapView?.show || {};
     this.root.querySelectorAll('#line-seg button').forEach((b) => b.classList.toggle('on', !!sh[b.dataset.arg]));
+    const cy = this.app.mapView?.cyber;
+    this.$('cy-preset').style.display = this.$('cy-layers').style.display = v === 'cyber' ? '' : 'none';
+    if (cy) {
+      const p = cy.preset();
+      this.root.querySelectorAll('#cy-preset button').forEach((b) => b.classList.toggle('on', b.dataset.arg === p));
+      this.root.querySelectorAll('#cy-layers button').forEach((b) => b.classList.toggle('on', !!cy.layers[b.dataset.arg]));
+    }
     this.$('legend').innerHTML = v === 'drift'
       ? '<b>THE SUN LEADS · REAL TIME</b>Every world is where it is right now. The trails are the real corkscrews they carved over recent years as the Sun hauls everything toward Cygnus at 230 km/s (helix pitch ~8x compressed). <span id="drift-km"></span>'
       : v === 'galaxy' ? '<b>THE MILKY WAY AS MAPPED TODAY</b>Thin but not flat: a ~1,000 ly thin disc inside a thicker one, a warped and flaring edge, a peanut-shaped bulge 10,000 ly tall and a halo of globular clusters. The Sun bobs through the disc every ~65 million years (bob drawn 5x taller). Drag to tilt.'
