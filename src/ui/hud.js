@@ -50,6 +50,9 @@ const ICONS = {
   gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" fill="none"/></svg>',
 };
 
+// Map legend: a title, a one-line summary (shown collapsed on phones) and the full detail.
+const legend = (title, sum, body) => `<button class="lg-head" data-act="mapInfo" aria-label="Toggle map details"><b>${title}</b><span class="lg-sum">${sum}</span><i class="chev"></i></button><div class="lg-body">${body}</div>`;
+
 const TEMPLATE = `
 <div class="top">
   <div class="top-row">
@@ -63,10 +66,10 @@ const TEMPLATE = `
   <button class="goal" id="goal" data-open="goals"></button>
   <div class="mapbar" id="mapbar">
     <div class="seg"><button data-act="mapView" data-arg="system">SYSTEM</button><button data-act="mapView" data-arg="drift">DRIFT</button><button data-act="mapView" data-arg="galaxy">GALAXY</button><button data-act="mapView" data-arg="cosmos">COSMOS</button><button data-act="mapView" data-arg="cyber">CYBER</button></div>
-    <div class="seg" id="line-seg"><button data-act="mapLines" data-arg="constellations">CONSTELLATIONS</button><button data-act="mapLines" data-arg="orbits">ORBITS</button></div>
-    <div class="seg" id="scale-seg"><button data-act="mapScale" data-arg="visible">ILLUSTRATIVE</button><button data-act="mapScale" data-arg="true">TRUE SCALE</button></div>
-    <div class="seg cy-seg" id="cy-preset"><button data-act="cyPreset" data-arg="all">ALL</button><button data-act="cyPreset" data-arg="clear">NO CLOUDS</button><button data-act="cyPreset" data-arg="cables">CABLES ONLY</button><button data-act="cyPreset" data-arg="threats">THREATS ONLY</button></div>
-    <div class="seg cy-seg" id="cy-layers">${CYBER_LAYERS.map((k) => `<button data-act="cyLayer" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
+    <div class="seg opt" id="line-seg"><button data-act="mapLines" data-arg="constellations">CONSTELLATIONS</button><button data-act="mapLines" data-arg="orbits">ORBITS</button></div>
+    <div class="seg opt" id="scale-seg"><button data-act="mapScale" data-arg="visible">ILLUSTRATIVE</button><button data-act="mapScale" data-arg="true">TRUE SCALE</button></div>
+    <div class="seg cy-seg opt" id="cy-preset"><button data-act="cyPreset" data-arg="all">ALL</button><button data-act="cyPreset" data-arg="clear">NO CLOUDS</button><button data-act="cyPreset" data-arg="cables">CABLES ONLY</button><button data-act="cyPreset" data-arg="threats">THREATS ONLY</button></div>
+    <div class="seg cy-seg opt" id="cy-layers">${CYBER_LAYERS.map((k) => `<button data-act="cyLayer" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
     <div class="legend" id="legend"></div>
   </div>
 </div>
@@ -173,6 +176,7 @@ export class Hud {
       case 'mapScale': this.app.mapView.setScale(arg); this.syncNav(); return;
       case 'cyPreset': this.app.mapView.cyber.setPreset(arg); this.syncNav(); return;
       case 'cyLayer': { const c = this.app.mapView.cyber; c.setLayer(arg, !c.layers[arg]); this.syncNav(); return; }
+      case 'mapInfo': this.mapInfoOpen = !this.mapInfoOpen; this.$('mapbar').classList.toggle('open', this.mapInfoOpen); return;
       case 'mapLines': this.app.mapView.toggleLines(arg); this.syncNav(); return;
       case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
       case 'descend': this.app.setMode('earth'); return;
@@ -249,13 +253,14 @@ export class Hud {
       this.root.querySelectorAll('#cy-preset button').forEach((b) => b.classList.toggle('on', b.dataset.arg === p));
       this.root.querySelectorAll('#cy-layers button').forEach((b) => b.classList.toggle('on', !!cy.layers[b.dataset.arg]));
     }
+    this.$('mapbar').classList.toggle('open', !!this.mapInfoOpen);
     this.$('legend').innerHTML = v === 'drift'
-      ? '<b>THE SUN LEADS · REAL TIME</b>Every world is where it is right now. The trails are the real corkscrews they carved over recent years as the Sun hauls everything toward Cygnus at 230 km/s (helix pitch ~8x compressed). <span id="drift-km"></span>'
-      : v === 'galaxy' ? '<b>THE MILKY WAY AS MAPPED TODAY</b>Thin but not flat: a ~1,000 ly thin disc inside a thicker one, a warped and flaring edge, a peanut-shaped bulge 10,000 ly tall and a halo of globular clusters. The Sun bobs through the disc every ~65 million years (bob drawn 5x taller). Drag to tilt.'
+      ? legend('THE SUN LEADS · REAL TIME', 'Every world where it is right now', 'Every world is where it is right now. The trails are the real corkscrews they carved over recent years as the Sun hauls everything toward Cygnus at 230 km/s (helix pitch ~8x compressed). <span id="drift-km"></span>')
+      : v === 'galaxy' ? legend('THE MILKY WAY AS MAPPED TODAY', 'Disc, bulge and halo · drag to tilt', 'Thin but not flat: a ~1,000 ly thin disc inside a thicker one, a warped and flaring edge, a peanut-shaped bulge 10,000 ly tall and a halo of globular clusters. The Sun bobs through the disc every ~65 million years (bob drawn 5x taller). Drag to tilt.')
         : v === 'cyber' ? this.cyberLegend()
-        : v === 'cosmos' ? '<b>THE OBSERVABLE UNIVERSE</b>Real directions and distances (log scale): the Local Group, Virgo Cluster, the Great Attractor, Shapley Supercluster, out to the cosmic microwave background 46.5 billion ly away. Faint filaments are illustrative.'
-          : sm === 'true' ? '<b>TRUE SCALE · REAL SIZES, REAL DISTANCES</b>Nothing exaggerated: 1 AU = 40 units. The Sun is 1.39 million km across, yet Earth is a speck 0.0017 wide 40 units away. Tap a world to zoom down to it; pinch out to feel the emptiness.'
-          : '<b>REAL ORBITS, REAL SKY</b>Planets on their real inclined orbits (drop lines to the ecliptic). The background is the real sky: 25,700 catalogue stars at true positions and colours, constellations and the Milky Way.';
+        : v === 'cosmos' ? legend('THE OBSERVABLE UNIVERSE', 'Real directions · log-scale distances', 'Real directions and distances (log scale): the Local Group, Virgo Cluster, the Great Attractor, Shapley Supercluster, out to the cosmic microwave background 46.5 billion ly away. Faint filaments are illustrative.')
+          : sm === 'true' ? legend('TRUE SCALE · REAL SIZES, REAL DISTANCES', 'Nothing exaggerated · 1 AU = 40 units', 'Nothing exaggerated: 1 AU = 40 units. The Sun is 1.39 million km across, yet Earth is a speck 0.0017 wide 40 units away. Tap a world to zoom down to it; pinch out to feel the emptiness.')
+          : legend('REAL ORBITS, REAL SKY', 'Real orbits · 25,700 real stars', 'Planets on their real inclined orbits (drop lines to the ecliptic). The background is the real sky: 25,700 catalogue stars at true positions and colours, constellations and the Milky Way.');
   }
 
   toast(text, kind = '') {
@@ -415,12 +420,12 @@ export class Hud {
   cyberLegend() {
     const d = cyber.data;
     if (!d) return cyber.error
-      ? `<b>CYBER THREAT FEED OFFLINE</b>Couldn't reach the threat feed (${cyber.error}). It runs as the "api" function of the deployed app.`
-      : '<b>CONNECTING TO THREAT FEEDS…</b>Ransomware leak sites, botnet trackers and sensor networks.';
+      ? legend('CYBER THREAT FEED OFFLINE', 'Feed unreachable', `Couldn't reach the threat feed (${cyber.error}). It runs as the "api" function of the deployed app.`)
+      : legend('CONNECTING TO THREAT FEEDS…', 'Loading live data', 'Ransomware leak sites, botnet trackers and sensor networks.');
     const keys = Object.keys(cyber.byCountry);
     const countries = new Set(keys.map((k) => k.slice(0, 2))).size, states = keys.filter((k) => k.startsWith('US-')).length;
     const online = d.botnets.filter((b) => b.status === 'online').length;
-    return `<b>LIVE CYBER THREATS · ${ago(d.updated)}</b><span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="o"></i>${d.ransomware.filter((v) => groupOrigin(v.group)).length} with a reported origin (cable routes)</span><span class="cy-k"><i class="c"></i>submarine cables (TeleGeography)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button>`;
+    return legend(`LIVE CYBER THREATS · ${ago(d.updated)}`, `<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware · ${countries} countries</span>`, `<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="o"></i>${d.ransomware.filter((v) => groupOrigin(v.group)).length} with a reported origin (cable routes)</span><span class="cy-k"><i class="c"></i>submarine cables (TeleGeography)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button>`);
   }
 
   pCyber(cc) {
