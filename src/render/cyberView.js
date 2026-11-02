@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { BODY, helioAU } from '../sim/orbits.js';
 import { COUNTRIES } from '../data/countries.js';
+import { US_STATES } from '../data/usStates.js';
 import { planetMaterial, bodyQuat } from './planets.js';
 import { atmosphereMaterial } from './shaders.js';
 
@@ -35,12 +36,24 @@ export async function loadThreats(force = false) {
   return cyber.data;
 }
 
+// Incidents are grouped by country, and inside the US by state ("US-TX"); "US" holds US incidents
+// whose state isn't known.
+export const keyOf = (cc, region) => (cc === 'US' && region && US_STATES[region] ? `US-${region}` : cc);
+export function placeOf(key) {
+  if (!key) return null; // some posts carry no country at all
+  if (key.startsWith('US-')) {
+    const st = US_STATES[key.slice(3)];
+    return st ? [st[0], st[1], `${st[2]}, USA`] : null;
+  }
+  const c = COUNTRIES[key];
+  return c ? [c[0], c[1], key === 'US' ? 'United States' : c[2]] : null;
+}
 function summarize(d) {
   const by = {};
-  const C = (cc) => (by[cc] = by[cc] || { cc, ransomware: [], attackers: [], botnets: [] });
-  for (const v of d.ransomware) if (COUNTRIES[v.country]) C(v.country).ransomware.push(v);
-  for (const a of d.attackers) if (COUNTRIES[a.country]) C(a.country).attackers.push(a);
-  for (const b of d.botnets) if (COUNTRIES[b.country]) C(b.country).botnets.push(b);
+  const C = (k) => (by[k] = by[k] || { cc: k, ransomware: [], attackers: [], botnets: [] });
+  for (const v of d.ransomware) { const k = keyOf(v.country, v.region); if (placeOf(k)) C(k).ransomware.push(v); }
+  for (const a of d.attackers) { const k = keyOf(a.country, a.region); if (placeOf(k)) C(k).attackers.push(a); }
+  for (const b of d.botnets) { const k = keyOf(b.country, b.region); if (placeOf(k)) C(k).botnets.push(b); }
   return by;
 }
 
@@ -115,7 +128,7 @@ export class CyberGlobe {
     for (const cc in by) { maxR = Math.max(maxR, by[cc].ransomware.length); maxA = Math.max(maxA, by[cc].attackers.reduce((s, a) => s + a.attacks, 0)); }
     const recent = Date.now() - 6 * 3600 * 1000;
     for (const cc in by) {
-      const c = by[cc], [lat, lon, name] = COUNTRIES[cc];
+      const c = by[cc], [lat, lon, name] = placeOf(cc);
       const base = latLon(lat, lon, GLOBE_R);
       const n = base.clone().normalize();
       // ransomware: light column per country, height by incident count
@@ -139,7 +152,7 @@ export class CyberGlobe {
         if (k >= Math.max(2, maxR * 0.15)) {
           const el = document.createElement('div');
           el.className = 'cyber-label';
-          el.innerHTML = `<b>${name}</b>${k} ransomware`;
+          el.innerHTML = `<b>${cc === 'US' ? 'USA · state unknown' : name.replace(', USA', '')}</b>${k} ransomware`;
           const l = new CSS2DObject(el);
           l.position.copy(base).addScaledVector(n, h + 0.25);
           this.markers.add(l);
@@ -150,8 +163,16 @@ export class CyberGlobe {
       const att = c.attackers.reduce((s, a) => s + a.attacks, 0);
       if (att) {
         const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffb347).multiplyScalar(2.2), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
-        ring.position.copy(base).addScaledVector(n, 0.03);
-        ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+        // at the attackers' real locations when known (e.g. a data-centre city), else the centroid
+        const geo = c.attackers.filter((a) => a.lat != null);
+        if (geo.length) {
+          const p = latLon(geo.reduce((s, a) => s + a.lat, 0) / geo.length, geo.reduce((s, a) => s + a.lon, 0) / geo.length, GLOBE_R);
+          ring.position.copy(p).addScaledVector(p.clone().normalize(), 0.03);
+          ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), p.clone().normalize());
+        } else {
+          ring.position.copy(base).addScaledVector(n, 0.03);
+          ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+        }
         ring.userData = { pulse: true, s: 0.25 + 0.55 * Math.sqrt(att / maxA), phase: rnd(lon) };
         this.markers.add(ring);
         const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xffb347).multiplyScalar(1.4), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));

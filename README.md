@@ -45,7 +45,7 @@ Earth's clouds are real: after boot the game downloads the latest global true-co
 
 ## Live cyber threats (MAP → CYBER)
 
-A real-time threat globe: ransomware incidents posted on leak sites in the last 72 h (ransomware.live; shown by victim country and sector only, no names), the IPs hitting the most SANS ISC/DShield sensors (by network country), abuse.ch Feodo botnet command servers, and CISA's newest known-exploited vulnerabilities. Tap a country for details; INCIDENT LOG shows top groups, targets and sectors. Nothing is simulated.
+A real-time threat globe: ransomware incidents posted on leak sites in the last 72 h (ransomware.live; shown by victim country and sector only, no names), the IPs hitting the most SANS ISC/DShield sensors (by network country), abuse.ch Feodo botnet command servers, and CISA's newest known-exploited vulnerabilities. Tap a country for details; INCIDENT LOG shows top groups, targets and sectors. US incidents are split by state: ransomware posts by the state named in the post itself (state names, "City, ST", ZIP codes; otherwise "state unknown"), attack sources and botnet servers by IP location (ip-api.com). Nothing is simulated.
 
 Browsers can't read most of these feeds (no CORS), so a **DigitalOcean Function** aggregates them: `functions/packages/threats/feed/index.js` (cached 10 min, ~20 KB JSON) is served at `/api/threats/feed` on the game's own domain. In dev, `vite.config.js` serves the same function locally. To deploy, add the `functions` component and `ingress` rules from `.do/app.yaml` to the app's spec (match the static site's component name in the `/` rule).
 

@@ -6,7 +6,8 @@ import { backButton, haptic, notify } from '../telegram.js';
 import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
 import { FUTURE_CITIES } from '../render/futureEarth.js';
 import { TUTORIAL, isTouch } from './tutorial.js';
-import { cyber } from '../render/cyberView.js';
+import { cyber, placeOf } from '../render/cyberView.js';
+import { US_STATES } from '../data/usStates.js';
 import { COUNTRIES } from '../data/countries.js';
 
 // ---------- formatting ----------
@@ -165,6 +166,7 @@ export class Hud {
       }
       case 'voyage': this.close(); notify('success'); this.app.startVoyage(arg, [...this.escortSel]); return;
       case 'mapView': this.close(); this.app.mapView.setView(arg); this.syncNav(); return;
+      case 'cyberPlace': this.open(`cyber:${arg}`); return;
       case 'mapScale': this.app.mapView.setScale(arg); this.syncNav(); return;
       case 'mapLines': this.app.mapView.toggleLines(arg); this.syncNav(); return;
       case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
@@ -403,38 +405,62 @@ export class Hud {
     if (!d) return cyber.error
       ? `<b>CYBER THREAT FEED OFFLINE</b>Couldn't reach the threat feed (${cyber.error}). It runs as the "api" function of the deployed app.`
       : '<b>CONNECTING TO THREAT FEEDS…</b>Ransomware leak sites, botnet trackers and sensor networks.';
-    const countries = Object.keys(cyber.byCountry).length;
+    const keys = Object.keys(cyber.byCountry);
+    const countries = new Set(keys.map((k) => k.slice(0, 2))).size, states = keys.filter((k) => k.startsWith('US-')).length;
     const online = d.botnets.filter((b) => b.status === 'online').length;
-    return `<b>LIVE CYBER THREATS · ${ago(d.updated)}</b><span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button>`;
+    return `<b>LIVE CYBER THREATS · ${ago(d.updated)}</b><span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button>`;
   }
 
   pCyber(cc) {
     const d = cyber.data;
     if (!d) return { title: 'Cyber threats', kicker: 'Live feed', html: `<p class="note">${cyber.error ? `Feed unavailable: ${cyber.error}` : 'Loading…'}</p>` };
     const flag = (c) => (c && COUNTRIES[c] ? COUNTRIES[c][2] : 'Unknown');
-    const rRow = (v) => `<div class="row"><span>${v.sector}<small>${v.group} · ${flag(v.country)}</small></span><b>${ago(v.t)}</b></div>`;
+    // where an item is: "Texas, USA" for located US incidents, else the country
+    const where = (x) => (x.country === 'US' && x.region && US_STATES[x.region] ? `${US_STATES[x.region][2]}, USA` : flag(x.country));
+    const rRow = (v) => `<div class="row"><span>${v.sector}<small>${v.group} · ${where(v)}</small></span><b>${ago(v.t)}</b></div>`;
+    const aRow = (a) => `<div class="row"><span>${a.as || a.ip}<small>${a.ip}${a.city ? ` · ${a.city}` : ''}</small></span><b>${fmt(a.attacks)} targets</b></div>`;
+    if (cc === 'US') {
+      // the whole US, broken down by state
+      const states = Object.entries(cyber.byCountry).filter(([k]) => k.startsWith('US-'));
+      const all = (f) => Object.entries(cyber.byCountry).filter(([k]) => k === 'US' || k.startsWith('US-')).flatMap(([, c]) => c[f]);
+      const rows = states.map(([k, c]) => ({ k, name: US_STATES[k.slice(3)][2], r: c.ransomware.length, a: c.attackers.length, b: c.botnets.length }))
+        .sort((x, y) => y.r - x.r || y.a - x.a)
+        .map((x) => `<div class="row tap" data-act="cyberPlace" data-arg="${x.k}"><span>${x.name}<small>${[x.r && `${x.r} ransomware`, x.a && `${x.a} attack sources`, x.b && `${x.b} botnet`].filter(Boolean).join(' · ')}</small></span><b>›</b></div>`).join('');
+      const unknown = (cyber.byCountry.US || { ransomware: [] }).ransomware;
+      return {
+        title: 'United States', kicker: `Cyber activity by state · ${all('ransomware').length} ransomware in 72 h`,
+        html: `<h3>By state <small>tap for details</small></h3><div class="table">${rows || '<p class="note">No located incidents yet.</p>'}</div>
+          ${unknown.length ? `<h3>State unknown <small>${unknown.length} posts give no location</small></h3><div class="table">${unknown.slice(0, 25).map(rRow).join('')}</div>` : ''}
+          <p class="note">Ransomware states are read from each leak-site post's own text (city/state names, "City, ST", ZIP codes); posts without one stay unassigned. Attack sources and botnet servers are placed by IP location.</p>`,
+      };
+    }
     if (cc) {
       const c = cyber.byCountry[cc] || { ransomware: [], attackers: [], botnets: [] };
+      const state = cc.startsWith('US-');
       return {
-        title: flag(cc), kicker: 'Cyber activity · live feed',
-        html: `${c.ransomware.length ? `<h3>Ransomware incidents <small>last 72 h</small></h3><div class="table">${c.ransomware.slice(0, 25).map(rRow).join('')}</div>` : ''}
-          ${c.attackers.length ? `<h3>Attack sources <small>networks here hitting sensors</small></h3><div class="table">${c.attackers.map((a) => `<div class="row"><span>${a.as || a.ip}<small>${a.ip}</small></span><b>${fmt(a.attacks)} targets</b></div>`).join('')}</div>` : ''}
-          ${c.botnets.length ? `<h3>Botnet command servers</h3><div class="table">${c.botnets.map((b) => `<div class="row"><span>${b.malware}<small>${b.as || ''}</small></span><b class="${b.status === 'online' ? 'bad' : ''}">${b.status}</b></div>`).join('')}</div>` : ''}
+        title: state ? US_STATES[cc.slice(3)][2] : flag(cc), kicker: state ? 'United States · cyber activity · live' : 'Cyber activity · live feed',
+        html: `${state ? '<button class="btn sm ghost" data-act="cyberPlace" data-arg="US">‹ ALL US STATES</button>' : ''}${c.ransomware.length ? `<h3>Ransomware incidents <small>last 72 h</small></h3><div class="table">${c.ransomware.slice(0, 25).map(rRow).join('')}</div>` : ''}
+          ${c.attackers.length ? `<h3>Attack sources <small>machines here hitting sensors</small></h3><div class="table">${c.attackers.map(aRow).join('')}</div>` : ''}
+          ${c.botnets.length ? `<h3>Botnet command servers</h3><div class="table">${c.botnets.map((b) => `<div class="row"><span>${b.malware}<small>${b.as || ''}${b.city ? ` · ${b.city}` : ''}</small></span><b class="${b.status === 'online' ? 'bad' : ''}">${b.status}</b></div>`).join('')}</div>` : ''}
           <p class="note">Reported by public trackers; victims are shown by sector only.</p>`,
       };
     }
     // global log
-    const groups = {}, sectors = {}, places = {};
-    for (const v of d.ransomware) { groups[v.group] = (groups[v.group] || 0) + 1; sectors[v.sector] = (sectors[v.sector] || 0) + 1; if (v.country) places[v.country] = (places[v.country] || 0) + 1; }
+    const groups = {}, sectors = {}, places = {}, states = {};
+    for (const v of d.ransomware) {
+      groups[v.group] = (groups[v.group] || 0) + 1; sectors[v.sector] = (sectors[v.sector] || 0) + 1;
+      if (v.country) places[v.country] = (places[v.country] || 0) + 1;
+      if (v.country === 'US' && v.region && US_STATES[v.region]) states[v.region] = (states[v.region] || 0) + 1;
+    }
     const top = (o, n, f = (k) => k) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, c]) => `<span class="cost">${f(k)} <b>${c}</b></span>`).join('');
     return {
       title: 'Cyber threat log', kicker: `Live · updated ${ago(d.updated)}`,
       html: `<div class="cy-stats"><div><b>${d.ransomware.length}</b><span>ransomware posts · 72 h</span></div><div><b>${d.attackers.length}</b><span>top attack sources</span></div><div><b>${d.botnets.filter((b) => b.status === 'online').length}</b><span>botnet C2 online</span></div><div><b>${d.exploits.length}</b><span>new exploited CVEs</span></div></div>
         <h3>Most active ransomware groups</h3><div class="costs">${top(groups, 8)}</div>
-        <h3>Most targeted</h3><div class="costs">${top(places, 8, flag)}</div><div class="costs" style="margin-top:4px">${top(sectors, 6)}</div>
+        <h3>Most targeted</h3><div class="costs">${top(places, 8, flag)}</div>${Object.keys(states).length ? `<h3>Most targeted US states <small><button class="btn sm ghost" data-act="cyberPlace" data-arg="US">ALL STATES</button></small></h3><div class="costs">${top(states, 10, (k) => US_STATES[k][2])}</div>` : ''}<div class="costs" style="margin-top:4px">${top(sectors, 6)}</div>
         <h3>Latest ransomware incidents</h3><div class="table">${d.ransomware.slice(0, 30).map(rRow).join('')}</div>
         <h3>Newly exploited vulnerabilities <small>CISA KEV</small></h3><div class="table">${d.exploits.map((x) => `<div class="row"><span>${x.vendor} ${x.product}<small>${x.cve}${x.ransomware ? ' · used by ransomware' : ''}</small></span><b>${x.t}</b></div>`).join('')}</div>
-        <h3>Top attack sources <small>SANS ISC sensors</small></h3><div class="table">${d.attackers.slice(0, 15).map((a) => `<div class="row"><span>${flag(a.country)}<small>${a.as || ''} · ${a.ip}</small></span><b>${fmt(a.attacks)} targets</b></div>`).join('')}</div>
+        <h3>Top attack sources <small>SANS ISC sensors</small></h3><div class="table">${d.attackers.slice(0, 15).map((a) => `<div class="row"><span>${where(a)}<small>${a.as || ''} · ${a.ip}${a.city ? ` · ${a.city}` : ''}</small></span><b>${fmt(a.attacks)} targets</b></div>`).join('')}</div>
         <p class="note">Sources: ${d.sources.join(' · ')}. Victim organisations are not named; only sector and country are shown. Everything here is a public report, not live packet traffic.</p>`,
     };
   }
