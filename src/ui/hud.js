@@ -1,0 +1,569 @@
+import { RES, RES_KEYS, BUILDINGS, TECHS, SHIPS, SKIFF, DRIVES, GOALS, MARKET } from '../data/economy.js';
+import { BODIES, C_KMS, AU_KM, FIELDS } from '../data/bodies.js';
+import { BODY, distKm } from '../sim/orbits.js';
+import * as S from '../sim/state.js';
+import { backButton, haptic, notify } from '../telegram.js';
+
+// ---------- formatting ----------
+export function fmt(n) {
+  n = +n || 0;
+  const a = Math.abs(n);
+  if (a >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (a >= 1e4) return (n / 1e3).toFixed(1) + 'k';
+  if (a >= 100) return Math.floor(n).toString();
+  if (a >= 10) return n.toFixed(1);
+  return n.toFixed(2).replace(/\.?0+$/, '') || '0';
+}
+export function fmtDur(ms) {
+  const s = Math.max(0, ms / 1000);
+  if (s < 60) return `${s.toFixed(0)}s`;
+  if (s < 3600) return `${(s / 60) | 0}m ${(s % 60) | 0}s`;
+  if (s < 86400) return `${(s / 3600) | 0}h ${((s % 3600) / 60) | 0}m`;
+  return `${(s / 86400) | 0}d ${((s % 86400) / 3600) | 0}h`;
+}
+const fmtKm = (km) => (km < 1e6 ? `${fmt(km)} km` : `${(km / 1e6).toFixed(1)}M km`) + (km > AU_KM * 0.05 ? ` · ${(km / AU_KM).toFixed(2)} AU` : '');
+const fmtDist = (m) => (m < 1000 ? `${m.toFixed(0)} m` : `${(m / 1000).toFixed(1)} km`);
+const resIcon = (r) => (r === 'credits' ? '<b class="ic cr">₡</b>' : r === 'rp' ? '<b class="ic rp">◆</b>' : `<b class="ic" style="--c:${RES[r].color}">${RES[r].short}</b>`);
+const kindName = { star: 'Star', planet: 'Planet', moon: 'Moon', dwarf: 'Dwarf planet' };
+const TARGET_KIND = { junk: 'DERELICT HARDWARE', rocks: 'ASTEROID', ice: 'ICE BODY', canister: 'PAYLOAD CANISTER' };
+const pct = (k) => `${Math.max(0, Math.min(100, k * 100)).toFixed(1)}%`;
+
+const ICONS = {
+  pilot: '<svg viewBox="0 0 24 24"><path d="M12 3 5 19l7-3.5 7 3.5z"/><path d="M12 3v12.5" fill="none"/></svg>',
+  map: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><ellipse cx="12" cy="12" rx="9.5" ry="4" fill="none" transform="rotate(-14 12 12)"/><circle cx="20.5" cy="9.6" r="1.3"/></svg>',
+  base: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none"/><rect x="10.5" y="3.5" width="3" height="17"/><path d="M3.5 12h17" fill="none"/></svg>',
+  tech: '<svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6L4.5 19.5h15L14 9V3" fill="none"/><path d="M7.5 15h9" fill="none"/></svg>',
+  fleet: '<svg viewBox="0 0 24 24"><path d="M3 9h10l3-3v12l-3-3H3z" fill="none"/><path d="M16 12h5" fill="none"/></svg>',
+  market: '<svg viewBox="0 0 24 24"><path d="M4 18 9 12l4 3 7-9" fill="none"/><path d="M15 6h5v5" fill="none"/></svg>',
+  gear: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2" fill="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" fill="none"/></svg>',
+};
+
+const TEMPLATE = `
+<div class="top">
+  <div class="top-row">
+    <button class="loc" id="loc" data-open="base"></button>
+    <div class="wallet"><span class="pill">${resIcon('credits')}<b id="w-cr">0</b></span><span class="pill">${resIcon('rp')}<b id="w-rp">0</b></span>
+      <button class="icon-btn" data-open="settings" aria-label="Settings">${ICONS.gear}</button></div>
+  </div>
+  <div class="res-row" id="res-row"></div>
+  <div class="voyage" id="voyage"></div>
+  <button class="goal" id="goal" data-open="goals"></button>
+  <div class="mapbar" id="mapbar">
+    <div class="seg"><button data-act="mapView" data-arg="system">SYSTEM</button><button data-act="mapView" data-arg="drift">DRIFT</button><button data-act="mapView" data-arg="galaxy">GALAXY</button><button data-act="mapView" data-arg="cosmos">COSMOS</button></div>
+    <div class="seg" id="scale-seg"><button data-act="mapScale" data-arg="visible">ILLUSTRATIVE</button><button data-act="mapScale" data-arg="true">TRUE SCALE</button></div>
+    <div class="legend" id="legend"></div>
+  </div>
+</div>
+<div class="pilot-hud" id="pilot-hud">
+  <svg class="reticle" viewBox="0 0 100 100"><circle cx="50" cy="50" r="30"/><path d="M50 14v8M50 78v8M14 50h8M78 50h8"/><circle cx="50" cy="50" r="1.6" class="dot"/></svg>
+  <div class="bracket" id="bracket"><i></i><i></i><i></i><i></i><div class="b-lab" id="b-lab"></div></div>
+  <div class="markers" id="markers"></div>
+  <div class="gauge cargo-g"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="27" class="trk"/><circle cx="32" cy="32" r="27" class="val" id="cargo-arc"/></svg>
+    <div class="g-txt"><b id="cargo-n">0</b><small id="cargo-l">/30 t</small></div><span class="g-cap" id="cargo-cap">HOLD</span></div>
+  <div class="readout" id="spd"></div>
+  <div class="dockline" id="dock"></div>
+  <div class="zone" id="zone"></div>
+  <div class="fuel" id="fuel"><span id="grav"></span><div class="bar"><i id="fuel-b"></i></div></div>
+  <button class="land" id="land" data-act="land"></button>
+</div>
+<div class="controls" id="controls">
+  <div class="joy" id="joy"><div class="knob" id="knob"></div></div>
+  <div class="btns">
+    <button class="hold up" data-hold="up"><svg viewBox="0 0 24 24"><path d="M5 15l7-7 7 7" fill="none"/></svg></button>
+    <button class="hold" data-hold="down" hidden></button>
+    <button class="hold boost" data-hold="boost">BOOST</button>
+    <button class="hold mine" data-hold="mine"><span>MINE</span></button>
+  </div>
+  <div class="hint" id="hint"></div>
+</div>
+<nav class="nav" id="nav">
+  <button data-mode="local">${ICONS.pilot}<span>PILOT</span></button>
+  <button data-mode="map">${ICONS.map}<span>MAP</span></button>
+  <button data-open="base">${ICONS.base}<span>BASE</span></button>
+  <button data-open="tech">${ICONS.tech}<span>TECH</span></button>
+  <button data-open="fleet">${ICONS.fleet}<span>FLEET</span></button>
+  <button data-open="market">${ICONS.market}<span>MARKET</span></button>
+</nav>
+<section class="sheet" id="sheet">
+  <div class="grip"></div>
+  <header><div><small id="sheet-kicker"></small><h2 id="sheet-title"></h2></div><button class="x" data-close>✕</button></header>
+  <div class="sheet-body" id="sheet-body"></div>
+</section>
+<div class="toasts" id="toasts"></div>
+<div class="overlay" id="overlay"></div>
+<div class="fade" id="fade"></div>
+`;
+
+export class Hud {
+  constructor(app) {
+    this.app = app;
+    const root = (this.root = document.getElementById('ui'));
+    root.innerHTML = TEMPLATE;
+    this.$ = (id) => document.getElementById(id);
+    this.panel = null;
+    this.acc = 1;
+    this.sheetAcc = 0;
+    this.escortSel = null;
+    this.markerEls = [];
+
+    app.input.bindJoystick(this.$('joy'), this.$('knob'));
+    root.querySelectorAll('[data-hold]').forEach((el) => app.input.bindHold(el, el.dataset.hold));
+
+    root.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-open],[data-mode],[data-close],[data-act]');
+      if (!t) return;
+      haptic('light');
+      if (t.dataset.mode) { this.close(); app.setMode(t.dataset.mode); }
+      else if (t.dataset.open) this.panel === t.dataset.open ? this.close() : this.open(t.dataset.open);
+      else if (t.dataset.close !== undefined) this.close();
+      else this.act(t.dataset.act, t.dataset.arg, t.dataset.arg2);
+    });
+
+    S.onEvent((type, d) => {
+      if (type === 'toast') this.toast(d.text, d.kind);
+      else if (type === 'changed') this.dirty = true;
+      else if (type === 'win') this.showWin();
+    });
+  }
+
+  // ---------- actions from panels ----------
+  act(a, arg, arg2) {
+    const s = this.app.state;
+    switch (a) {
+      case 'build': S.build(s, s.presence, arg); break;
+      case 'research': S.research(s, arg); break;
+      case 'ship': S.buildShip(s, arg); break;
+      case 'pickLaunch': this.open(`launch:${arg}`); return;
+      case 'launch': S.launch(s, +arg, arg2); notify('success'); this.open('fleet'); return;
+      case 'sell': S.sell(s, arg, arg2 === 'all' ? 1e9 : +arg2); break;
+      case 'buy': S.buy(s, arg, +arg2); break;
+      case 'teleport': this.close(); this.app.teleport(arg); return;
+      case 'rejoin': this.close(); this.app.rejoinFleet(); return;
+      case 'launchTo': {
+        const ship = S.dockedAt(s, s.presence).find((x) => x.type === arg2) || s.ships.find((x) => x.status === 'docked' && x.type === arg2);
+        if (ship) { S.launch(s, ship.id, arg); notify('success'); }
+        break;
+      }
+      case 'escort': {
+        const id = +arg;
+        this.escortSel.has(id) ? this.escortSel.delete(id) : this.escortSel.add(id);
+        break;
+      }
+      case 'voyage': this.close(); notify('success'); this.app.startVoyage(arg, [...this.escortSel]); return;
+      case 'mapView': this.close(); this.app.mapView.setView(arg); this.syncNav(); return;
+      case 'mapScale': this.app.mapView.setScale(arg); this.syncNav(); return;
+      case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
+      case 'quality': this.app.setQuality(arg); break;
+      case 'scale': S.setTimeScale(s, +arg); this.toast(`Time warp ×${arg}`); break;
+      case 'reset':
+        if (confirm('Erase your save and start over?')) this.app.resetGame();
+        return;
+      case 'start': s.seenIntro = true; this.$('overlay').classList.remove('show'); this.app.save(); return;
+      case 'closeWin': this.$('overlay').classList.remove('show'); return;
+    }
+    this.renderSheet();
+  }
+
+  open(panel) {
+    if (panel.startsWith('body:') && this.panel !== panel) this.escortSel = null;
+    this.panel = panel;
+    this.$('sheet').classList.add('open');
+    this.renderSheet(true);
+    backButton(true, () => this.close());
+    this.root.classList.add('sheet-open');
+    this.syncNav();
+  }
+  close() {
+    this.panel = null;
+    this.$('sheet').classList.remove('open');
+    this.root.classList.remove('sheet-open');
+    backButton(false);
+    if (this.app.mapView) this.app.mapView.select(null);
+    this.syncNav();
+  }
+  syncNav() {
+    const mode = this.app.mode === 'surface' ? 'local' : this.app.mode;
+    this.root.querySelectorAll('#nav button').forEach((b) => {
+      b.classList.toggle('active', b.dataset.mode ? b.dataset.mode === mode && !this.panel : b.dataset.open === this.panel);
+    });
+    const voyage = this.app.mode === 'local' && this.app.localView.mode === 'voyage';
+    this.root.classList.toggle('mode-pilot', this.app.mode !== 'map');
+    this.root.classList.toggle('mode-surface', this.app.mode === 'surface');
+    this.root.classList.toggle('mode-map', this.app.mode === 'map');
+    this.root.classList.toggle('mode-voyage', voyage);
+    const surf = this.app.mode === 'surface';
+    this.root.querySelector('.hold.mine span').textContent = surf ? 'DRILL' : voyage ? 'SALVAGE' : 'MINE';
+    this.root.querySelector('.hold.boost').textContent = surf ? 'SPRINT' : 'BOOST';
+    this.$('hint').textContent = surf
+      ? 'Stick to walk · drag to look · ▲ jetpack · hold DRILL at glowing deposits'
+      : voyage ? 'Fleet on autopilot · fly around your convoy · salvage what drifts past'
+        : 'Drag to steer · stick to fly · hold MINE on salvage and rock';
+    const v = this.app.mapView?.view || 'system';
+    const sm = this.app.mapView?.scaleMode || 'visible';
+    this.root.querySelectorAll('.mapbar .seg button').forEach((b) => b.classList.toggle('on', b.dataset.act === 'mapScale' ? b.dataset.arg === sm : b.dataset.arg === v));
+    this.$('scale-seg').style.display = v === 'system' ? '' : 'none';
+    this.$('legend').innerHTML = v === 'drift'
+      ? '<b>THE SUN LEADS · REAL TIME</b>Every world is where it is right now. The trails are the real corkscrews they carved over recent years as the Sun hauls everything toward Cygnus at 230 km/s (helix pitch ~8x compressed). <span id="drift-km"></span>'
+      : v === 'galaxy' ? '<b>THE MILKY WAY AS MAPPED TODAY</b>Thin but not flat: a ~1,000 ly thin disc inside a thicker one, a warped and flaring edge, a peanut-shaped bulge 10,000 ly tall and a halo of globular clusters. The Sun bobs through the disc every ~65 million years (bob drawn 5x taller). Drag to tilt.'
+        : v === 'cosmos' ? '<b>THE OBSERVABLE UNIVERSE</b>Real directions and distances (log scale): the Local Group, Virgo Cluster, the Great Attractor, Shapley Supercluster, out to the cosmic microwave background 46.5 billion ly away. Faint filaments are illustrative.'
+          : sm === 'true' ? '<b>TRUE SCALE · REAL SIZES, REAL DISTANCES</b>Nothing exaggerated: 1 AU = 40 units. The Sun is 1.39 million km across, yet Earth is a speck 0.0017 wide 40 units away. Tap a world to zoom down to it; pinch out to feel the emptiness.'
+          : '<b>REAL ORBITS, REAL SKY</b>Planets on their real inclined orbits (drop lines to the ecliptic). The background is the real sky: 25,700 catalogue stars at true positions and colours, constellations and the Milky Way.';
+  }
+
+  toast(text, kind = '') {
+    const box = this.$('toasts');
+    const el = document.createElement('div');
+    el.className = `toast ${kind}`;
+    el.textContent = text;
+    box.appendChild(el);
+    while (box.children.length > 3) box.firstChild.remove();
+    setTimeout(() => el.classList.add('out'), 3200);
+    setTimeout(() => el.remove(), 3700);
+  }
+
+  flash() {
+    const f = this.$('fade');
+    f.classList.remove('go');
+    void f.offsetWidth;
+    f.classList.add('go');
+  }
+
+  // ---------- per-frame ----------
+  frame(dt) {
+    const s = this.app.state;
+    this.acc += dt;
+    this.sheetAcc += dt;
+    if (this.acc > 0.25) {
+      this.acc = 0;
+      this.updateTop();
+      if (this.app.mode === 'map') this.updateDriftCounter();
+      const voyage = this.app.mode === 'local' && this.app.localView.mode === 'voyage';
+      if (voyage !== this.root.classList.contains('mode-voyage')) this.syncNav();
+    }
+    if (this.panel && (this.sheetAcc > 1 || this.dirty)) this.renderSheet();
+    if (this.app.mode !== 'map') this.updatePilot();
+    if (s.won && !this.winShown) this.showWin();
+  }
+
+  updateDriftCounter() {
+    const el = document.getElementById('drift-km'), mv = this.app.mapView;
+    if (!el || mv.view !== 'drift') return;
+    const sec = (S.simNow(this.app.state) - mv.driftT0) / 1000;
+    el.innerHTML = `<br><em class="live">Since you opened this view the Sun has carried you ${fmt(sec * 230)} km.</em>`;
+  }
+
+  updateTop() {
+    const s = this.app.state, base = s.bases[s.presence], body = BODY[s.presence];
+    const aboard = this.app.localView.mode === 'voyage' && this.app.mode !== 'map' && !!s.voyage;
+    this.$('w-cr').textContent = fmt(s.wallet.credits);
+    this.$('w-rp').textContent = fmt(s.wallet.rp);
+    const cap = S.capOf(base), rates = base._rates || {};
+    this.$('res-row').innerHTML = RES_KEYS.filter((r) => base.store[r] >= 0.5 || rates[r] || ['ore', 'metal', 'silicon', 'ice'].includes(r))
+      .map((r) => `<span class="chip ${base.store[r] >= cap - 0.5 ? 'full' : ''}" style="--c:${RES[r].color}"><i></i><em>${RES[r].short}</em><b>${fmt(base.store[r])}</b>${rates[r] ? `<small class="${rates[r] < 0 ? 'neg' : ''}">${rates[r] > 0 ? '+' : ''}${fmt(rates[r])}</small>` : ''}</span>`)
+      .join('');
+    const p = base._power || { f: 1, prod: 0, use: 0 };
+    const pk = p.use ? Math.min(1, p.prod / p.use) : 1;
+    this.$('loc').innerHTML = aboard
+      ? `<span class="loc-k">IN TRANSIT</span><span class="loc-n">${BODY[s.voyage.from].name} → ${BODY[s.voyage.to].name}</span><span class="loc-s">uplink base · ${body.base}</span>`
+      : `<span class="loc-k">${kindName[body.kind].toUpperCase()} · ${body.name.toUpperCase()}</span><span class="loc-n">${body.base}</span><span class="loc-s ${p.f < 1 ? 'low' : ''}"><span class="pbar"><i style="width:${pct(pk)}"></i></span>${fmt(p.prod)}/${fmt(p.use)} MW${p.f < 1 ? ' · BROWNOUT' : ''}</span>`;
+    const g = GOALS[s.goalIdx];
+    this.$('goal').innerHTML = g ? `<span class="g-k">OBJECTIVE ${s.goalIdx + 1}/${GOALS.length}</span><span class="g-t">${g.title}</span><span class="g-x">${g.text}</span>` : '<span class="g-k">ALL OBJECTIVES COMPLETE</span><span class="g-t">The solar system is yours</span>';
+    this.updateVoyageBanner();
+  }
+
+  updateVoyageBanner() {
+    const s = this.app.state, v = s.voyage, el = this.$('voyage');
+    if (!v) { el.classList.remove('show'); return; }
+    const t = S.simNow(s), k = (t - v.depart) / (v.arrive - v.depart);
+    const aboard = s.aboard;
+    const lv = this.app.localView;
+    el.classList.add('show');
+    el.innerHTML = `<div class="v-h"><span class="v-k">◆ AUTOPILOT</span><span class="v-r">${BODY[v.from].name} → <b>${BODY[v.to].name}</b></span><span class="v-eta">${fmtDur(v.arrive - t)}</span></div>
+      <div class="v-bar"><i style="width:${pct(k)}"></i></div>
+      <div class="v-f"><span>${fmt(v.kms)} km/s</span><span>${v.escorts.length ? `${v.escorts.length + 1} ships` : 'solo'}</span>
+      ${aboard ? `<span class="v-z">${lv.mode === 'voyage' ? lv.info.zone : ''}</span>` : '<button class="btn sm" data-act="rejoin">REJOIN FLEET</button>'}</div>`;
+  }
+
+  updatePilot() {
+    const surf = this.app.mode === 'surface';
+    const lv = this.app.localView;
+    const info = (surf ? this.app.surfaceView : lv).info;
+    const tgt = info.target;
+    const br = this.$('bracket');
+    if (tgt && !surf && tgt.on) {
+      br.style.display = 'block';
+      br.style.transform = `translate(${tgt.x}px, ${tgt.y}px)`;
+      br.style.setProperty('--sz', `${tgt.size}px`);
+      this.$('b-lab').innerHTML = `<span style="color:${RES[tgt.res].color}">${RES[tgt.res].name.toUpperCase()}</span><em>${TARGET_KIND[tgt.kind] || ''} · ${tgt.dist.toFixed(0)} m</em><div class="bar"><i style="width:${pct(tgt.hp)}"></i></div>`;
+    } else if (tgt && surf) {
+      br.style.display = 'block';
+      br.style.transform = `translate(${innerWidth / 2}px, ${innerHeight * 0.46}px)`;
+      br.style.setProperty('--sz', '70px');
+      this.$('b-lab').innerHTML = `<span style="color:${RES[tgt.res].color}">${RES[tgt.res].name.toUpperCase()} DEPOSIT</span><em>${tgt.dist.toFixed(0)} m</em><div class="bar"><i style="width:${pct(tgt.hp)}"></i></div>`;
+    } else br.style.display = 'none';
+
+    this.updateMarkers(surf ? [] : info.markers || []);
+
+    const capK = info.cargo / info.cap;
+    const arc = this.$('cargo-arc');
+    arc.style.strokeDasharray = `${(capK * 169.6).toFixed(1)} 170`;
+    arc.classList.toggle('full', capK >= 1);
+    this.$('cargo-n').textContent = info.cargo;
+    this.$('cargo-l').textContent = `/${info.cap} t`;
+    this.$('cargo-cap').textContent = surf ? 'HOPPER' : info.voyage ? 'FLEET HOLD' : 'HOLD';
+    const range = info.dockRange || 18;
+    this.$('dock').textContent = info.voyage ? (info.tether > 0.85 ? 'AUTOPILOT TETHER · RETURNING' : '') : info.cargo ? (info.dock < range ? 'UNLOADING…' : `${surf ? 'PAD' : 'DOCK'} ${fmtDist(info.dock)}`) : '';
+    this.$('spd').innerHTML = surf
+      ? `<b>${(info.speed * 3.6).toFixed(0)}</b><small>KM/H</small><span>ALT ${info.alt.toFixed(1)} m</span>`
+      : `<b>${(info.speed * 3.6).toFixed(0)}</b><small>KM/H REL</small>${info.voyage ? `<span>${fmt(this.app.state.voyage?.kms || 0)} km/s cruise</span>` : ''}`;
+    this.$('zone').textContent = !surf && !info.voyage ? info.zone : '';
+    if (surf) {
+      this.$('grav').textContent = `JET ${info.fuel.toFixed(0)}% · g ${info.g} m/s²`;
+      this.$('fuel-b').style.width = `${info.fuel}%`;
+    }
+    const land = this.$('land');
+    const can = this.app.canLand();
+    land.style.display = can || surf ? '' : 'none';
+    if (can || surf) land.textContent = surf ? '⬆ RETURN TO ORBIT' : `⬇ DEPLOY MECH · ${BODY[this.app.state.presence].name.toUpperCase()}`;
+  }
+
+  updateMarkers(list) {
+    const box = this.$('markers');
+    while (this.markerEls.length < list.length) {
+      const el = document.createElement('div');
+      el.className = 'mk';
+      el.innerHTML = '<i></i><span></span>';
+      box.appendChild(el);
+      this.markerEls.push(el);
+    }
+    const W = innerWidth, H = innerHeight, pad = 34;
+    this.markerEls.forEach((el, i) => {
+      const m = list[i];
+      if (!m) { el.style.display = 'none'; return; }
+      el.style.display = '';
+      let x = m.x, y = m.y, edge = !m.on;
+      if (edge) {
+        // clamp off-screen markers to the screen edge, pointing toward the object
+        let dx = x - W / 2, dy = y - H / 2;
+        if (m.behind) { dx = -dx; dy = -dy; }
+        const k = Math.min((W / 2 - pad) / Math.abs(dx || 1e-3), (H / 2 - pad * 3) / Math.abs(dy || 1e-3));
+        x = W / 2 + dx * k; y = H / 2 + dy * k;
+        el.style.setProperty('--rot', `${Math.atan2(dy, dx)}rad`);
+      }
+      el.className = `mk ${m.kind}${edge ? ' edge' : ''}`;
+      el.style.transform = `translate(${x}px, ${y}px)`;
+      el.querySelector('span').textContent = `${m.label.toUpperCase()} · ${m.km ? fmtKm(m.km) : fmtDist(m.dist)}`;
+    });
+  }
+
+  // ---------- sheets ----------
+  renderSheet(scrollTop) {
+    this.sheetAcc = 0;
+    this.dirty = false;
+    if (!this.panel) return;
+    const [name, arg] = this.panel.split(':');
+    const body = this.$('sheet-body');
+    const keep = body.scrollTop;
+    const fn = { base: this.pBase, tech: this.pTech, fleet: this.pFleet, market: this.pMarket, body: this.pBody, launch: this.pLaunch, goals: this.pGoals, settings: this.pSettings }[name];
+    const { title, kicker = '', html } = fn.call(this, arg);
+    this.$('sheet-title').textContent = title;
+    this.$('sheet-kicker').textContent = kicker;
+    body.innerHTML = html;
+    body.scrollTop = scrollTop ? 0 : keep;
+  }
+
+  costHtml(cost, baseId) {
+    const s = this.app.state;
+    return Object.entries(cost).map(([r, v]) => `<span class="cost ${S.available(s, r, baseId) + 1e-9 >= v ? '' : 'bad'}">${resIcon(r)}${fmt(v)}</span>`).join('');
+  }
+
+  pBase() {
+    const s = this.app.state, id = s.presence, base = s.bases[id], body = BODY[id];
+    const p = base._power || { prod: 0, use: 0, f: 1, solarF: 1, au: 1 };
+    const cap = S.capOf(base), rates = base._rates || {};
+    const store = RES_KEYS.map((r) => `<div class="cell ${base.store[r] >= cap - 0.5 ? 'full' : ''}" style="--c:${RES[r].color}"><span>${RES[r].name}</span><b>${fmt(base.store[r])}</b><div class="mini"><i style="width:${pct(base.store[r] / cap)}"></i></div>${rates[r] ? `<em class="${rates[r] < 0 ? 'neg' : ''}">${rates[r] > 0 ? '+' : ''}${fmt(rates[r])}/min</em>` : '<em>idle</em>'}</div>`).join('');
+    const cards = Object.keys(BUILDINGS).filter((k) => S.buildingAllowed(k, id)).map((k) => {
+      const B = BUILDINGS[k], lvl = base.buildings[k] || 0, c = S.canBuild(s, id, k);
+      let extra = '';
+      if (k === 'solar') extra = `${fmt(B.power * p.solarF)} MW per array here (${(p.solarF * 100).toFixed(0)}% of Earth sunlight)`;
+      if (k === 'drones') extra = Object.entries(body.drones).map(([r, v]) => `${RES[r].short} ${fmt(v)}/min`).join(' · ') + ' per level';
+      const cost = c.cost || S.buildCost(k, lvl);
+      return `<div class="card ${lvl ? 'owned' : ''}">
+        <div class="card-h"><span class="tag">${B.tag}</span><b>${B.name}</b><span class="lv">${lvl ? `LV ${lvl}` : ''}</span></div>
+        <p>${B.desc}${extra ? `<br><small>${extra}</small>` : ''}${B.power ? `<br><small>${B.power > 0 ? '+' : ''}${B.power} MW per level</small>` : ''}</p>
+        <div class="card-f">${c.why === 'Max level' ? '' : `<div class="costs">${this.costHtml(cost, id)}</div>`}
+          <button class="btn" data-act="build" data-arg="${k}" ${c.ok ? '' : 'disabled'}>${c.ok ? (lvl ? 'UPGRADE' : 'BUILD') : c.why}</button></div>
+      </div>`;
+    }).join('');
+    const f = FIELDS[id];
+    return {
+      title: body.base, kicker: `${kindName[body.kind]} ${body.name} · ${p.au.toFixed(2)} AU`,
+      html: `<div class="power ${p.f < 1 ? 'low' : ''}"><div class="pw-h"><span>POWER GRID</span><b>${fmt(p.prod)} / ${fmt(p.use)} MW</b></div><div class="bar"><i style="width:${pct(p.use ? p.prod / p.use : 1)}"></i></div>${p.f < 1 ? `<small>Brownout · production at ${(p.f * 100).toFixed(0)}%</small>` : ''}</div>
+        <div class="field"><span>ORBITAL FIELD</span><b>${f.name}</b><div class="costs">${Object.keys(f.res).map((r) => `<span class="cost">${resIcon(r)}</span>`).join('')}</div></div>
+        <h3>Stores <small>cap ${fmt(cap)} t each</small></h3><div class="store-grid">${store}</div>
+        ${id !== 'earth' ? '<p class="note">Builds here use local stores first, then draw the rest from Halo Station.</p>' : ''}
+        <h3>Modules</h3>${cards}`,
+    };
+  }
+
+  pTech() {
+    const s = this.app.state, d = S.drive(s), t = S.simNow(s);
+    const samples = ['moon', 'mars', 'ceres', 'jupiter', 'neptune', 'sun'].map((id) => {
+      const km = distKm('earth', id, t);
+      return `<div class="row"><span>${BODY[id].name}</span><span>${fmtKm(km)}</span><b>${fmtDur(S.travelMs(s, 'earth', id, t))}</b></div>`;
+    }).join('');
+    const cards = Object.entries(TECHS).map(([k, T]) => {
+      const c = S.canResearch(s, k), done = !!s.techs[k];
+      const drv = T.drive ? `<br><small>Drive tier ${T.drive}: ${fmt(DRIVES[T.drive - 1].kms)} km/s · ${((DRIVES[T.drive - 1].kms / C_KMS) * 100).toPrecision(2)}% c</small>` : '';
+      return `<div class="card ${done ? 'owned' : c.locked ? 'locked' : ''}">
+        <div class="card-h"><span class="tag ${T.drive ? 'drv' : ''}">${T.drive ? 'DRV' : 'SCI'}</span><b>${T.name}</b><span class="lv">${done ? '✓' : ''}</span></div>
+        <p>${T.desc}${drv}</p>
+        ${done ? '' : `<div class="card-f"><div class="costs">${this.costHtml({ rp: T.rp, ...T.cost }, 'earth')}</div>
+        <button class="btn" data-act="research" data-arg="${k}" ${c.ok ? '' : 'disabled'}>${c.ok ? 'RESEARCH' : c.why}</button></div>`}
+      </div>`;
+    }).join('');
+    const ladder = DRIVES.map((x) => `<i class="${x.tier <= d.tier ? 'on' : ''}" title="${x.name}"></i>`).join('');
+    return {
+      title: 'Research', kicker: 'Propulsion & science',
+      html: `<div class="drive"><div class="dl">CURRENT DRIVE · TIER ${d.tier}/6</div><div class="dn">${d.name}</div>
+        <div class="dv"><b>${fmt(d.kms)}</b> km/s · ${((d.kms / C_KMS) * 100).toPrecision(2)}% of light speed</div>
+        <div class="ladder">${ladder}</div>
+        <div class="lightbar"><i style="width:${Math.max(1, (d.kms / C_KMS) * 100)}%"></i><span>c</span></div></div>
+        <h3>Travel times from Earth, right now</h3><div class="table">${samples}</div>
+        <p class="note">Planets move on their real inclined orbits, so distances change day to day. Ships fly real intercept courses in real time and keep flying while you're offline.</p>
+        <h3>Technologies</h3>${cards}`,
+    };
+  }
+
+  pFleet() {
+    const s = this.app.state, t = S.simNow(s), yard = S.level(s, 'earth', 'shipyard');
+    const v = s.voyage;
+    const voyage = v ? `<div class="vcard"><div class="v-h"><span class="v-k">◆ YOUR FLEET</span><span class="v-r">${BODY[v.from].name} → <b>${BODY[v.to].name}</b></span></div>
+        <div class="v-bar"><i style="width:${pct((t - v.depart) / (v.arrive - v.depart))}"></i></div>
+        <div class="v-f"><span>ETA ${fmtDur(v.arrive - t)}</span><span>${fmt(v.kms)} km/s</span><span>hold ${fmt(Object.values(v.cargo).reduce((a, b) => a + b, 0))}/${S.fleetCap(s, v.escorts)} t</span></div>
+        ${s.aboard ? '' : '<button class="btn big" data-act="rejoin">REJOIN FLEET · UPLINK TO SKIFF</button>'}</div>` : '';
+    const build = Object.entries(SHIPS).map(([k, sh]) => `<div class="card">
+      <div class="card-h"><span class="tag">${k === 'seed' ? 'SED' : 'HAU'}</span><b>${sh.name}</b><span class="lv">${Math.round(sh.speed * 100)}% SPD</span></div><p>${sh.desc}</p>
+      <div class="card-f"><div class="costs">${this.costHtml(sh.cost, 'earth')}</div>
+      <button class="btn" data-act="ship" data-arg="${k}" ${yard && S.canAfford(s, sh.cost, 'earth') ? '' : 'disabled'}>${yard ? 'BUILD' : 'NEED SHIPYARD'}</button></div></div>`).join('');
+    const ships = s.ships.map((sh) => {
+      const tr = s.trips.find((x) => x.shipId === sh.id);
+      if (tr) {
+        const k = Math.min(1, (t - tr.depart) / (tr.arrive - tr.depart));
+        return `<div class="ship"><b>${SHIPS[sh.type].name} #${sh.id}</b><span>${tr.type === 'return' ? 'Returning from' : 'En route to'} ${BODY[tr.type === 'return' ? tr.from : tr.to].name}</span>
+          <div class="bar"><i style="width:${pct(k)}"></i></div><small>ETA ${fmtDur(tr.arrive - t)}</small></div>`;
+      }
+      if (sh.status === 'fleet') return `<div class="ship fleet"><b>${SHIPS[sh.type].name} #${sh.id}</b><span>Flying in your convoy</span></div>`;
+      return `<div class="ship"><b>${SHIPS[sh.type].name} #${sh.id}</b><span>Docked at ${BODY[sh.at || 'earth'].base}</span>
+        <button class="btn sm" data-act="pickLaunch" data-arg="${sh.id}">SEND</button></div>`;
+    }).join('') || '<p class="note">No ships yet. Build an Orbital Shipyard at Halo Station, then build ships here.</p>';
+    return {
+      title: 'Fleet', kicker: `${S.drive(s).name} · ${fmt(S.drive(s).kms)} km/s`,
+      html: `${voyage}<p class="note">To fly with your ships, open MAP, pick a world and tap AUTOPILOT FLEET. The convoy cruises at the speed of its slowest hull.</p>
+        <h3>Ships</h3>${ships}<h3>Shipyard</h3>${build}`,
+    };
+  }
+
+  pLaunch(shipId) {
+    const s = this.app.state, ship = s.ships.find((x) => x.id === +shipId), t = S.simNow(s);
+    if (!ship) return { title: 'Send', html: '' };
+    const from = ship.at || 'earth';
+    const targets = BODIES.filter((b) => b.id !== from && (ship.type === 'seed' ? !s.bases[b.id] : !!s.bases[b.id] && b.id !== 'earth'));
+    const rows = targets.map((b) => {
+      const km = distKm(from, b.id, t);
+      return `<div class="row"><span>${b.name}<small>${b.base}</small></span><span>${fmtKm(km)}</span><b>${fmtDur(S.travelMs(s, from, b.id, t, S.shipKms(s, ship.type)))}</b>
+        <button class="btn sm" data-act="launch" data-arg="${ship.id}" data-arg2="${b.id}">GO</button></div>`;
+    }).join('') || '<p class="note">No valid destinations.</p>';
+    return { title: `Send ${SHIPS[ship.type].name}`, kicker: `Unmanned · from ${BODY[from].base}`, html: `<p class="note">${ship.type === 'seed' ? 'Pick a world without a base. The ship is consumed to found the outpost.' : 'Pick an outpost to collect cargo from. The hauler returns to Halo Station automatically.'}</p><div class="table launch">${rows}</div>` };
+  }
+
+  pMarket() {
+    const s = this.app.state, st = s.bases.earth.store;
+    const rows = RES_KEYS.map((r) => `<div class="mrow" style="--c:${RES[r].color}"><i class="sw"></i><span class="nm">${RES[r].name}<small>have ${fmt(st[r])} t · sells ₡${RES[r].value}/t</small></span>
+      <button class="btn sm ghost" data-act="sell" data-arg="${r}" data-arg2="10" ${st[r] >= 1 ? '' : 'disabled'}>SELL 10</button>
+      <button class="btn sm" data-act="sell" data-arg="${r}" data-arg2="all" ${st[r] >= 1 ? '' : 'disabled'}>ALL</button>
+      ${MARKET.buy[r] ? `<button class="btn sm buy" data-act="buy" data-arg="${r}" data-arg2="10">BUY 10 · ₡${MARKET.buy[r] * 10}</button>` : ''}</div>`).join('');
+    return { title: 'Earth Market', kicker: 'Halo Station exchange', html: `<p class="note">Earth sells only what it can launch: metal, silicon and water, at a steep price per tonne. Everything else has to come from space.</p>${rows}` };
+  }
+
+  pBody(id) {
+    const s = this.app.state, b = BODY[id], t = S.simNow(s), base = s.bases[id];
+    const here = s.presence;
+    const km = id === here ? 0 : distKm(here, id, t);
+    const docked = S.dockedAt(s, here);
+    if (!this.escortSel) this.escortSel = new Set(docked.map((x) => x.id));
+    for (const sid of [...this.escortSel]) if (!docked.some((x) => x.id === sid)) this.escortSel.delete(sid);
+    const escorts = [...this.escortSel];
+    const types = escorts.map((sid) => s.ships.find((x) => x.id === sid).type);
+    const kms = S.fleetKms(s, types);
+    const inbound = s.trips.filter((tr) => tr.to === id);
+    let actions = '';
+    if (base && here !== id) actions += `<button class="btn big ghost" data-act="teleport" data-arg="${id}">NEURAL UPLINK · INSTANT</button>`;
+    if (id !== here) {
+      const cv = S.canVoyage(s, id, escorts);
+      const picks = docked.map((x) => `<button class="esc ${this.escortSel.has(x.id) ? 'on' : ''}" data-act="escort" data-arg="${x.id}">${x.type === 'seed' ? 'SEED' : 'HAULER'} #${x.id}<small>${Math.round(SHIPS[x.type].speed * 100)}% · ${SHIPS[x.type].cargo ? `+${SHIPS[x.type].cargo} t` : 'founds base'}</small></button>`).join('');
+      actions += `<div class="plan"><div class="plan-h"><span>AUTOPILOT FLEET</span><b>${fmtDur(S.travelMs(s, here, id, t, kms))}</b></div>
+        <div class="escorts"><span class="esc lead">KESTREL SKIFF<small>you · ${SKIFF.cargo} t</small></span>${picks}</div>
+        <div class="plan-f">${fmt(kms)} km/s convoy · hold ${S.fleetCap(s, escorts)} t · from ${BODY[here].name}</div>
+        <button class="btn big" data-act="voyage" data-arg="${id}" ${cv.ok ? '' : 'disabled'}>${cv.ok ? `ENGAGE AUTOPILOT → ${b.name.toUpperCase()}` : cv.why}</button></div>`;
+    } else actions += `<div class="note">${s.aboard ? 'Your fleet is bound here.' : 'You are here.'}</div>`;
+    const seedEarth = s.ships.find((x) => x.type === 'seed' && x.status === 'docked');
+    const haul = s.ships.find((x) => x.type === 'hauler' && x.status === 'docked' && (x.at || 'earth') !== id);
+    if (!base && id !== 'earth' && seedEarth) actions += `<button class="btn big alt" data-act="launchTo" data-arg="${id}" data-arg2="seed">SEND SEED SHIP UNMANNED · ${fmtDur(S.travelMs(s, seedEarth.at || 'earth', id, t, S.shipKms(s, 'seed')))}</button>`;
+    if (base && id !== 'earth' && haul) actions += `<button class="btn big alt" data-act="launchTo" data-arg="${id}" data-arg2="hauler">SEND HAULER · ${fmtDur(S.travelMs(s, 'earth', id, t, S.shipKms(s, 'hauler')) * 2)} round trip</button>`;
+    const res = Object.entries(b.drones).map(([r, v]) => `<span class="cost">${resIcon(r)}${fmt(v)}/min</span>`).join('') || '<span class="note">Unmineable · but the power is immense.</span>';
+    const f = FIELDS[id];
+    return {
+      title: b.name, kicker: `${kindName[b.kind]} · radius ${fmt(b.radiusKm)} km${b.i ? ` · orbit tilted ${b.i.toFixed(1)}°` : ''}`,
+      html: `${base ? `<div class="sub ok">◉ ${b.base}</div>` : ''}<p>${b.desc}</p>
+        ${id !== here ? `<div class="table"><div class="row"><span>Distance from ${BODY[here].name}</span><b>${fmtKm(km)}</b></div>
+        <div class="row"><span>Light-time</span><b>${fmtDur((km / C_KMS) * 1000)}</b></div></div>` : ''}
+        <h3>Orbital field</h3><div class="field"><b>${f.name}</b><div class="costs">${Object.keys(f.res).map((r) => `<span class="cost">${resIcon(r)}</span>`).join('') || '<span class="note">nothing to collect</span>'}</div></div>
+        <h3>Drone yield per level</h3><div class="costs">${res}</div>
+        ${inbound.map((tr) => `<div class="note">Inbound ${tr.type === 'found' ? 'Seed Ship' : 'Hauler'} · ETA ${fmtDur(tr.arrive - t)}</div>`).join('')}
+        <div class="actions">${actions}</div>`,
+    };
+  }
+
+  pGoals() {
+    const s = this.app.state;
+    return {
+      title: 'Objectives', kicker: `${s.goalIdx}/${GOALS.length} complete`,
+      html: GOALS.map((g, i) => `<div class="goal-row ${i < s.goalIdx ? 'done' : i === s.goalIdx ? 'cur' : ''}"><b>${i < s.goalIdx ? '✓' : i + 1}</b><div><strong>${g.title}</strong><p>${g.text}</p></div>${g.reward ? `<span>₡${fmt(g.reward)}</span>` : ''}</div>`).join(''),
+    };
+  }
+
+  pSettings() {
+    const q = this.app.quality;
+    const dev = this.app.dev ? `<h3>Dev time warp</h3><div class="costs">${[1, 60, 600, 3600].map((k) => `<button class="btn sm" data-act="scale" data-arg="${k}">×${k}</button>`).join('')}</div>` : '';
+    return {
+      title: 'Settings', kicker: 'System',
+      html: `<h3>Graphics</h3><div class="seg wide">${['ultra', 'high', 'low'].map((k) => `<button class="${q === k ? 'on' : ''}" data-act="quality" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
+        <p class="note">ULTRA: 4x MSAA, high-DPI, lens effects, sharp shadows. HIGH: bloom and lens effects. LOW: no post-processing, for older phones. Resolution adapts automatically to hold a smooth frame rate${this.app.fps ? ` (now ${this.app.fps.toFixed(0)} fps)` : ''}.</p>${dev}
+        <h3>Save</h3><p class="note">Progress saves automatically, and to Telegram Cloud when played inside Telegram.</p>
+        <button class="btn danger" data-act="reset">RESET GAME</button>
+        <h3>About</h3><p class="note">Planet positions use real inclined orbital elements, so every distance and travel time is computed from where the planets really are right now. Planet maps: Solar System Scope (CC BY 4.0) and NASA/USGS/JPL. Star catalogue: Hipparcos/BSC via d3-celestial. Prototype v0.3.</p>`,
+    };
+  }
+
+  showIntro() {
+    const o = this.$('overlay');
+    o.innerHTML = `<div class="card-lg"><div class="kicker">YEAR 2087 · LOW EARTH ORBIT · 400 KM</div><h1>THE OPEN<br>SPACE</h1>
+      <p>You run a one-skiff salvage outfit out of <b>Halo Station</b>. Low orbit is a junkyard of dead satellites and spent rocket stages. That scrap is your first fortune.</p>
+      <p>Build robot swarms, found outposts, and fly your fleet across the real solar system in <b>real time</b>. Push your drives from 15 km/s to the <b>speed of light</b>: at c, the Sun is 8.3 minutes away.</p>
+      <button class="btn big" data-act="start">ENGAGE</button></div>`;
+    o.classList.add('show');
+  }
+
+  showWin() {
+    this.winShown = true;
+    const s = this.app.state;
+    const o = this.$('overlay');
+    o.innerHTML = `<div class="card-lg win"><div class="kicker">c = 299,792 km/s</div><h1>LIGHT<br>SPEED</h1>
+      <p>Your economy spans ${Object.keys(s.bases).length} worlds. The Sun is now 8 minutes away, Neptune 4 hours.</p>
+      <p>Next: interstellar ambitions, rival syndicates and sky pirates. Keep building.</p>
+      <button class="btn big" data-act="closeWin">CONTINUE</button></div>`;
+    o.classList.add('show');
+  }
+}
