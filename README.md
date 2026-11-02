@@ -43,6 +43,12 @@ At Eden tap **DESCEND TO EARTH**: you enter the atmosphere 100 km above the stat
 
 Earth's clouds are real: after boot the game downloads the latest global true-colour mosaics from NASA GIBS (VIIRS on Suomi-NPP and NOAA-20, no API key, CORS-enabled), lays today's passes over yesterday's full map with feathered seams, and extracts cloud cover by comparing against the cloud-free Earth map (so deserts and ice caps aren't read as cloud). Each region shows its latest satellite pass, typically under 24 hours old; it refreshes every 30 minutes and falls back to a static cloud map offline. The same map drives the globe in orbit/map views and, during Earth flight, a cloud deck at ~2.2 km where real cover is filled in with fractal detail. Code: `src/render/weather.js`.
 
+## Live cyber threats (MAP → CYBER)
+
+A real-time threat globe: ransomware incidents posted on leak sites in the last 72 h (ransomware.live; shown by victim country and sector only, no names), the IPs hitting the most SANS ISC/DShield sensors (by network country), abuse.ch Feodo botnet command servers, and CISA's newest known-exploited vulnerabilities. Tap a country for details; INCIDENT LOG shows top groups, targets and sectors. Nothing is simulated.
+
+Browsers can't read most of these feeds (no CORS), so a **DigitalOcean Function** aggregates them: `functions/packages/threats/feed/index.js` (cached 10 min, ~20 KB JSON) is served at `/api/threats/feed` on the game's own domain. In dev, `vite.config.js` serves the same function locally. To deploy, add the `functions` component and `ingress` rules from `.do/app.yaml` to the app's spec (match the static site's component name in the `/` rule).
+
 ## Ship it as a Telegram Mini App
 
 1. Host `dist/` on any HTTPS static host. This repo includes a DigitalOcean App Platform spec (`.do/app.yaml`): a static site that runs `npm run build`, serves `dist/`, and redeploys on every push to `main`.

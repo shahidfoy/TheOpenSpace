@@ -6,6 +6,8 @@ import { backButton, haptic, notify } from '../telegram.js';
 import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
 import { FUTURE_CITIES } from '../render/futureEarth.js';
 import { TUTORIAL, isTouch } from './tutorial.js';
+import { cyber } from '../render/cyberView.js';
+import { COUNTRIES } from '../data/countries.js';
 
 // ---------- formatting ----------
 export function fmt(n) {
@@ -30,6 +32,10 @@ const fmtDist = (m) => (m < 1000 ? `${m.toFixed(0)} m` : `${(m / 1000).toFixed(1
 const resIcon = (r) => (r === 'credits' ? '<b class="ic cr">₡</b>' : r === 'rp' ? '<b class="ic rp">◆</b>' : `<b class="ic" style="--c:${RES[r].color}">${RES[r].short}</b>`);
 const kindName = { star: 'Star', planet: 'Planet', moon: 'Moon', dwarf: 'Dwarf planet' };
 const TARGET_KIND = { junk: 'DERELICT HARDWARE', rocks: 'ASTEROID', ice: 'ICE BODY', canister: 'PAYLOAD CANISTER' };
+const ago = (t) => {
+  const m = Math.max(0, (Date.now() - Date.parse(t)) / 60000);
+  return m < 60 ? `${Math.round(m)} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+};
 const pct = (k) => `${Math.max(0, Math.min(100, k * 100)).toFixed(1)}%`;
 
 const ICONS = {
@@ -54,7 +60,7 @@ const TEMPLATE = `
   <div class="voyage" id="voyage"></div>
   <button class="goal" id="goal" data-open="goals"></button>
   <div class="mapbar" id="mapbar">
-    <div class="seg"><button data-act="mapView" data-arg="system">SYSTEM</button><button data-act="mapView" data-arg="drift">DRIFT</button><button data-act="mapView" data-arg="galaxy">GALAXY</button><button data-act="mapView" data-arg="cosmos">COSMOS</button></div>
+    <div class="seg"><button data-act="mapView" data-arg="system">SYSTEM</button><button data-act="mapView" data-arg="drift">DRIFT</button><button data-act="mapView" data-arg="galaxy">GALAXY</button><button data-act="mapView" data-arg="cosmos">COSMOS</button><button data-act="mapView" data-arg="cyber">CYBER</button></div>
     <div class="seg" id="line-seg"><button data-act="mapLines" data-arg="constellations">CONSTELLATIONS</button><button data-act="mapLines" data-arg="orbits">ORBITS</button></div>
     <div class="seg" id="scale-seg"><button data-act="mapScale" data-arg="visible">ILLUSTRATIVE</button><button data-act="mapScale" data-arg="true">TRUE SCALE</button></div>
     <div class="legend" id="legend"></div>
@@ -232,6 +238,7 @@ export class Hud {
     this.$('legend').innerHTML = v === 'drift'
       ? '<b>THE SUN LEADS · REAL TIME</b>Every world is where it is right now. The trails are the real corkscrews they carved over recent years as the Sun hauls everything toward Cygnus at 230 km/s (helix pitch ~8x compressed). <span id="drift-km"></span>'
       : v === 'galaxy' ? '<b>THE MILKY WAY AS MAPPED TODAY</b>Thin but not flat: a ~1,000 ly thin disc inside a thicker one, a warped and flaring edge, a peanut-shaped bulge 10,000 ly tall and a halo of globular clusters. The Sun bobs through the disc every ~65 million years (bob drawn 5x taller). Drag to tilt.'
+        : v === 'cyber' ? this.cyberLegend()
         : v === 'cosmos' ? '<b>THE OBSERVABLE UNIVERSE</b>Real directions and distances (log scale): the Local Group, Virgo Cluster, the Great Attractor, Shapley Supercluster, out to the cosmic microwave background 46.5 billion ly away. Faint filaments are illustrative.'
           : sm === 'true' ? '<b>TRUE SCALE · REAL SIZES, REAL DISTANCES</b>Nothing exaggerated: 1 AU = 40 units. The Sun is 1.39 million km across, yet Earth is a speck 0.0017 wide 40 units away. Tap a world to zoom down to it; pinch out to feel the emptiness.'
           : '<b>REAL ORBITS, REAL SKY</b>Planets on their real inclined orbits (drop lines to the ecliptic). The background is the real sky: 25,700 catalogue stars at true positions and colours, constellations and the Milky Way.';
@@ -268,6 +275,7 @@ export class Hud {
       if (voyage !== this.root.classList.contains('mode-voyage')) this.syncNav();
     }
     if (this.panel && (this.sheetAcc > 1 || this.dirty)) this.renderSheet();
+    if (this.app.mode === 'map' && this.app.mapView.view === 'cyber' && (this.cyAcc = (this.cyAcc || 0) + dt) > 2) { this.cyAcc = 0; this.$('legend').innerHTML = this.cyberLegend(); }
     if (this.app.mode === 'earth') this.updateEarth();
     else if (this.app.mode !== 'map') this.updatePilot();
     if (s.won && !this.winShown) this.showWin();
@@ -389,6 +397,48 @@ export class Hud {
     return { title: 'Destinations', kicker: 'Real places · real distances', html: `<p class="note">Set a target, then fly there yourself or tap AUTOPILOT. Long legs climb into the hypersonic corridor (~7 km/s at 60–90 km) and descend on approach, so Singapore → Mount Fuji (5,200 km) takes about 25 minutes in real time.</p><div class="table launch">${rows}</div>` };
   }
 
+  // ---------- live cyber threats ----------
+  cyberLegend() {
+    const d = cyber.data;
+    if (!d) return cyber.error
+      ? `<b>CYBER THREAT FEED OFFLINE</b>Couldn't reach the threat feed (${cyber.error}). It runs as the "api" function of the deployed app.`
+      : '<b>CONNECTING TO THREAT FEEDS…</b>Ransomware leak sites, botnet trackers and sensor networks.';
+    const countries = Object.keys(cyber.byCountry).length;
+    const online = d.botnets.filter((b) => b.status === 'online').length;
+    return `<b>LIVE CYBER THREATS · ${ago(d.updated)}</b><span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button>`;
+  }
+
+  pCyber(cc) {
+    const d = cyber.data;
+    if (!d) return { title: 'Cyber threats', kicker: 'Live feed', html: `<p class="note">${cyber.error ? `Feed unavailable: ${cyber.error}` : 'Loading…'}</p>` };
+    const flag = (c) => (c && COUNTRIES[c] ? COUNTRIES[c][2] : 'Unknown');
+    const rRow = (v) => `<div class="row"><span>${v.sector}<small>${v.group} · ${flag(v.country)}</small></span><b>${ago(v.t)}</b></div>`;
+    if (cc) {
+      const c = cyber.byCountry[cc] || { ransomware: [], attackers: [], botnets: [] };
+      return {
+        title: flag(cc), kicker: 'Cyber activity · live feed',
+        html: `${c.ransomware.length ? `<h3>Ransomware incidents <small>last 72 h</small></h3><div class="table">${c.ransomware.slice(0, 25).map(rRow).join('')}</div>` : ''}
+          ${c.attackers.length ? `<h3>Attack sources <small>networks here hitting sensors</small></h3><div class="table">${c.attackers.map((a) => `<div class="row"><span>${a.as || a.ip}<small>${a.ip}</small></span><b>${fmt(a.attacks)} targets</b></div>`).join('')}</div>` : ''}
+          ${c.botnets.length ? `<h3>Botnet command servers</h3><div class="table">${c.botnets.map((b) => `<div class="row"><span>${b.malware}<small>${b.as || ''}</small></span><b class="${b.status === 'online' ? 'bad' : ''}">${b.status}</b></div>`).join('')}</div>` : ''}
+          <p class="note">Reported by public trackers; victims are shown by sector only.</p>`,
+      };
+    }
+    // global log
+    const groups = {}, sectors = {}, places = {};
+    for (const v of d.ransomware) { groups[v.group] = (groups[v.group] || 0) + 1; sectors[v.sector] = (sectors[v.sector] || 0) + 1; if (v.country) places[v.country] = (places[v.country] || 0) + 1; }
+    const top = (o, n, f = (k) => k) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, c]) => `<span class="cost">${f(k)} <b>${c}</b></span>`).join('');
+    return {
+      title: 'Cyber threat log', kicker: `Live · updated ${ago(d.updated)}`,
+      html: `<div class="cy-stats"><div><b>${d.ransomware.length}</b><span>ransomware posts · 72 h</span></div><div><b>${d.attackers.length}</b><span>top attack sources</span></div><div><b>${d.botnets.filter((b) => b.status === 'online').length}</b><span>botnet C2 online</span></div><div><b>${d.exploits.length}</b><span>new exploited CVEs</span></div></div>
+        <h3>Most active ransomware groups</h3><div class="costs">${top(groups, 8)}</div>
+        <h3>Most targeted</h3><div class="costs">${top(places, 8, flag)}</div><div class="costs" style="margin-top:4px">${top(sectors, 6)}</div>
+        <h3>Latest ransomware incidents</h3><div class="table">${d.ransomware.slice(0, 30).map(rRow).join('')}</div>
+        <h3>Newly exploited vulnerabilities <small>CISA KEV</small></h3><div class="table">${d.exploits.map((x) => `<div class="row"><span>${x.vendor} ${x.product}<small>${x.cve}${x.ransomware ? ' · used by ransomware' : ''}</small></span><b>${x.t}</b></div>`).join('')}</div>
+        <h3>Top attack sources <small>SANS ISC sensors</small></h3><div class="table">${d.attackers.slice(0, 15).map((a) => `<div class="row"><span>${flag(a.country)}<small>${a.as || ''} · ${a.ip}</small></span><b>${fmt(a.attacks)} targets</b></div>`).join('')}</div>
+        <p class="note">Sources: ${d.sources.join(' · ')}. Victim organisations are not named; only sector and country are shown. Everything here is a public report, not live packet traffic.</p>`,
+    };
+  }
+
   updateMarkers(list) {
     const box = this.$('markers');
     while (this.markerEls.length < list.length) {
@@ -426,7 +476,7 @@ export class Hud {
     const [name, arg] = this.panel.split(':');
     const body = this.$('sheet-body');
     const keep = body.scrollTop;
-    const fn = { base: this.pBase, tech: this.pTech, fleet: this.pFleet, market: this.pMarket, body: this.pBody, launch: this.pLaunch, goals: this.pGoals, settings: this.pSettings, earthnav: this.pEarthNav }[name];
+    const fn = { base: this.pBase, tech: this.pTech, fleet: this.pFleet, market: this.pMarket, body: this.pBody, launch: this.pLaunch, goals: this.pGoals, settings: this.pSettings, earthnav: this.pEarthNav, cyber: this.pCyber }[name];
     const { title, kicker = '', html } = fn.call(this, arg);
     this.$('sheet-title').textContent = title;
     this.$('sheet-kicker').textContent = kicker;

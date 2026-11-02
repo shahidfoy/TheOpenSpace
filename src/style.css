@@ -110,6 +110,19 @@ b, strong { font-weight: 600; }
 .seg.wide button { flex: 1; }
 .legend { max-width: 300px; font-size: 12px; line-height: 1.35; color: #c3ccd5; padding: 7px 10px; background: rgba(9,12,17,0.5); border-left: 2px solid var(--ice); }
 .legend .live { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--amber); }
+.legend .cy-k { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: #c3ccd5; }
+.legend .cy-k i { width: 8px; height: 8px; border-radius: 50%; }
+.legend .cy-k i.m { background: #ff2bd6; box-shadow: 0 0 6px #ff2bd6; }
+.legend .cy-k i.a { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.legend .cy-k i.r { background: #ff2a3a; transform: rotate(45deg); border-radius: 1px; }
+.legend .btn { margin-top: 6px; pointer-events: auto; }
+.cyber-label { display: grid; font-family: var(--mono); font-size: 9.5px; color: #ffc6f1; text-align: center; text-shadow: 0 0 6px #000, 0 0 2px #000; white-space: nowrap; pointer-events: none; }
+.cyber-label b { font-weight: 400; color: #fff; letter-spacing: 0.08em; text-transform: uppercase; }
+.cy-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.cy-stats div { display: grid; padding: 8px 10px; background: rgba(255,43,214,0.06); border-left: 2px solid #ff2bd6; }
+.cy-stats b { font-family: var(--mono); font-weight: 400; font-size: 22px; color: #fff; }
+.cy-stats span { font-size: 11.5px; color: var(--dim); }
+.row b.bad { color: var(--bad); }
 .legend b { display: block; font-family: var(--mono); font-weight: 400; font-size: 10px; letter-spacing: 0.14em; color: var(--ice); margin-bottom: 2px; }
 
 /* ---------- pilot HUD ---------- */

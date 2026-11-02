@@ -28,7 +28,7 @@ export const TUTORIAL = [
   {
     kicker: 'MAP · FLEET', title: 'Travel the real solar system',
     body: 'Planets are where they really are today. Build a <b>Shipyard</b>, then haulers and seed ships in FLEET. In MAP, tap a world to <b>autopilot your fleet</b> there (you ride along and can salvage on the way), send ships unmanned, or <b>neural uplink</b> instantly to any base you own.',
-    mobile: [['t:Drag', 'Pan the map'], ['t:Pinch', 'Zoom'], ['t:Tap a world', 'Open it: autopilot, send ships, uplink'], ['t:Tabs', 'SYSTEM · DRIFT · GALAXY · COSMOS views']],
+    mobile: [['t:Drag', 'Pan the map'], ['t:Pinch', 'Zoom'], ['t:Tap a world', 'Open it: autopilot, send ships, uplink'], ['t:Tabs', 'SYSTEM · DRIFT · GALAXY · COSMOS · CYBER (live cyber threats on Earth)']],
     desktop: [['k:Drag', 'Pan the map'], ['k:Mouse wheel', 'Zoom'], ['k:Right-drag', 'Orbit the camera'], ['k:Click a world', 'Open it: autopilot, send ships, uplink']],
   },
   {

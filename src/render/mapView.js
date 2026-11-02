@@ -8,6 +8,7 @@ import { atmosphereMaterial, glowSprite, NOISE } from './shaders.js';
 import { planetMaterial, ringMesh, bodyQuat } from './planets.js';
 import { makeSky } from './sky.js';
 import { makeHauler, makeSeedShip, makeSkiff } from './models.js';
+import { CyberGlobe, loadThreats, cyber } from './cyberView.js';
 
 const col = (h, k = 1) => new THREE.Color(h).multiplyScalar(k);
 const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), ORIGIN = new THREE.Vector3();
@@ -97,6 +98,9 @@ export class MapView {
     this.buildDrift();
     this.buildGalaxy();
     this.buildCosmos();
+    // live cyber-threat globe (CYBER tab)
+    this.cyber = new CyberGlobe();
+    this.scene.add(this.cyber.group);
     this.applyLines();
 
     this.sel = new THREE.Mesh(new THREE.RingGeometry(1, 1.1, 48), new THREE.MeshBasicMaterial({ color: col(0xffb347, 1.1), side: THREE.DoubleSide, transparent: true, depthWrite: false }));
@@ -499,9 +503,23 @@ export class MapView {
     this.scene.add(g);
   }
 
+  // fetch the threat feed (cached 5 min) and rebuild the globe markers when it changes
+  async refreshCyber(force) {
+    const before = cyber.at;
+    await loadThreats(force);
+    if (cyber.at !== before || !this.cyberBuilt) {
+      this.cyber.build(cyber.data, cyber.byCountry);
+      this.cyber.setLabelsVisible(this.view === 'cyber');
+      this.cyberBuilt = true;
+    }
+    this.app.hud?.syncNav();
+  }
+
   setView(v) {
     this.view = v;
-    const far = v === 'galaxy' || v === 'cosmos';
+    const far = v === 'galaxy' || v === 'cosmos' || v === 'cyber';
+    this.cyber.group.visible = v === 'cyber';
+    this.cyber.setLabelsVisible(v === 'cyber');
     this.system.visible = !far;
     this.sky.visible = !far;
     this.cosmos.visible = v === 'cosmos';
@@ -510,7 +528,8 @@ export class MapView {
     this.galaxy.visible = v === 'galaxy';
     for (const [, m] of this.trips) m.g.visible = v === 'system';
     this.driftAcc = 99;
-    if (v === 'galaxy') { this.follow = null; this.target.set(0, 0, 6); this.dist = 115; this.elev = 0.32; this.az = 0.6; }
+    if (v === 'cyber') { this.follow = null; this.target.set(0, 0, 0); this.dist = 34; this.elev = 0.35; this.cyberAim = true; this.refreshCyber(true); }
+    else if (v === 'galaxy') { this.follow = null; this.target.set(0, 0, 6); this.dist = 115; this.elev = 0.32; this.az = 0.6; }
     else if (v === 'cosmos') { this.follow = null; this.target.set(0, 0, 0); this.dist = 420; this.elev = 0.45; }
     else if (v === 'drift') {
       // camera rides alongside the Sun, which leads; the planets' helices stream out behind it
@@ -554,6 +573,9 @@ export class MapView {
       if (pts.has(e.pointerId) && pts.size === 1 && down && down.moved < 10 && active() && this.view === 'system') {
         const id = this.pick(e.clientX, e.clientY);
         if (id) this.app.selectBody(id);
+      } else if (pts.has(e.pointerId) && pts.size === 1 && down && down.moved < 10 && active() && this.view === 'cyber') {
+        const cc = this.cyber.pick(e.clientX, e.clientY, this.camera);
+        if (cc) this.app.hud.open(`cyber:${cc}`);
       }
       pts.delete(e.pointerId);
       if (pts.size < 2) pinch = 0;
@@ -566,8 +588,8 @@ export class MapView {
 
   zoom(k) {
     const tru = this.mode() === 'true';
-    const max = { galaxy: 420, cosmos: 800, drift: 700 }[this.view] || (tru ? 4000 : 320);
-    const min = this.view === 'galaxy' || this.view === 'cosmos' ? 6 : tru ? 0.0006 : 2.5;
+    const max = { galaxy: 420, cosmos: 800, drift: 700, cyber: 90 }[this.view] || (tru ? 4000 : 320);
+    const min = this.view === 'cyber' ? 13 : this.view === 'galaxy' || this.view === 'cosmos' ? 6 : tru ? 0.0006 : 2.5;
     this.dist = THREE.MathUtils.clamp(this.dist * k, min, max);
   }
 
@@ -643,6 +665,17 @@ export class MapView {
     }
     if (drift) {
       this.driftLead.position.copy(lead);
+    }
+    if (this.view === 'cyber') {
+      this.cyber.update(dt, t, this.camera);
+      if (this.cyberAim) {
+        // open on the sunlit side (it moves with the real time of day)
+        const s = this.cyber.sunDir;
+        this.az = Math.atan2(s.x, s.z);
+        this.elev = THREE.MathUtils.clamp(Math.asin(s.y) + 0.25, -0.6, 0.9);
+        this.cyberAim = false;
+      }
+      if ((this.cyberAcc = (this.cyberAcc || 0) + dt) > 300) { this.cyberAcc = 0; this.refreshCyber(); }
     }
     this.updateTrips(t);
     this.updateFleet(t);

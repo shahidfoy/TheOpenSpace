@@ -1,0 +1,11 @@
+# DigitalOcean Functions project, deployed as the "api" component of the App Platform app
+# (see .do/app.yaml). The function is served at /api/threats/feed on the game's own domain.
+packages:
+  - name: threats
+    functions:
+      - name: feed
+        runtime: nodejs:18
+        web: true
+        limits:
+          timeout: 45000
+          memory: 512
