@@ -4,6 +4,7 @@ import { BODY, distKm } from '../sim/orbits.js';
 import * as S from '../sim/state.js';
 import { backButton, haptic, notify } from '../telegram.js';
 import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
+import { FUTURE_CITIES } from '../render/futureEarth.js';
 
 // ---------- formatting ----------
 export function fmt(n) {
@@ -370,7 +371,7 @@ export class Hud {
       // hypersonic leg at ~7 km/s plus ~12 min climbing out and descending
       const eta = d > 300e3 ? d / 7000 + 720 : d / 250;
       return { p, d, eta };
-    }).sort((a, b) => a.d - b.d).map(({ p, d, eta }) => `<div class="row"><span>${p.name}<small>${Math.abs(p.lat).toFixed(2)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(2)}°${p.lon >= 0 ? 'E' : 'W'}</small></span><span>${fmt(d / 1000)} km</span><b>${fmtDur(eta * 1000)}</b>
+    }).sort((a, b) => a.d - b.d).map(({ p, d, eta }) => `<div class="row"><span>${p.name}<small>${FUTURE_CITIES[p.id] ? `<em class="fut">${FUTURE_CITIES[p.id].title}</em> · ` : ''}${Math.abs(p.lat).toFixed(2)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(2)}°${p.lon >= 0 ? 'E' : 'W'}</small></span><span>${fmt(d / 1000)} km</span><b>${fmtDur(eta * 1000)}</b>
       <button class="btn sm" data-act="earthTarget" data-arg="${p.id}">SET</button></div>`).join('');
     return { title: 'Destinations', kicker: 'Real places · real distances', html: `<p class="note">Set a target, then fly there yourself or tap AUTOPILOT. Long legs climb into the hypersonic corridor (~7 km/s at 60–90 km) and descend on approach, so Singapore → Mount Fuji (5,200 km) takes about 25 minutes in real time.</p><div class="table launch">${rows}</div>` };
   }

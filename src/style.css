@@ -169,6 +169,7 @@ b, strong { font-weight: 600; }
 .en-t b { font-size: 14px; }
 .en-t em { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--dim); }
 .en-b { display: flex; gap: 6px; }
+.fut { font-style: normal; color: #ff6ad5; }
 .mode-earth .gauge, .mode-earth .dockline, .mode-earth .reticle { display: none; }
 .mode-earth .zone { display: block; }
 .attrib { display: none; position: absolute; left: 8px; right: 8px; bottom: calc(var(--bot) + 66px); font-size: 8.5px; color: rgba(233,237,241,0.4); text-align: center; }

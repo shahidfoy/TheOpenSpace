@@ -6,6 +6,7 @@ import { bodyQuat, planetTexture } from './planets.js';
 import { BODY, helioAU } from '../sim/orbits.js';
 import { simNow, emit } from '../sim/state.js';
 import { haptic } from '../telegram.js';
+import { FutureEarth, FUTURE_CITIES } from './futureEarth.js';
 
 // Atmospheric flight over the real Earth. Terrain heights stream from AWS Terrain Tiles
 // (Terrarium encoding: SRTM, GMTED, ETOPO1) and imagery from Sentinel-2 cloudless 2016 by EOX
@@ -149,6 +150,8 @@ void main(){
 const TERRAIN_FRAG = /* glsl */ `
 uniform sampler2D uMap; uniform sampler2D uGlobal; uniform sampler2D uLights; uniform float uHasMap;
 uniform vec4 uHole; uniform vec3 uSun; uniform float uDay; uniform vec3 uCam; uniform vec3 uFog; uniform float uFogK; uniform vec3 uSky;
+uniform vec4 uCities[4]; uniform float uTime;
+float gridLine(float x, float s, float w){ float d = abs(fract(x / s + 0.5) - 0.5) * s; return 1.0 - smoothstep(w, w + fwidth(x) * 1.5, d); }
 varying vec2 vUv; varying vec2 vMerc; varying vec2 vGeo; varying float vWater; varying vec3 vN; varying vec3 vW; varying float vDist;
 void main(){
   if (vMerc.x > uHole.x && vMerc.x < uHole.z && vMerc.y > uHole.y && vMerc.y < uHole.w) discard; // a finer level draws here
@@ -158,12 +161,25 @@ void main(){
   vec3 col = albedo * (vec3(1.0, 0.96, 0.9) * ndl * 1.25 * uDay + uSky * (0.35 * uDay) + vec3(0.025, 0.03, 0.045));
   // night side: real city lights (NASA Black Marble via the 2k Earth night map)
   vec3 lights = texture2D(uLights, vec2(fract(vGeo.y / 360.0 + 0.5), 0.5 + vGeo.x / 180.0)).rgb;
-  col += lights * lights * vec3(1.7, 1.25, 0.75) * (1.0 - uDay) * (1.0 - vWater);
+  col += lights * lights * vec3(1.0, 0.75, 0.45) * (1.0 - uDay) * (1.0 - vWater);
   if (vWater > 0.5) {
     vec3 V = normalize(uCam - vW);
     float sp = pow(max(dot(reflect(-L, vec3(0.0, 1.0, 0.0)), V), 0.0), 120.0);
     float fr = pow(clamp(1.0 - V.y, 0.0, 1.0), 4.0);
     col = mix(col, uSky * (0.4 * uDay + 0.03), fr * 0.6) + vec3(1.0, 0.92, 0.8) * sp * 2.0 * uDay;
+  }
+  // 2087: neon street grids light up the megacities (brightest at night)
+  for (int i = 0; i < 4; i++) {
+    vec4 c = uCities[i];
+    if (c.w < 0.5) continue;
+    vec2 q = vW.xz - c.xy;
+    float k = exp(-dot(q, q) / (c.z * c.z * 0.6)) * (1.0 - vWater) * (1.0 - smoothstep(25000.0, 70000.0, vDist));
+    if (k < 0.01) continue;
+    float minor = max(gridLine(q.x, 160.0, 3.0), gridLine(q.y, 160.0, 3.0));
+    float major = max(gridLine(q.x, 800.0, 7.0), gridLine(q.y, 800.0, 7.0));
+    float pulse = step(0.93, fract((q.x + q.y) / 1600.0 - uTime * 0.15));
+    vec3 neon = vec3(0.0, 0.75, 1.0) * minor * 0.22 + vec3(1.0, 0.15, 0.8) * major * (0.8 + pulse * 2.0);
+    col += neon * k * (0.08 + 1.0 * (1.0 - uDay));
   }
   float f = 1.0 - exp(-vDist * uFogK); // aerial perspective
   gl_FragColor = vec4(mix(col, uFog, clamp(f, 0.0, 1.0)), 1.0);
@@ -171,7 +187,7 @@ void main(){
 
 // ---------------------------------------------------------------- sky
 const SKY_FRAG = /* glsl */ `
-uniform vec3 uSun; uniform float uAlt; uniform float uDay;
+uniform vec3 uSun; uniform float uAlt; uniform float uDay; uniform vec3 uGlow;
 varying vec3 vP;
 void main(){
   vec3 d = normalize(vP), L = normalize(uSun);
@@ -189,6 +205,10 @@ void main(){
   col += vec3(1.0, 0.85, 0.6) * mie * 0.8 * (1.0 - thin * 0.7);
   col *= uDay;
   float a = uDay * (1.0 - thin * 0.92);
+  // neon light pollution hanging over the megacities at night
+  float glow = h * (1.0 - uDay) * (1.0 - thin);
+  col += uGlow * glow;
+  a = max(a, length(uGlow) * glow);
   gl_FragColor = vec4(col, a);
 }`;
 
@@ -200,7 +220,7 @@ export class EarthView {
     this.stars = makeSky({ mw: 0.16 });
     this.scene.add(this.stars);
     this.skyDome = new THREE.Mesh(new THREE.SphereGeometry(8500, 48, 24), new THREE.ShaderMaterial({
-      uniforms: { uSun: { value: new THREE.Vector3(0, 1, 0) }, uAlt: { value: 0 }, uDay: { value: 1 } },
+      uniforms: { uSun: { value: new THREE.Vector3(0, 1, 0) }, uAlt: { value: 0 }, uDay: { value: 1 }, uGlow: { value: new THREE.Color() } },
       vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       // drawn in the opaque pass (before terrain) but still alpha-blended over the stars
       fragmentShader: SKY_FRAG, side: THREE.BackSide, transparent: false, depthWrite: false, depthTest: false,
@@ -227,6 +247,7 @@ export class EarthView {
     this.levelMats = [];
     this.globalTex = planetTexture('earth');
     this.lightsTex = planetTexture('earth_night');
+    this.future = new FutureEarth(this);
     this.info = { alt: 0, agl: 0, speed: 0, lat: 0, lon: 0, mach: 0, target: null, markers: [], autopilot: false, local: '', sun: { x: 0, y: 0, vis: 0 } };
     this.time = 0;
   }
@@ -260,6 +281,7 @@ export class EarthView {
       uCam: { value: new THREE.Vector3() }, uHole: { value: new THREE.Vector4(2, 2, 2, 2) }, uSun: { value: new THREE.Vector3(0, 1, 0) },
       uDay: { value: 1 }, uFog: { value: new THREE.Color() }, uFogK: { value: 0 }, uSky: { value: new THREE.Color() },
       uGlobal: { value: this.globalTex }, uLights: { value: this.lightsTex },
+      uCities: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTime: { value: 0 },
     };
     return (this.levelMats[i] = u);
   }
@@ -487,8 +509,29 @@ export class EarthView {
     const skyCol = new THREE.Color().setRGB(0.42, 0.6, 0.92).lerp(new THREE.Color(0.05, 0.08, 0.2), thin);
     const fog = new THREE.Color().setRGB(0.62, 0.74, 0.9).lerp(new THREE.Color(0.25, 0.42, 0.8), thin).multiplyScalar(Math.max(0.02, day));
     const fogK = (1 / 160000) * Math.exp(-this.pos.y / 9000) + 1 / 4e6;
+    // the imagined 2087 layer: megacities, holograms, traffic, elevator, orbital ring
+    const tmpP = { x: 0, z: 0 };
+    this.future.update(dt, {
+      sun: L, day, fog, fogK, places: PLACES,
+      dist: (p) => gc(this.info.lat, this.info.lon, p.lat, p.lon).d,
+      project: (lat, lon, out) => { project(this.origin, lat, lon, tmpP); return out.set(tmpP.x, 0, tmpP.z); },
+    });
+    const cityVecs = Object.entries(this.future.cities).slice(0, 4);
+    let glow = 0;
+    for (const [id, c] of cityVecs) {
+      const dd = Math.hypot(c.g.position.x - this.pos.x, c.g.position.z - this.pos.z);
+      glow = Math.max(glow, Math.exp(-dd / (FUTURE_CITIES[id].r * 3)));
+    }
+    su.uGlow.value.setRGB(0.32, 0.06, 0.38).multiplyScalar(glow);
+    fog.lerp(new THREE.Color(0.16, 0.04, 0.2), glow * (1 - day) * 0.8);
     for (const lu of this.levelMats) {
       if (!lu) continue;
+      lu.uTime.value = this.time;
+      for (let i = 0; i < 4; i++) {
+        const c = cityVecs[i];
+        if (c) lu.uCities.value[i].set(c[1].g.position.x, c[1].g.position.z, FUTURE_CITIES[c[0]].r, 1);
+        else lu.uCities.value[i].set(0, 0, 1, 0);
+      }
       lu.uCam.value.copy(this.camera.position);
       lu.uSun.value.copy(L);
       lu.uDay.value = day;
