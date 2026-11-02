@@ -40,3 +40,20 @@ export const LensShader = {
       gl_FragColor = vec4(col, 1.0);
     }`,
 };
+
+// Runs straight after the scene render: replaces NaN / Inf pixels (and clamps runaway HDR) before
+// bloom can blur them into large black blocks. Some GPU drivers (Direct3D via ANGLE) produce NaN
+// where others don't, so this keeps one bad pixel from blacking out the screen.
+export const SanitizeShader = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: /* glsl */ `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse; varying vec2 vUv;
+    // isnan() can be optimised away by some drivers, so also test the value against itself and a range
+    bool bad(float x){ return isnan(x) || isinf(x) || !(x == x) || !(abs(x) < 1e6); }
+    void main(){
+      vec4 c = texture2D(tDiffuse, vUv);
+      if (bad(c.r) || bad(c.g) || bad(c.b)) c = vec4(0.0, 0.0, 0.0, 1.0);
+      gl_FragColor = vec4(clamp(c.rgb, 0.0, 64.0), 1.0);
+    }`,
+};

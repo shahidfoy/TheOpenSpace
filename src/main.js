@@ -15,7 +15,7 @@ import { MapView } from './render/mapView.js';
 import { SurfaceView, SURFACES } from './render/surfaceView.js';
 import { loadAssets } from './render/assets.js';
 import { setAnisotropy } from './render/materials.js';
-import { LensShader } from './render/post.js';
+import { LensShader, SanitizeShader } from './render/post.js';
 import { loadSky } from './render/sky.js';
 import { preloadPlanets } from './render/planets.js';
 import { BODIES } from './data/bodies.js';
@@ -85,6 +85,7 @@ async function boot() {
     bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.75, 0.55, 0.88);
     lens = new ShaderPass(LensShader);
     composer.addPass(renderPass);
+    composer.addPass(new ShaderPass(SanitizeShader));
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
     if (q.lens) composer.addPass(lens);

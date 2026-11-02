@@ -101,7 +101,7 @@ void main(){
   if (uKind == 1) {
     float cl = texture2D(uClouds, uv).r;
     float ocean = texture2D(uSpec, uv).r;
-    vec3 H = normalize(L + V);
+    vec3 H = normalize(L + V + vec3(1e-4)); // never normalize a zero vector (L = -V)
     float sp = pow(max(dot(N, H), 0.0), 70.0) * ocean * (1.0 - cl) * step(0.0, ndl);
     o = mix(col, vec3(1.0), cl * 0.9) * diff * uLight + vec3(1.0, 0.93, 0.8) * sp * 0.9;
     o *= mix(vec3(1.0), vec3(1.0, 0.7, 0.45), smoothstep(0.28, 0.0, ndl) * 0.55);
