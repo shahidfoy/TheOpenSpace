@@ -187,12 +187,13 @@ export class Hud {
       case 'autopilot': this.app.earthView.setAutopilot(!this.app.earthView.autopilot); return;
       case 'quality': this.app.setQuality(arg); break;
       case 'craft': {
-        const k = arg || (s.craft === 'skiff' ? 'frame' : 'skiff');
+        if (!this.app.localView.canSwap()) return;
+        const k = s.craft === 'skiff' ? 'frame' : 'skiff';
         this.app.setCraft(k);
         this.syncCraft();
         haptic('medium');
-        if (!arg) { this.toast(`Now piloting the ${CRAFTS[k]}`, 'good'); return; }
-        break;
+        this.toast(k === 'skiff' ? `Aboard the ${CRAFTS.skiff} · cleared to depart` : `EVA in the ${CRAFTS.frame} · your ship is holding at the berth`, 'good');
+        return;
       }
       case 'scale': S.setTimeScale(s, +arg); this.toast(`Time warp ×${arg}`); break;
       case 'reset':
@@ -227,10 +228,10 @@ export class Hud {
     if (this.app.mapView) this.app.mapView.select(null);
     this.syncNav();
   }
-  // Quick-swap chip in the flight HUD names the other craft.
+  // Berth chip in the flight HUD: board the parked ship from the suit, or step out of the ship on EVA.
   syncCraft() {
-    const other = this.app.state.craft === 'skiff' ? 'frame' : 'skiff';
-    this.$('craft-swap').innerHTML = `<small>SWAP CRAFT</small>${other === 'frame' ? '⬢ EXOSUIT' : '▲ SKIFF'}`;
+    const suit = this.app.state.craft !== 'skiff';
+    this.$('craft-swap').innerHTML = suit ? `<small>AT THE BERTH</small>▲ BOARD SHIP` : `<small>DOCKING RANGE</small>⬢ EVA · EXOSUIT`;
   }
   syncNav() {
     this.syncCraft();
@@ -359,6 +360,7 @@ export class Hud {
     const surf = this.app.mode === 'surface';
     const lv = this.app.localView;
     const info = (surf ? this.app.surfaceView : lv).info;
+    this.$('craft-swap').hidden = surf || this.app.mode !== 'local' || !lv.canSwap();
     const tgt = info.target;
     const br = this.$('bracket');
     if (tgt && !surf && tgt.on) {
@@ -713,8 +715,7 @@ export class Hud {
     const dev = this.app.dev ? `<h3>Dev time warp</h3><div class="costs">${[1, 60, 600, 3600].map((k) => `<button class="btn sm" data-act="scale" data-arg="${k}">×${k}</button>`).join('')}</div>` : '';
     return {
       title: 'Settings', kicker: 'System',
-      html: `<h3>Craft</h3><div class="seg wide">${Object.entries(CRAFTS).map(([k, n]) => `<button class="${c === k ? 'on' : ''}" data-act="craft" data-arg="${k}">${n.toUpperCase()}</button>`).join('')}</div>
-        <p class="note">Fly the Vesper Exosuit, a hard-shell EVA suit with a life-support pack, MMU thruster pods and a forearm cutting laser, or the classic Kestrel Skiff. Both share the same hold and drive. On the surface you always walk in the loader mech.</p>
+      html: `<h3>Craft</h3><p class="note">Now flying the <b>${CRAFTS[c] || CRAFTS.frame}</b>. Switch at a station: on EVA, fly the exosuit to your ship at the berth (follow the YOUR SHIP marker) and tap BOARD SHIP. In the ${CRAFTS.skiff}, come within docking range and tap EVA to step out. Both share the same hold and drive. On the surface you always walk in the loader mech.</p>
         <h3>Graphics</h3><div class="seg wide">${['ultra', 'high', 'low'].map((k) => `<button class="${q === k ? 'on' : ''}" data-act="quality" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
         <p class="note">ULTRA: 4x MSAA, high-DPI, lens effects, sharp shadows. HIGH: bloom and lens effects. LOW: no post-processing, for older phones. Resolution adapts automatically to hold a smooth frame rate${this.app.fps ? ` (now ${this.app.fps.toFixed(0)} fps)` : ''}.</p>${dev}
         <h3>How to play</h3><button class="btn big ghost" data-act="help">OPEN THE TUTORIAL</button>

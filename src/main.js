@@ -138,10 +138,10 @@ async function boot() {
     resize();
   };
 
-  // Pilot either the Vesper flight frame (mech) or the Kestrel skiff; saved with the game.
+  // Board your ship or step out in the exosuit; only possible at the station's berth.
   app.setCraft = (type) => {
     state.craft = type;
-    app.localView.setCraft(type);
+    app.localView.switchCraft(type);
     app.earthView.setCraft(type);
     app.save();
   };

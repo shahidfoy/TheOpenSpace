@@ -13,6 +13,9 @@ const SUN_DIR = new THREE.Vector3(0.85, 0.5, 0.15).normalize();
 const ROCK_GEOS = [1, 2, 3, 4, 5, 6].map((s) => rockGeometry(s, 4));
 const GAS = ['jupiter', 'saturn', 'uranus', 'neptune'];
 const DOCK_RANGE = 18;
+const BERTH = new THREE.Vector3(32, -4, 24); // where your ship waits beside the station while you are on EVA
+const BERTH_YAW = Math.atan2(32, 24); // nose pointing away from the station
+const BOARD_RANGE = 9;
 const TETHER = 460;
 const ROCK_TINT = { mars: 0x6a3a28, moon: 0x55524e, mercury: 0x4e4a46, ceres: 0x3f3b37, jupiter: 0x5a4636, belt: 0x403a34, trojan: 0x3a2e2a, nea: 0x4a443c, deep: 0x46403a };
 const v3 = () => new THREE.Vector3();
@@ -87,6 +90,7 @@ export class LocalView {
     this.station = null;
     this.planet = null;
     this.fieldGroup = null;
+    this.parked = null;
   }
 
   // Swap the piloted craft (frame mech or skiff) in place, keeping where it is and where it faces.
@@ -100,6 +104,34 @@ export class LocalView {
     }
     this.isFrame = !!this.craft.userData.parts;
     this.scene.add(this.craft);
+  }
+
+  // Craft changes happen at the station: while you are in the exosuit your ship waits at a berth
+  // beside the station; fly up to it to board, or bring the ship into docking range to step out.
+  canSwap() {
+    if (this.mode !== 'base' || !this.craft) return false;
+    return this.isFrame ? this.craft.position.distanceTo(BERTH) < BOARD_RANGE : this.craft.position.length() < BERTH.length() + 12;
+  }
+
+  switchCraft(type) {
+    this.setCraft(type);
+    this.yaw = BERTH_YAW; this.pitch = 0; this.roll = 0;
+    // board: take the ship off its berth; EVA: the ship parks there and you step out beside it
+    this.craft.position.copy(BERTH);
+    if (type === 'frame') this.craft.position.add(tmp.set(-4, 1.2, -1).applyAxisAngle(Y_UP, BERTH_YAW));
+    this.craft.quaternion.setFromEuler(new THREE.Euler(0, this.yaw, 0, 'YXZ'));
+    this.vel.set(0, 0, 0);
+    this.updateParked();
+  }
+
+  updateParked() {
+    if (this.parked) { this.content?.remove(this.parked); disposeTree(this.parked); this.parked = null; }
+    if (this.mode !== 'base' || !this.isFrame || !this.content) return;
+    this.parked = makeCraft('skiff');
+    this.parked.position.copy(BERTH);
+    this.parked.rotation.y = BERTH_YAW;
+    setThrust(this.parked, 0, 0);
+    this.content.add(this.parked);
   }
 
   resetCraft(z = 24) {
@@ -150,6 +182,7 @@ export class LocalView {
     this.buildField(this.zone, 40, 300);
     this.buildDrones();
     this.resetCraft(24);
+    this.updateParked();
     this.updateInfoCaps();
   }
 
@@ -586,7 +619,7 @@ export class LocalView {
 
     for (const r of this.rocks) {
       if (!r.alive) continue;
-      const d = tmp.copy(s.position).sub(r.mesh.position), min = r.radius + (this.isFrame ? 0.9 : 1.4);
+      const d = tmp.copy(s.position).sub(r.mesh.position), min = r.radius + (this.isFrame ? 0.9 : 2.6);
       if (d.lengthSq() < min * min) {
         d.setLength(min);
         s.position.copy(r.mesh.position).add(d);
@@ -661,10 +694,10 @@ export class LocalView {
 
     // chase camera: carry most of the craft's velocity so it holds station at cruise speed, and
     // ease the rest (a little lag still sells acceleration)
-    const desired = tmp.copy(s.position).addScaledVector(fwd, this.isFrame ? -5.5 : -13).addScaledVector(up, this.isFrame ? 1.7 : 3.6);
+    const desired = tmp.copy(s.position).addScaledVector(fwd, this.isFrame ? -5.5 : -17).addScaledVector(up, this.isFrame ? 1.7 : 4.8);
     this.camera.position.addScaledVector(this.vel, dt * 0.92).lerp(desired, 1 - Math.exp(-7 * dt));
     this.camera.up.lerp(up, 1 - Math.exp(-4 * dt)).normalize();
-    this.camera.lookAt(tmp.copy(s.position).addScaledVector(fwd, this.isFrame ? 3 : 6));
+    this.camera.lookAt(tmp.copy(s.position).addScaledVector(fwd, this.isFrame ? 3 : 8));
     // speed reads through a wider lens: FOV opens with velocity and kicks on boost
     const fov = 62 + (this.isFrame ? THREE.MathUtils.clamp((this.vel.length() - 15) / 90, 0, 1) * 12 + (I.boost ? 4 : 0) : 0);
     if (Math.abs(this.camera.fov - fov) > 0.05) {
@@ -705,6 +738,10 @@ export class LocalView {
     if (this.mode === 'base' && this.station) {
       const m = this.project(new THREE.Vector3(0, 0, 0), { label: BODY[this.baseId].base, dist: this.craft.position.length(), kind: 'home' });
       if (m.dist > 40) markers.push(m);
+      if (this.parked) {
+        const b = this.project(BERTH, { label: 'YOUR SHIP', dist: this.craft.position.distanceTo(BERTH), kind: 'home' });
+        if (b.dist > BOARD_RANGE) markers.push(b);
+      }
     }
     if (this.mode === 'voyage' && this.celest?.dest?.dir) {
       for (const [c, kind] of [[this.celest.dest, 'dest'], [this.celest.origin, 'origin']]) {

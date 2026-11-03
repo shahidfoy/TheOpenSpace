@@ -110,16 +110,16 @@ export function makeSkiff() {
   const g = instance('skiff');
   if (!g) return skiffProc();
   const a = anchors(g);
-  addPlumes(g, a, 0.27, 2.2);
+  addPlumes(g, a, 0.36, 3.4);
   g.userData.muzzle = a.nose;
   const l = new THREE.PointLight(0xffc890, 3, 12, 2);
-  l.position.set(0, 0.2, 3.2);
+  l.position.set(0, 0.6, 4.4);
   g.add(l);
   return g;
 }
 
 // ---------------- player craft: the Vesper flight frame or the Kestrel skiff ----------------
-export const CRAFTS = { frame: 'Vesper Exosuit', skiff: 'Kestrel Skiff' };
+export const CRAFTS = { frame: 'Vesper Exosuit', skiff: 'Kestrel Mk II' };
 export function makeCraft(type) {
   return (type === 'skiff' ? null : makeFrame()) || makeSkiff();
 }

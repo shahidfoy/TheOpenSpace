@@ -298,69 +298,127 @@ def empty(name, loc, parent=None):
 X, Y, Z = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))
 
 
-# ================================================================ SKIFF  (Kestrel salvage cutter)
+def loft(g, secs, mat, smooth=False):
+    """Faceted hull lofted through cross-sections. secs: (y, w, zt, zb, ws, zc) = station, chine half
+    width, top and keel heights, shoulder half width, chine height. Each ring is an octagon."""
+    bm = bmesh.new()
+    rings = []
+    for y, w, zt, zb, ws, zc in secs:
+        pts = [(0, zt), (ws, zt - (zt - zc) * 0.25), (w, zc), (ws * 0.75, zb + (zc - zb) * 0.3), (0, zb),
+               (-ws * 0.75, zb + (zc - zb) * 0.3), (-w, zc), (-ws, zt - (zt - zc) * 0.25)]
+        rings.append([bm.verts.new((x, y, z)) for x, z in pts])
+    for a, b in zip(rings, rings[1:]):
+        for k in range(8):
+            bm.faces.new((a[k], a[(k + 1) % 8], b[(k + 1) % 8], b[k]))
+    bm.faces.new(rings[0])
+    bm.faces.new(rings[-1][::-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    return g.add(bm, mat, bevel=0, smooth=smooth)
+
+
+# ================================================================ SKIFF  (Kestrel Mk II strike cutter, the player's ship)
 def build_skiff():
+    """Kestrel Mk II: an ~9 m arrowhead cutter. Faceted gunmetal hull under layered pearl armour panels
+    with shut-line gaps, a raised tinted canopy in a cowl, swept wings and forward canards, twin armoured
+    nacelles with ringed intakes and canted tail fins, amber light strips along the chines and a nose
+    chevron, a rear light bar, window rows, belly mining laser. Forward = -Y."""
     rng = random.Random(7)
     g = Group('skiff')
-    # fuselage: armoured wedge + nose prong
-    g.hexa(taper_pts(1.0, 3.6, 0.62, front=(0.38, 0.55), back=(1.0, 0.9), fz=0.0), 'hull', (0, -0.2, 0), bevel=0.05)
-    g.hexa(taper_pts(0.52, 1.3, 0.34, front=(0.22, 0.3), fz=-0.05), 'hullLight', (0, -2.4, -0.04), bevel=0.04)
-    g.hexa(taper_pts(0.8, 2.0, 0.12, front=(0.5, 1)), 'hullLight', (0, -0.9, -0.33), bevel=0.03)
-    # cockpit canopy with frame ribs
-    g.sphere(1, (0, -1.0, 0.3), 'glass', scale=(0.34, 0.95, 0.25), seg=28, rings=14)
-    for y in (-1.55, -1.05, -0.55):
-        g.box((0.62, 0.05, 0.06), (0, y, 0.43 - abs(y + 1.0) * 0.18), 'hullDark', bevel=0.01)
-    g.box((0.05, 1.7, 0.05), (0, -1.0, 0.55), 'hullDark', bevel=0.01)
-    # dorsal spine with orange stripe and sensor hump
-    g.box((0.36, 2.3, 0.2), (0, 0.55, 0.38), 'hullLight', bevel=0.04)
-    g.box((0.38, 1.4, 0.02), (0, 0.5, 0.49), 'accent', bevel=0)
-    g.hexa(taper_pts(0.3, 0.6, 0.18, front=(0.6, 0.5)), 'hullDark', (0, 1.55, 0.55), bevel=0.03)
-    g.cyl(0.012, 0.012, 0.6, (0.12, 1.6, 0.85), 'hullDark', axis='z', seg=6, bevel=0)
-    g.sphere(0.035, (0.12, 1.6, 1.15), 'red', seg=8, rings=6)
-    g.greeble(rng, (0, 0.2, 0.31), X, Y, Z, 0.9, 1.4, 10)
-    # belly mining laser
-    g.cyl(0.08, 0.08, 1.2, (0, -1.9, -0.3), 'hullDark', seg=12)
-    g.cyl(0.13, 0.13, 0.25, (0, -1.35, -0.3), 'hull', seg=12)
-    g.cyl(0.05, 0.03, 0.18, (0, -2.55, -0.3), 'hullLight', seg=10)
-    g.sphere(0.045, (0, -2.66, -0.3), 'red', seg=10, rings=6)
-    g.box((0.5, 0.9, 0.16), (0, 0.3, -0.38), 'hullDark', bevel=0.03)
+    HULL = [(-4.6, 0.05, 0.03, -0.03, 0.03, 0.0), (-4.0, 0.36, 0.2, -0.13, 0.22, 0.0), (-3.0, 0.7, 0.42, -0.25, 0.42, -0.02),
+            (-1.8, 0.95, 0.62, -0.35, 0.56, -0.05), (-0.4, 1.12, 0.72, -0.42, 0.66, -0.06), (1.2, 1.18, 0.7, -0.45, 0.7, -0.06),
+            (2.8, 1.04, 0.6, -0.42, 0.64, -0.06), (3.8, 0.78, 0.45, -0.34, 0.5, -0.06)]
+    loft(g, HULL, 'hull')
+    # keel in gloss carbon
+    loft(g, [(y, w * 0.7, zb + 0.06, zb - 0.06, ws * 0.6, zb) for y, w, zt, zb, ws, zc in HULL[1:-1]], 'carbon')
 
+    def at(y, i):
+        """Interpolate a hull section column at station y."""
+        for a, b in zip(HULL, HULL[1:]):
+            if a[0] <= y <= b[0]:
+                k = (y - a[0]) / (b[0] - a[0])
+                return a[i] + (b[i] - a[i]) * k
+        return HULL[-1][i]
+
+    # layered dorsal armour: pearl panels with shut-line gaps, stepping up along the spine
+    for y0, y1, lift in ((-3.7, -2.95, 0.02), (-0.5, 0.75, 0.05), (0.85, 2.05, 0.07), (2.15, 3.3, 0.05)):
+        ym = (y0 + y1) / 2
+        w0, w1 = at(y0, 4) * 0.92, at(y1, 4) * 0.92
+        z0, z1 = at(y0, 2), at(y1, 2)
+        g.hexa(([(-w0, y0, z0 - 0.05), (w0, y0, z0 - 0.05), (w1, y1, z1 - 0.05), (-w1, y1, z1 - 0.05)],
+                [(-w0 * 0.55, y0, z0 + lift), (w0 * 0.55, y0, z0 + lift), (w1 * 0.55, y1, z1 + lift), (-w1 * 0.55, y1, z1 + lift)]), 'pearl', bevel=0.02)
     for s in (-1, 1):
-        x = lambda v: v * s
-        # intakes
-        g.hexa(taper_pts(0.3, 1.2, 0.36, front=(0.8, 0.8)), 'hullDark', (x(0.6), -0.3, 0.0), bevel=0.03)
-        g.box((0.24, 0.04, 0.26), (x(0.6), -0.92, 0.0), 'amber', bevel=0)
-        # swept wing, upper plate, orange tip
-        g.add(slab((x(0.45), -0.4, -0.02), (x(0.45), 1.5, -0.02), (x(2.35), 1.05, 0.12), (x(2.35), 1.65, 0.12), 0.16, 0.06), 'hull', bevel=0.02)
-        g.add(slab((x(0.7), 0.1, 0.06), (x(0.7), 1.25, 0.06), (x(1.8), 0.85, 0.15), (x(1.8), 1.45, 0.15), 0.03, 0.03), 'hullLight', bevel=0.008)
-        g.add(slab((x(2.0), 0.95, 0.1), (x(2.0), 1.58, 0.1), (x(2.4), 1.08, 0.13), (x(2.4), 1.68, 0.13), 0.07, 0.06), 'accent', bevel=0.01)
-        g.sphere(0.05, (x(2.42), 1.12, 0.13), 'red' if s < 0 else 'green', seg=10, rings=6)
-        g.box((0.6, 0.04, 0.02), (x(1.4), 0.6, 0.16), 'cyan', bevel=0, rot=(0, 0, s * -0.42))
-        # engine nacelle on a pylon
-        g.box((0.4, 0.9, 0.22), (x(0.82), 1.4, 0.0), 'hullDark', bevel=0.03)
-        g.cyl(0.33, 0.33, 1.6, (x(1.05), 1.55, 0.05), 'hullDark', seg=24)
-        g.cyl(0.24, 0.33, 0.3, (x(1.05), 0.6, 0.05), 'hullLight', seg=24)
-        g.cyl(0.18, 0.18, 0.05, (x(1.05), 0.45, 0.05), 'hullDark', seg=20, bevel=0)
-        g.cyl(0.36, 0.4, 0.42, (x(1.05), 2.5, 0.05), 'hull', seg=24)
-        g.cyl(0.29, 0.29, 0.04, (x(1.05), 2.72, 0.05), 'engine', seg=24, bevel=0)
-        g.torus(0.37, 0.035, (x(1.05), 2.66, 0.05), 'engineHot', axis='y', seg=28, rseg=6)
-        for y in (1.05, 1.6, 2.1):
-            g.torus(0.335, 0.025, (x(1.05), y, 0.05), 'hullLight', axis='y', seg=24, rseg=5)
-        g.box((0.04, 1.0, 0.1), (x(1.05 + 0.33), 1.55, 0.05), 'accent', bevel=0)
-        # canted twin fin
-        g.hexa(([(x(1.0), 1.6, 0.35), (x(1.1), 1.6, 0.35), (x(1.1), 2.45, 0.35), (x(1.0), 2.45, 0.35)],
-                [(x(1.25), 2.15, 1.05), (x(1.3), 2.15, 1.05), (x(1.3), 2.55, 1.05), (x(1.25), 2.55, 1.05)]), 'hull', bevel=0.012)
-        g.box((0.05, 0.3, 0.06), (x(1.28), 2.35, 1.0), 'amber', bevel=0)
-        # RCS quads
-        for y in (-1.6, 0.9):
-            g.box((0.12, 0.12, 0.1), (x(0.42 if y < 0 else 0.55), y, 0.22), 'hullDark', bevel=0.01)
-            g.box((0.03, 0.03, 0.03), (x(0.49 if y < 0 else 0.62), y, 0.22), 'amber', bevel=0)
-        g.greeble(rng, (x(0.52), 0.6, 0.0), Y, Z, Vector((s, 0, 0)), 1.0, 0.3, 5)
+        # side armour plates along the chine, split in three
+        for y0, y1 in ((-2.9, -1.3), (-1.2, 0.9), (1.0, 2.9)):
+            p0 = Vector((s * at(y0, 1), y0, at(y0, 5))); p1 = Vector((s * at(y1, 1), y1, at(y1, 5)))
+            q0 = Vector((s * at(y0, 4), y0, at(y0, 2) - (at(y0, 2) - at(y0, 5)) * 0.25)); q1 = Vector((s * at(y1, 4), y1, at(y1, 2) - (at(y1, 2) - at(y1, 5)) * 0.25))
+            n0 = Vector((s * 0.03, 0, 0.03))
+            g.hexa(([p0 + n0 * 0.2, p1 + n0 * 0.2, q1 + n0 * 0.2, q0 + n0 * 0.2], [p0 + n0 * 1.6, p1 + n0 * 1.6, q1 + n0 * 1.6, q0 + n0 * 1.6]), 'pearl', bevel=0.01)
+        # amber light strip along the chine, nose to tail
+        pts = [Vector((s * (at(y, 1) + 0.025), y, at(y, 5))) for y in (-3.6, -3.0, -1.8, -0.4, 1.2, 2.8, 3.5)]
+        for a, b in zip(pts, pts[1:]):
+            g.seg(tuple(a), tuple(b), 0.022, 'amber', 6)
+        # window row under the chine
+        for k in range(7):
+            y = -1.4 + k * 0.42
+            g.box((0.02, 0.2, 0.07), (s * (at(y, 1) * 0.93), y, at(y, 5) - 0.16), 'window', bevel=0, rot=(0, s * 0.35, 0))
+        # nose chevron light
+        g.seg((s * 0.04, -4.3, 0.12), (s * 0.4, -3.4, 0.33), 0.02, 'amber', 6)
+        # forward canards
+        g.add(slab((s * 0.62, -2.6, 0.12), (s * 0.62, -1.7, 0.12), (s * 1.75, -1.35, 0.42), (s * 1.75, -1.05, 0.42), 0.07, 0.03), 'pearl', bevel=0.01)
+        g.seg((s * 0.66, -2.55, 0.17), (s * 1.75, -1.33, 0.45), 0.015, 'amber', 6)
+        # swept main wing: gunmetal spar, pearl upper plate, amber leading-edge light, tip pod
+        g.add(slab((s * 0.95, -0.3, -0.12), (s * 0.95, 2.7, -0.12), (s * 4.0, 2.3, -0.32), (s * 4.25, 3.35, -0.32), 0.2, 0.07), 'hull', bevel=0.02)
+        g.add(slab((s * 1.2, 0.2, -0.0), (s * 1.2, 2.3, -0.0), (s * 3.3, 2.15, -0.2), (s * 3.45, 2.95, -0.2), 0.03, 0.02), 'pearl', bevel=0.008)
+        g.add(slab((s * 1.25, 2.35, -0.02), (s * 1.25, 2.62, -0.02), (s * 3.5, 3.0, -0.22), (s * 3.55, 3.2, -0.22), 0.02, 0.02), 'candy', bevel=0.004)
+        g.seg((s * 1.0, -0.25, -0.1), (s * 4.0, 2.3, -0.3), 0.025, 'amber', 6)
+        g.cyl(0.09, 0.09, 1.3, (s * 4.15, 2.75, -0.32), 'hullDark', seg=12)
+        g.sphere(0.06, (s * 4.15, 2.05, -0.32), 'red' if s < 0 else 'green', seg=10, rings=6)
+        g.greeble(rng, (s * 2.2, 1.6, -0.06), Y, X, Z, 1.0, 0.6, 5, hmax=0.04)
+        # armoured engine nacelle on a pylon
+        nx = s * 1.5
+        g.box((0.5, 2.2, 0.28), (s * 1.15, 2.3, -0.05), 'hullDark', bevel=0.04)
+        g.cyl(0.44, 0.44, 3.4, (nx, 2.5, -0.05), 'hull', seg=28)
+        g.cyl(0.34, 0.44, 0.3, (nx, 0.65, -0.05), 'hullLight', seg=28)
+        g.cyl(0.3, 0.3, 0.05, (nx, 0.52, -0.05), 'hullDark', seg=24, bevel=0)
+        g.torus(0.4, 0.04, (nx, 0.7, -0.05), 'chrome', axis='y', seg=32, rseg=6)
+        for y in (1.4, 2.3, 3.2):
+            g.torus(0.445, 0.025, (nx, y, -0.05), 'hullDark', axis='y', seg=28, rseg=5)
+        g.hexa(taper_pts(0.62, 2.8, 0.18, front=(0.6, 0.6)), 'pearl', (nx, 2.4, 0.38), bevel=0.03)
+        g.box((0.05, 1.8, 0.05), (nx + s * 0.44, 2.4, 0.05), 'amber', bevel=0)
+        g.cyl(0.46, 0.4, 0.45, (nx, 4.42, -0.05), 'hullDark', seg=28)
+        g.cyl(0.36, 0.36, 0.04, (nx, 4.65, -0.05), 'engine', seg=28, bevel=0)
+        g.torus(0.42, 0.035, (nx, 4.6, -0.05), 'engineHot', axis='y', seg=32, rseg=6)
+        # canted tail fin
+        g.hexa(([(nx - 0.04, 2.9, 0.4), (nx + 0.04, 2.9, 0.4), (nx + 0.04, 4.1, 0.4), (nx - 0.04, 4.1, 0.4)],
+                [(nx + s * 0.5 - 0.02, 3.75, 1.35), (nx + s * 0.5 + 0.02, 3.75, 1.35), (nx + s * 0.5 + 0.02, 4.3, 1.35), (nx + s * 0.5 - 0.02, 4.3, 1.35)]), 'hull', bevel=0.012)
+        g.seg((nx + s * 0.03, 2.95, 0.45), (nx + s * 0.5, 3.77, 1.36), 0.015, 'amber', 6)
+    # raised canopy in a pearl cowl
+    g.hexa(taper_pts(1.0, 2.6, 0.3, front=(0.45, 0.6), back=(0.9, 1.0)), 'pearl', (0, -1.85, 0.62), bevel=0.04)
+    g.sphere(1, (0, -2.0, 0.8), 'glass', scale=(0.42, 1.25, 0.26), seg=32, rings=16)
+    for y in (-2.6, -2.0, -1.4):
+        g.box((0.78, 0.05, 0.06), (0, y, 0.98 - abs(y + 2.0) * 0.14), 'hullDark', bevel=0.01)
+    g.box((0.05, 2.3, 0.05), (0, -2.0, 1.05), 'hullDark', bevel=0.01)
+    # dorsal sensor spine and antenna
+    g.hexa(taper_pts(0.24, 1.6, 0.16, front=(0.5, 0.6)), 'hullDark', (0, 0.0, 0.83), bevel=0.02)
+    g.greeble(rng, (0, 1.4, 0.76), X, Y, Z, 0.6, 1.0, 8, hmax=0.05)
+    g.cyl(0.012, 0.012, 0.7, (0.2, 2.2, 1.05), 'hullDark', axis='z', seg=6, bevel=0)
+    g.sphere(0.035, (0.2, 2.2, 1.4), 'red', seg=8, rings=6)
+    # tail: centre engine, rear light bar
+    g.cyl(0.36, 0.42, 0.4, (0, 3.95, 0.05), 'hullDark', seg=24)
+    g.cyl(0.3, 0.3, 0.04, (0, 4.16, 0.05), 'engine', seg=24, bevel=0)
+    g.box((1.3, 0.03, 0.06), (0, 3.82, 0.3), 'amber', bevel=0)
+    # belly mining laser
+    g.box((0.4, 0.8, 0.18), (0, -2.8, -0.32), 'hullDark', bevel=0.03)
+    g.cyl(0.07, 0.07, 1.0, (0, -3.6, -0.35), 'hull', seg=12)
+    g.cyl(0.1, 0.1, 0.12, (0, -4.05, -0.35), 'candy', seg=12)
+    g.sphere(0.05, (0, -4.13, -0.35), 'red', seg=10, rings=6)
+    g.greeble(rng, (0, 0.5, -0.47), X, Y, -Z, 1.0, 2.5, 12, hmax=0.05)
 
     root = g.build()
-    empty('anchor_nose', (0, -2.7, -0.3), root)
-    empty('anchor_exhaust_0', (-1.05, 2.75, 0.05), root)
-    empty('anchor_exhaust_1', (1.05, 2.75, 0.05), root)
+    empty('anchor_nose', (0, -4.2, -0.35), root)
+    empty('anchor_exhaust_0', (-1.5, 4.68, -0.05), root)
+    empty('anchor_exhaust_1', (1.5, 4.68, -0.05), root)
+    empty('anchor_exhaust_2', (0, 4.2, 0.05), root)
     return root
 
 
