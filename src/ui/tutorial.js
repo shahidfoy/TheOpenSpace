@@ -3,7 +3,7 @@
 export const TUTORIAL = [
   {
     kicker: 'WELCOME', title: 'Your goal',
-    body: 'Start in a salvage exosuit above Earth (swap to the skiff any time). Mine, build robot swarms, found outposts across the real solar system and push your drives all the way to <b>light speed</b>. Everything runs in <b>real time</b>, even while you are offline.',
+    body: 'Start in a salvage exosuit above Earth, with your Kestrel Mk II waiting at the station berth. Mine, build robot swarms, found outposts across the real solar system and push your drives all the way to <b>light speed</b>. Everything runs in <b>real time</b>, even while you are offline.',
     mobile: [['t:Bottom bar', 'PILOT · MAP · BASE · TECH · FLEET · MARKET'], ['t:Objective card', 'Tap it to see every objective and its reward']],
     desktop: [['k:Bottom bar', 'Click PILOT · MAP · BASE · TECH · FLEET · MARKET'], ['k:Objective card', 'Click it to see every objective and its reward']],
   },
