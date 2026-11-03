@@ -1,6 +1,6 @@
 # The Open Space
 
-A real-time space economy game for Telegram Mini Apps, built with Three.js. Planet positions come from real orbital elements, so every distance and travel time matches the actual solar system right now. At light speed the Sun is 8.3 minutes away.
+A real-time space economy game for Telegram Mini Apps, built with Three.js. Planet and moon positions come from real ephemerides, so every distance and travel time matches the actual solar system right now. At light speed the Sun is 8.3 minutes away.
 
 ## Run
 
@@ -31,7 +31,9 @@ node scripts/build-sky.mjs package/data
 
 ## Real planets
 
-Every world uses a real surface map (Solar System Scope CC BY 4.0 and NASA/USGS public-domain mosaics; credits in `public/planets/CREDITS.txt`). Earth has day, city lights, clouds and ocean glint. Each body is oriented with its IAU pole direction and rotates to its true prime-meridian angle for the current moment, so the real hemisphere faces the Sun; Saturn's rings sit in its true equatorial plane (nearly edge-on in 2025-26). Station views fly a real-time orbit (Earth: ~105 min), and the Sun and parent worlds sit at their real directions and angular sizes. The map's TRUE SCALE switch shows real distances and real sizes together.
+**Real-time ephemeris** (`src/sim/orbits.js`): planets and Pluto use JPL's Keplerian elements with secular rates (Standish, fit to DE405), plus Jupiter–Saturn perturbation terms fitted to VSOP87; Ceres uses current MPC osculating elements. The Moon comes from a truncated ELP-2000/82 lunar theory (Meeus ch. 47), Europa from the IMCCE L1.2 Galilean-satellite theory, and Titan from Meeus ch. 46 (Harper & Taylor). Checked against Astronomy Engine and PyEphem: planets within ~0.03° over 1990–2045 (Mercury, Venus and Earth within ~0.01°), the Moon within ~60 km, Europa within ~300 km, Titan within ~0.1 Saturn radii. Time is converted from UTC to Terrestrial Time (+69.2 s) for the theories.
+
+Every world uses a real surface map (Solar System Scope CC BY 4.0 and NASA/USGS public-domain mosaics; credits in `public/planets/CREDITS.txt`). Earth has day, city lights, clouds and ocean glint. Each body is oriented with its IAU pole direction (including pole drift, the Moon's librations and Europa's and Neptune's periodic terms) and rotates to its true prime-meridian angle for the current moment (Earth via the Earth Rotation Angle, so the day/night line is within ~0.01° of reality), so the real hemisphere faces the Sun; Saturn's rings sit in its true equatorial plane (nearly edge-on in 2025-26). Station views fly a real-time orbit (Earth: ~105 min), and the Sun and parent worlds sit at their real directions and angular sizes. The map's TRUE SCALE switch shows real distances and real sizes together.
 
 ## Flying down to Earth
 
@@ -67,9 +69,9 @@ Browsers can't read most of these feeds (no CORS), so a **DigitalOcean Function*
 
 | Path | What |
 |---|---|
-| `src/data/bodies.js` | Real J2000 orbital elements, sizes, per-world resources and lore |
+| `src/data/bodies.js` | Real orbital elements (with secular rates), sizes, per-world resources and lore |
 | `src/data/economy.js` | Resources, buildings, drives, techs, ships, objectives (balance lives here) |
-| `src/sim/orbits.js` | Kepler solver, real distances, map projection |
+| `src/sim/orbits.js` | Real-time ephemeris (planets, Ceres, Moon, Europa, Titan), real distances, map projection |
 | `src/sim/state.js` | Sim tick, power/production, trips, offline catch-up, saves |
 | `src/render/*` | Planet/sky shaders, PBR material generator, GLB loading, station/voyage/surface/map views, lens post pass |
 | `src/ui/*` | HUD panels, touch joystick, keyboard |
