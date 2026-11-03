@@ -38,6 +38,12 @@ PALETTE = {
     'paintOlive': ((0.17, 0.18, 0.06), 0.3, 0.6, None, 0),
     'paintTeal':  ((0.02, 0.2, 0.2), 0.3, 0.55, None, 0),
     'paintWhite': ((0.6, 0.6, 0.58), 0.2, 0.55, None, 0),
+    'pearl':      ((0.78, 0.8, 0.82), 0.3, 0.28, None, 0),
+    'candy':      ((0.01, 0.05, 0.2), 0.6, 0.25, None, 0),
+    'carbon':     ((0.015, 0.016, 0.02), 0.3, 0.3, None, 0),
+    'chrome':     ((0.8, 0.8, 0.82), 1.0, 0.1, None, 0),
+    'visor':      ((0.9, 0.62, 0.2), 1.0, 0.06, None, 0),
+    'lamp':       ((0, 0, 0), 0, 0.5, (1.0, 0.95, 0.85), 4.0),
     'foil':       ((0.75, 0.5, 0.12), 1.0, 0.3, None, 0),
     'solar':      ((0.02, 0.04, 0.12), 0.9, 0.25, None, 0),
     'glass':      ((0.01, 0.015, 0.02), 1.0, 0.05, (0.9, 0.55, 0.15), 0.3),
@@ -195,6 +201,8 @@ class Group:
         if pre is not None:
             m = pre
         bmesh.ops.transform(pbm, matrix=m, verts=pbm.verts)
+        if m.determinant() < 0:  # mirrored basis: faces came out inside-out
+            bmesh.ops.reverse_faces(pbm, faces=pbm.faces)
         pbm.normal_update()
         # box-projected UVs, metres x uvscale
         uv = pbm.loops.layers.uv.get('UVMap') or pbm.loops.layers.uv.new('UVMap')
@@ -621,6 +629,398 @@ def build_mech():
     return root
 
 
+# ================================================================ FRAME  (Vesper EVA exosuit, the player's craft)
+def child(obj, parent, loc, rot=(0, 0, 0)):
+    """Parent obj with a local (parent-space) transform; parents here are never scaled."""
+    obj.parent = parent
+    obj.location = loc
+    obj.rotation_euler = rot
+    bpy.context.view_layer.update()
+    return obj
+
+
+def anchor(name, parent, loc, rot=(0, 0, 0)):
+    e = bpy.data.objects.new(name, None)
+    e.empty_display_size = 0.2
+    bpy.context.scene.collection.objects.link(e)
+    return child(e, parent, loc, rot)
+
+
+def prism(g, c0, w0, d0, c1, w1, d1, mat, bevel=0.03):
+    """Armour block lofted between a w0 x d0 rectangle around c0 and a w1 x d1 one around c1."""
+    def rect(c, w, d): return [(c[0] - w / 2, c[1] - d / 2, c[2]), (c[0] + w / 2, c[1] - d / 2, c[2]),
+                               (c[0] + w / 2, c[1] + d / 2, c[2]), (c[0] - w / 2, c[1] + d / 2, c[2])]
+    return g.hexa((rect(c0, w0, d0), rect(c1, w1, d1)), mat, bevel=bevel)
+
+
+VENDOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor', 'human-base-meshes',
+                      'human-base-meshes-bundle-v1.4.1', 'human_base_meshes_bundle.blend')
+
+# Joint landmarks of Blender Studio's realistic male base mesh (1.68 m, A-pose, facing -Y), x for the right side.
+J_SH = Vector((0.18, 0.0, 1.31))     # shoulder
+J_WR = Vector((0.378, 0.0, 0.862))   # wrist
+ARM_T_ELBOW, ARM_T_WRIST = 0.29, 0.49
+J_HIP = Vector((0.095, 0.0, 0.86))
+J_KN = Vector((0.135, 0.005, 0.47))
+J_AN = Vector((0.17, 0.05, 0.1))
+Z_WAIST, Z_PELVIS, Z_NECK = 1.02, 0.95, 1.45
+PARTS = ['head', 'pelvis', 'torso', 'thigh_L', 'thigh_R', 'shin_L', 'shin_R', 'foot_L', 'foot_R', 'arm_L', 'arm_R', 'forearm_L', 'forearm_R', 'hand_L', 'hand_R']
+
+
+def arm_dir(s):
+    d = J_WR - J_SH
+    return Vector((s * d.x, 0, d.z)).normalized()
+
+
+def arm_coords(c):
+    """(t along the arm from the shoulder, distance from the arm axis) in the XZ plane."""
+    p = Vector((abs(c.x) - J_SH.x, c.z - J_SH.z))
+    d = Vector((J_WR.x - J_SH.x, J_WR.z - J_SH.z)).normalized()
+    return p.dot(d), abs(p.x * d.y - p.y * d.x)
+
+
+def classify(c):
+    side = 'R' if c.x > 0 else 'L'
+    t, perp = arm_coords(c)
+    if t > 0 and perp < 0.078 and abs(c.x) > 0.13 and c.z < 1.42 and (c.z > 1.2 or abs(c.x) > 0.17):
+        return f'arm_{side}' if t < ARM_T_ELBOW else f'forearm_{side}' if t < ARM_T_WRIST + 0.03 else f'hand_{side}'
+    if c.z > Z_NECK + 0.02:
+        return 'head'
+    if c.z > Z_WAIST:
+        return 'torso'
+    if c.z > J_HIP.z:
+        return 'pelvis'
+    if c.z > J_KN.z:
+        return f'thigh_{side}'
+    if c.z > 0.115:
+        return f'shin_{side}'
+    return f'foot_{side}'
+
+
+def load_body():
+    """The sculpted body as a bmesh in world space, centred on x, head removed, smoothed and
+    inflated into a pressure-garment layer; each face tagged with the rigid part it rides on."""
+    with bpy.data.libraries.load(VENDOR, link=False) as (src, dst):
+        dst.objects = ['GEO-body_male_realistic']
+    o = dst.objects[0]
+    bm = bmesh.new()
+    bm.from_mesh(o.data)  # base level of the multires sculpt: clean, smooth quads
+    bmesh.ops.transform(bm, matrix=o.matrix_world, verts=bm.verts)
+    xs = [v.co.x for v in bm.verts]
+    bmesh.ops.translate(bm, vec=Vector((-(max(xs) + min(xs)) / 2, 0, 0)), verts=bm.verts)
+    bpy.data.objects.remove(o)
+    tag = bm.faces.layers.int.new('part')
+    for f in bm.faces:
+        f[tag] = PARTS.index(classify(f.calc_center_median()))
+    # pressure garment: wash out anatomy, then inflate (thinner over the hands)
+    for _ in range(3):
+        bmesh.ops.smooth_vert(bm, verts=bm.verts, factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    bm.normal_update()
+    hand = {PARTS.index('hand_L'), PARTS.index('hand_R')}
+    off = {}
+    for v in bm.verts:
+        on_hand = any(f[tag] in hand for f in v.link_faces)
+        on_foot = any(PARTS[f[tag]].startswith('foot') for f in v.link_faces)
+        off[v] = v.normal * (0.01 if on_hand else 0.036 if on_foot else 0.026)
+    for v, d in off.items():
+        v.co += d
+    bmesh.ops.smooth_vert(bm, verts=bm.verts, factor=0.3, use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    bm.normal_update()
+    return bm, tag
+
+
+def region(bm, tag, keep):
+    """Copy of the faces for which keep(part_name, centre, normal) is true."""
+    out = bm.copy()
+    t = out.faces.layers.int.get('part')
+    bmesh.ops.delete(out, geom=[f for f in out.faces if not keep(PARTS[f[t]], f.calc_center_median(), f.normal)], context='FACES')
+    return out
+
+
+def plate(bm, tag, keep, mat, g, off=0.006, thick=0.012, rounds=6, led=None):
+    """Armour panel contoured to the suit: a region lifted off the surface, outline rounded, given
+    thickness. led(midpoint) picks outline edges that get an LED light strip, like a car's DRLs."""
+    p = region(bm, tag, keep)
+    if not p.faces:
+        p.free()
+        return
+    for _ in range(rounds):
+        edge = [v for v in p.verts if v.is_boundary]
+        bmesh.ops.smooth_vert(p, verts=edge, factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    p.normal_update()
+    for v in p.verts:
+        v.co += v.normal * off
+    strip = [(e.verts[0].co + e.verts[0].normal * 0.004, e.verts[1].co + e.verts[1].normal * 0.004)
+             for e in p.edges if e.is_boundary and led and led((e.verts[0].co + e.verts[1].co) / 2)]
+    bmesh.ops.solidify(p, geom=p.faces[:], thickness=-thick)
+    bmesh.ops.recalc_face_normals(p, faces=p.faces)
+    g.add(p, mat, bevel=0)
+    for a, b in strip:
+        g.seg(tuple(a), tuple(b), 0.0035, 'cyan', seg=6)
+
+
+def fit_ring(bm, c, d, pad=0.008, maxr=0.14):
+    """Radius of the suit's cross-section around axis d through c (median over a thin slab)."""
+    rs = sorted(r for r in (((v.co - c) - d * (v.co - c).dot(d)).length for v in bm.verts if abs((v.co - c).dot(d)) < 0.012) if r < maxr)
+    return (rs[len(rs) // 2] if rs else 0.06) + pad
+
+
+def ring(g, c, d, R, r=0.014, mat='chrome', sx=1.0):
+    """Bearing ring of radius R around axis d through c."""
+    t = bm_torus(R, r, 36, 6, 'z', sx)
+    m = Matrix.Translation(Vector(c)) @ Vector((0, 0, 1)).rotation_difference(Vector(d).normalized()).to_matrix().to_4x4()
+    g.add(t, mat, bevel=0, pre=m)
+
+
+def dome(g, c, r, scale, tilt, mat, cut=-0.25, thick=0.01):
+    """Shoulder cap: the top of a sphere, scaled and tilted, given thickness."""
+    b = bm_sphere(r, 28, 16)
+    bmesh.ops.delete(b, geom=[v for v in b.verts if v.co.z < r * cut], context='VERTS')
+    bmesh.ops.scale(b, vec=Vector(scale), verts=b.verts)
+    bmesh.ops.solidify(b, geom=b.faces[:], thickness=-thick)
+    bmesh.ops.recalc_face_normals(b, faces=b.faces)
+    g.add(b, mat, bevel=0, pre=Matrix.Translation(Vector(c)) @ Euler(tilt).to_matrix().to_4x4())
+
+
+def build_frame():
+    """Vesper EVA exosuit, the player's craft, built over Blender Studio's realistic male base mesh
+    (CC0, blender/vendor; fetch human-base-meshes-bundle-v1.4.1.zip from blender.org/download/demo).
+    The body becomes a pressure-garment layer split into rigid segments at the joints (as on real
+    hard suits); contoured armour plates, bearing rings, domed shoulder caps, armoured boots, a
+    pressure helmet with a gold sun visor, a life-support pack and MMU thruster pods go on top.
+    Joints: pelvis > thigh_* > shin_* > foot_*, pelvis > torso > head / booster_* / arm_* > forearm_*.
+    Jets carry anchor_exhaust_* (local +Y is the jet): 0-1 thruster pods, 2-3 boot soles, 4-5 palms.
+    The right palm carries anchor_muzzle (cutting laser)."""
+    if not os.path.exists(VENDOR):
+        raise SystemExit(f'missing {VENDOR}: download the Human Base Meshes bundle from blender.org')
+    rng = random.Random(29)
+    bm, tag = load_body()
+    root = empty('frame', (0, 0, 0))
+    G = {n: Group(n, uvscale=2) for n in ['pelvis', 'torso', 'head', 'thigh_L', 'thigh_R', 'shin_L', 'shin_R', 'foot_L', 'foot_R', 'arm_L', 'arm_R', 'forearm_L', 'forearm_R']}
+
+    # pressure garment, one rigid segment per part (hands ride on the forearms, in glove material)
+    for n in PARTS[1:]:  # the head becomes the helmet below
+        g = G[n.replace('hand', 'forearm')]
+        g.add(region(bm, tag, lambda p, c, nr, n=n: p == n), 'hullDark' if n.startswith('hand') else 'pearl' if n.startswith('foot') else 'carbon', bevel=0)
+
+    # Bodywork, styled like a supercar: pearl paint panels split by shut lines over a gloss carbon
+    # tub, candy-blue accent panels, chrome bearing rings, LED light strips along panel edges.
+    # ---- torso: split chest panels with LED lower edges, abdominal band, side intakes, upper back
+    plate(bm, tag, lambda p, c, n: p == 'torso' and 1.1 < c.z < 1.42 and n.y < -0.25 and abs(c.x) > 0.012, 'pearl', G['torso'], thick=0.018,
+          led=lambda m: m.z < 1.17 and abs(m.x) > 0.03)
+    plate(bm, tag, lambda p, c, n: p == 'torso' and 1.03 < c.z < 1.1 and n.y < -0.3 and abs(c.x) > 0.01, 'candy', G['torso'], thick=0.014)
+    plate(bm, tag, lambda p, c, n: p == 'torso' and 1.06 < c.z < 1.3 and abs(n.x) > 0.7, 'candy', G['torso'], led=lambda m: m.y < -0.06)
+    plate(bm, tag, lambda p, c, n: p == 'torso' and c.z > 1.3 and n.y > 0.2 and n.z > 0.2, 'pearl', G['torso'])
+    # ---- pelvis: brief, hip panels
+    plate(bm, tag, lambda p, c, n: p == 'pelvis' and n.y < -0.35, 'candy', G['pelvis'])
+    plate(bm, tag, lambda p, c, n: p == 'pelvis' and abs(n.x) > 0.6, 'pearl', G['pelvis'], thick=0.016)
+    plate(bm, tag, lambda p, c, n: p == 'pelvis' and n.y > 0.5 and c.z > 0.9, 'pearl', G['pelvis'])
+    for s, side in ((-1, 'L'), (1, 'R')):
+        # ---- legs: two-piece thigh panels, outer candy strake, knee cap, two-piece greave, calf, boot
+        plate(bm, tag, lambda p, c, n: p == f'thigh_{side}' and 0.695 < c.z < 0.82 and n.y < -0.2, 'pearl', G[f'thigh_{side}'], thick=0.018,
+              led=lambda m: m.z < 0.71)
+        plate(bm, tag, lambda p, c, n: p == f'thigh_{side}' and 0.55 < c.z < 0.68 and n.y < -0.2, 'pearl', G[f'thigh_{side}'], thick=0.018)
+        plate(bm, tag, lambda p, c, n: p == f'thigh_{side}' and 0.55 < c.z < 0.8 and n.y >= -0.2 and n.x * s > 0.6, 'candy', G[f'thigh_{side}'])
+        plate(bm, tag, lambda p, c, n: p == f'shin_{side}' and 0.4 < c.z < 0.47 and n.y < -0.35, 'candy', G[f'shin_{side}'], off=0.012, thick=0.016)
+        plate(bm, tag, lambda p, c, n: p == f'shin_{side}' and 0.295 < c.z < 0.39 and n.y < -0.05, 'pearl', G[f'shin_{side}'], thick=0.018,
+              led=lambda m: m.z < 0.31)
+        plate(bm, tag, lambda p, c, n: p == f'shin_{side}' and 0.17 < c.z < 0.28 and n.y < -0.05, 'pearl', G[f'shin_{side}'], thick=0.018)
+        plate(bm, tag, lambda p, c, n: p == f'shin_{side}' and 0.2 < c.z < 0.4 and n.y > 0.4, 'candy', G[f'shin_{side}'])
+        # armoured boot: the inflated foot in pearl over a rounded mag-lock sole, with a cuff ring
+        fb = [v.co for f in bm.faces if PARTS[f[tag]] == f'foot_{side}' for v in f.verts]
+        lo = Vector((min(v.x for v in fb), min(v.y for v in fb), min(v.z for v in fb)))
+        hi = Vector((max(v.x for v in fb), max(v.y for v in fb), max(v.z for v in fb)))
+        G[f'foot_{side}'].add(bm_box(hi.x - lo.x - 0.01, hi.y - lo.y, 0.025), 'hullDark', ((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, lo.z + 0.006), bevel=0.012, seg=3)
+        AN = Vector((s * J_AN.x, J_AN.y, J_AN.z + 0.06))
+        ring(G[f'shin_{side}'], AN, Vector((0, 0, 1)), fit_ring(bm, AN, Vector((0, 0, 1)), 0.006), 0.018, 'pearl')
+        # ---- arms: bicep sleeve, gauntlet, layered shoulder caps
+        AD = arm_dir(s)
+        OUT = Vector((s * abs(AD.z), 0, abs(AD.x)))  # off the arm axis, up and away from the body
+        plate(bm, tag, lambda p, c, n: p == f'arm_{side}' and 0.07 < arm_coords(c)[0] < 0.26 and n.dot(OUT) > -0.2 and n.y < 0.5, 'pearl', G[f'arm_{side}'], thick=0.016,
+              led=lambda m: arm_coords(m)[0] > 0.24)
+        plate(bm, tag, lambda p, c, n: p == f'forearm_{side}' and 0.31 < arm_coords(c)[0] < 0.47, 'pearl', G[f'forearm_{side}'], off=0.008, thick=0.018, rounds=3,
+              led=lambda m: arm_coords(m)[0] > 0.45)
+        SH = Vector((s * J_SH.x, 0, J_SH.z))
+        dome(G[f'arm_{side}'], SH + Vector((s * 0.025, 0, 0.035)), 0.12, (1.0, 1.08, 0.75), (0, s * 0.45, 0), 'candy')
+        dome(G[f'arm_{side}'], SH + Vector((s * 0.03, 0, 0.06)), 0.11, (0.95, 1.0, 0.7), (0, s * 0.45, 0), 'pearl', thick=0.012)
+        EL = SH + AD * ARM_T_ELBOW
+        WR = SH + AD * ARM_T_WRIST
+        # ---- bearing rings fitted to the suit's cross-sections
+        ring(G[f'arm_{side}'], SH + AD * 0.04, AD, fit_ring(bm, SH + AD * 0.04, AD, 0.004), 0.016)
+        ring(G[f'forearm_{side}'], EL + AD * 0.015, AD, fit_ring(bm, EL + AD * 0.015, AD))
+        ring(G[f'forearm_{side}'], WR, AD, fit_ring(bm, WR, AD, 0.012, 0.065), 0.013, 'candy')
+        KN = Vector((s * J_KN.x, J_KN.y, J_KN.z))
+        ring(G[f'shin_{side}'], KN + Vector((0, 0, -0.035)), Vector((0, 0, 1)), fit_ring(bm, KN + Vector((0, 0, -0.035)), Vector((0, 0, 1))))
+        ring(G[f'thigh_{side}'], Vector((s * 0.11, 0.0, 0.83)), Vector((0, 0, 1)), fit_ring(bm, Vector((s * 0.11, 0.0, 0.83)), Vector((0, 0, 1))) - 0.004, 0.016)
+    ring(G['torso'], Vector((0, -0.03, Z_WAIST + 0.01)), Vector((0, 0, 1)), 0.165, 0.02, sx=1.0)
+    ring(G['torso'], Vector((0, -0.02, Z_NECK - 0.005)), Vector((0, 0, 1)), 0.1, 0.022)
+
+    # ---- chest details: hex power core and display & control module, placed on the plate
+    tr = G['torso']
+    tr.cyl(0.04, 0.04, 0.03, (0, -0.172, 1.28), 'hullDark', seg=6, bevel=0.004)
+    tr.cyl(0.028, 0.028, 0.012, (0, -0.19, 1.28), 'cyan', seg=6, bevel=0)
+    tr.box((0.13, 0.05, 0.065), (0, -0.165, 1.17), 'hullDark', bevel=0.012)
+    tr.box((0.07, 0.008, 0.03), (-0.02, -0.191, 1.175), 'cyan', bevel=0)
+    for i, m in enumerate(('green', 'amber', 'red')):
+        tr.sphere(0.006, (0.04, -0.192, 1.19 - i * 0.015), m, seg=8, rings=6)
+    # ---- life-support pack: rear-entry hatch, O2 tanks, radiator fins, antenna
+    tr.add(bm_box(0.36, 0.15, 0.46), 'pearl', (0, 0.2, 1.17), bevel=0.045, seg=4)
+    tr.torus(0.12, 0.01, (0, 0.278, 1.17), 'hullDark', axis='y', seg=36, rseg=6)
+    tr.box((0.1, 0.025, 0.018), (0, 0.285, 1.24), 'hullDark', bevel=0.005)
+    tr.box((0.37, 0.01, 0.022), (0, 0.276, 1.35), 'accent', bevel=0)
+    for s in (-1, 1):
+        tr.cyl(0.04, 0.04, 0.3, (s * 0.12, 0.3, 1.16), 'hullLight', axis='z', seg=20)
+        tr.sphere(0.04, (s * 0.12, 0.3, 1.31), 'hullLight', seg=16, rings=10)
+        tr.sphere(0.04, (s * 0.12, 0.3, 1.01), 'hullLight', seg=16, rings=10)
+        tr.box((0.01, 0.01, 0.08), (s * 0.12, 0.341, 1.16), 'green', bevel=0)
+    for i in range(5):
+        tr.box((0.32, 0.007, 0.055), (0, 0.14 + i * 0.025, 1.43), 'hullLight', bevel=0)
+    tr.box((0.34, 0.13, 0.012), (0, 0.19, 1.405), 'hullDark', bevel=0.003)
+    tr.greeble(rng, (0, 0.2, 0.94), X, Y, -Z, 0.3, 0.12, 6, mats=('hullDark', 'hull'), hmax=0.025, smax=0.06)
+    tr.cyl(0.004, 0.004, 0.3, (-0.15, 0.24, 1.55), 'hullDark', axis='z', seg=6, bevel=0)
+    tr.sphere(0.01, (-0.15, 0.24, 1.7), 'red', seg=8, rings=6)
+
+    # ---- armoured helmet: a shell that follows the real skull, a faceted faceplate built from
+    # designed cross-sections (narrow chin, cheek planes, brow ridge, centre crease), angular glowing
+    # eye slits, swept V-fin crest with a forehead sensor, ear sensor pods, jaw vents
+    h = G['head']
+    # faceplate rows: (z, half width, front depth, side depth)
+    ROWS = [(1.468, 0.03, -0.15, -0.11), (1.495, 0.062, -0.165, -0.09), (1.525, 0.082, -0.178, -0.07), (1.555, 0.095, -0.186, -0.058),
+            (1.585, 0.102, -0.192, -0.05), (1.615, 0.102, -0.196, -0.046), (1.64, 0.092, -0.188, -0.05)]
+    COLS = [-1, -0.72, -0.4, -0.14, 0, 0.14, 0.4, 0.72, 1]
+
+    def row_at(z):
+        z = min(max(z, ROWS[0][0]), ROWS[-1][0])
+        for a, b in zip(ROWS, ROWS[1:]):
+            if a[0] <= z <= b[0]:
+                k = (z - a[0]) / (b[0] - a[0])
+                return tuple(a[i] + (b[i] - a[i]) * k for i in range(1, 4))
+
+    def mask_y(x, z):
+        w, yf, ys = row_at(z)
+        u = min(1.0, abs(x) / w)
+        return yf + (ys - yf) * u ** 1.6 - (0.006 if abs(x) < 0.004 else 0)
+
+    shell = region(bm, tag, lambda p, c, n: p == 'head')
+    bmesh.ops.delete(shell, geom=[v for v in shell.verts if v.co.z < (1.5 if v.co.y < -0.06 else 1.468)], context='VERTS')
+    for _ in range(10):
+        bmesh.ops.smooth_vert(shell, verts=[v for v in shell.verts if not v.is_boundary], factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    for _ in range(6):
+        bmesh.ops.smooth_vert(shell, verts=[v for v in shell.verts if v.is_boundary], factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=True)
+    shell.normal_update()
+    for v in shell.verts:
+        v.co += v.normal * 0.012
+    # open the face: the faceplate fills the opening, its edge meets the shell, a pearl trim hides the seam
+    pts = [v.co.copy() for v in shell.verts]
+
+    def surf_y(x, z):
+        near = [p.y for p in pts if abs(p.x - x) < 0.012 and abs(p.z - z) < 0.012 and p.y < -0.02]
+        return min(near) if near else None
+    ROWS[:] = [(z, w, yf, (surf_y(w, z) or ys) + 0.002) for z, w, yf, ys in ROWS]
+    inside = lambda p: ROWS[0][0] - 0.02 < p.z < ROWS[-1][0] and abs(p.x) < row_at(p.z)[0] - 0.006 and p.y < -0.03
+    bmesh.ops.delete(shell, geom=[f for f in shell.faces if all(inside(v.co) for v in f.verts)], context='FACES')
+    hv = [v.co.copy() for v in shell.verts]
+    h.add(shell, 'pearl', bevel=0)
+    rim = [(-ROWS[r][1], ROWS[r][0], ROWS[r][3]) for r in range(len(ROWS))] + [(ROWS[-1][1] * u, ROWS[-1][0], mask_y(ROWS[-1][1] * u, ROWS[-1][0])) for u in (-0.72, -0.4, 0, 0.4, 0.72)] \
+        + [(ROWS[r][1], ROWS[r][0], ROWS[r][3]) for r in reversed(range(len(ROWS)))]
+    for (x0, z0, y0), (x1, z1, y1) in zip(rim, rim[1:]):
+        h.seg((x0, y0, z0), (x1, y1, z1), 0.011, 'pearl', seg=10)
+        h.sphere(0.011, (x1, y1, z1), 'pearl', seg=10, rings=8)
+
+    fp = bmesh.new()
+    grid = [[fp.verts.new((u * w, mask_y(u * w, z) if u else yf - 0.006, z)) for u in COLS] for z, w, yf, ys in ROWS]
+    for r in range(len(ROWS) - 1):
+        for c in range(len(COLS) - 1):
+            fp.faces.new((grid[r][c], grid[r][c + 1], grid[r + 1][c + 1], grid[r + 1][c]))
+    bmesh.ops.recalc_face_normals(fp, faces=fp.faces)
+    if fp.faces[0].normal.y > 0:
+        bmesh.ops.reverse_faces(fp, faces=fp.faces)
+    bmesh.ops.solidify(fp, geom=fp.faces[:], thickness=-0.008)
+    bmesh.ops.recalc_face_normals(fp, faces=fp.faces)
+    h.add(fp, 'carbon', bevel=0, smooth=False)  # flat-shaded facets read as machined armour
+    on_mask = lambda x, z, lift=0.013: Vector((x, mask_y(x, z) - lift, z))  # just proud of the faceplate
+    for s in (-1, 1):
+        # eye slit: a sharp sliver, low by the nose, swept up toward the temple
+        a, m, b = on_mask(s * 0.016, 1.582), on_mask(s * 0.045, 1.588), on_mask(s * 0.078, 1.603)
+        for p0, p1, t0, t1 in ((a, m, 0.007, 0.011), (m, b, 0.011, 0.004)):
+            h.hexa(([p0 + Vector((0, 0, -t0 / 2)), p1 + Vector((0, 0, -t1 / 2)), p1 + Vector((0, 0.005, -t1 / 2)), p0 + Vector((0, 0.005, -t0 / 2))],
+                    [p0 + Vector((0, 0, t0 / 2)), p1 + Vector((0, 0, t1 / 2)), p1 + Vector((0, 0.005, t1 / 2)), p0 + Vector((0, 0.005, t0 / 2))]), 'cyan', bevel=0)
+        # jaw vents
+        for k in range(3):
+            g0 = on_mask(s * (0.02 + k * 0.014), 1.505, 0.011)
+            h.box((0.007, 0.006, 0.018), tuple(g0), 'cyan' if k == 0 else 'hull', bevel=0)
+        # cheek guard sweeping back from the faceplate edge
+        c0, c1 = on_mask(s * 0.07, 1.52, 0.006), on_mask(s * 0.094, 1.56, 0.006)
+        h.hexa(([c0, c0 + Vector((s * 0.03, 0.06, -0.012)), c0 + Vector((s * 0.03, 0.07, -0.008)), c0 + Vector((0, 0.012, 0.004))],
+                [c1, c1 + Vector((s * 0.022, 0.07, 0.004)), c1 + Vector((s * 0.022, 0.08, 0.008)), c1 + Vector((0, 0.012, 0.008))]), 'candy', bevel=0.002)
+        # ear sensor pods with a glowing ring and a swept antenna
+        ep = Vector((s * 0.112, -0.03, 1.578))
+        h.cyl(0.034, 0.038, 0.03, tuple(ep), 'hullDark', axis='x', seg=24)
+        h.torus(0.028, 0.004, tuple(ep + Vector((s * 0.016, 0, 0))), 'cyan', axis='x', seg=24, rseg=4)
+        h.cyl(0.019, 0.019, 0.012, tuple(ep + Vector((s * 0.02, 0, 0))), 'pearl', axis='x', seg=16)
+        h.hexa(([ep + Vector((s * 0.012, 0.0, 0.02)), ep + Vector((s * 0.02, 0.0, 0.02)), ep + Vector((s * 0.02, 0.02, 0.02)), ep + Vector((s * 0.012, 0.02, 0.02))],
+                [ep + Vector((s * 0.02, 0.08, 0.065)), ep + Vector((s * 0.024, 0.08, 0.065)), ep + Vector((s * 0.024, 0.09, 0.065)), ep + Vector((s * 0.02, 0.09, 0.065))]), 'candy', bevel=0)
+        # V-fin: tapered blade from the brow, swept up and out, with a glowing edge
+        r0 = on_mask(s * 0.01, 1.64, 0.02)
+        tip = r0 + Vector((s * 0.15, 0.055, 0.115))
+        h.hexa(([r0 + Vector((0, 0, -0.012)), r0 + Vector((0, 0.03, -0.012)), r0 + Vector((s * 0.003, 0.03, 0.014)), r0 + Vector((s * 0.003, 0, 0.014))],
+                [tip + Vector((0, 0, -0.003)), tip + Vector((0, 0.008, -0.003)), tip + Vector((s * 0.002, 0.008, 0.003)), tip + Vector((s * 0.002, 0, 0.003))]), 'candy', bevel=0.002)
+        h.hexa(([r0 + Vector((s * 0.004, -0.002, 0.004)), r0 + Vector((s * 0.004, 0.012, 0.004)), r0 + Vector((s * 0.006, 0.012, 0.012)), r0 + Vector((s * 0.006, -0.002, 0.012))],
+                [tip + Vector((-s * 0.01, -0.002, -0.006)), tip + Vector((-s * 0.01, 0.004, -0.006)), tip + Vector((-s * 0.008, 0.004, -0.003)), tip + Vector((-s * 0.008, -0.002, -0.003))]), 'cyan', bevel=0)
+    # forehead sensor gem in a pearl crest housing, and a dorsal ridge
+    fc = on_mask(0, 1.64, 0.022)
+    h.hexa(([fc + Vector((-0.02, 0, -0.02)), fc + Vector((0.02, 0, -0.02)), fc + Vector((0.02, 0.03, -0.02)), fc + Vector((-0.02, 0.03, -0.02))],
+            [fc + Vector((-0.012, -0.004, 0.022)), fc + Vector((0.012, -0.004, 0.022)), fc + Vector((0.012, 0.03, 0.026)), fc + Vector((-0.012, 0.03, 0.026))]), 'pearl', bevel=0.003)
+    h.sphere(0.009, tuple(fc + Vector((0, -0.006, 0.002))), 'cyan', scale=(1, 0.6, 1.3), seg=12, rings=8)
+    top = max(p.z for p in hv)
+    h.hexa(([(-0.012, -0.08, top - 0.03), (0.012, -0.08, top - 0.03), (0.012, 0.09, top - 0.03), (-0.012, 0.09, top - 0.03)],
+            [(-0.006, -0.06, top + 0.012), (0.006, -0.06, top + 0.012), (0.006, 0.07, top + 0.006), (-0.006, 0.07, top + 0.006)]), 'candy', bevel=0.003)
+    h.torus(0.098, 0.016, (0, -0.025, 1.47), 'pearl', seg=36, rseg=6)  # helmet seal over the neck ring
+
+    # ---- build the hierarchy with origins on the joints
+    pelvis = G['pelvis'].build((0, 0, Z_PELVIS), root)
+    torso = G['torso'].build((0, 0, Z_WAIST), pelvis)
+    G['head'].build((0, -0.02, Z_NECK), torso)
+    for s, side in ((-1, 'L'), (1, 'R')):
+        m = lambda v: Vector((s * v.x, v.y, v.z))
+        thigh = G[f'thigh_{side}'].build(tuple(m(J_HIP)), pelvis)
+        shin = G[f'shin_{side}'].build(tuple(m(J_KN)), thigh)
+        foot = G[f'foot_{side}'].build(tuple(m(J_AN)), shin)
+        anchor(f'anchor_exhaust_{2 + (s > 0)}', foot, (0, -0.06, -0.105), (math.radians(-90), 0, 0))
+        AD = arm_dir(s)
+        SH = m(J_SH)
+        arm = G[f'arm_{side}'].build(tuple(SH), torso)
+        forearm = G[f'forearm_{side}'].build(tuple(SH + AD * ARM_T_ELBOW), arm)
+        EL = SH + AD * ARM_T_ELBOW
+        jet = Vector((0, 1, 0)).rotation_difference(AD).to_euler()
+        palm = SH + AD * (ARM_T_WRIST + 0.13) - EL
+        anchor(f'anchor_exhaust_{4 + (s > 0)}', forearm, tuple(palm), tuple(jet))
+        if s > 0:
+            anchor('anchor_muzzle', forearm, tuple(palm))
+
+        # MMU thruster pods on swing arms off the pack: built pointing back (+Y), tilted up 35°
+        b = Group(f'booster_{side}', uvscale=2)
+        b.cyl(0.025, 0.025, 0.07, (0, 0, 0), 'hullDark', axis='x', seg=10)
+        b.box((0.035, 0.1, 0.035), (s * 0.035, 0.03, 0), 'hull', bevel=0.008)
+        b.add(bm_cyl(0.048, 0.052, 0.26, 20, 'y'), 'pearl', (s * 0.07, 0.17, 0), bevel=0.01, seg=3)
+        b.torus(0.052, 0.007, (s * 0.07, 0.13, 0), 'hullDark', axis='y', seg=20, rseg=4)
+        b.cyl(0.056, 0.065, 0.06, (s * 0.07, 0.32, 0), 'hullDark', seg=20)
+        b.cyl(0.05, 0.05, 0.006, (s * 0.07, 0.352, 0), 'engine', seg=20, bevel=0)
+        for dz in (-1, 1):
+            b.box((0.026, 0.026, 0.022), (s * 0.07, 0.23, dz * 0.06), 'hullDark', bevel=0.004)
+        b.box((0.004, 0.15, 0.01), (s * 0.122, 0.17, 0.0), 'cyan', bevel=0)
+        b.add(slab((s * 0.1, 0.08, 0.02), (s * 0.1, 0.28, 0.02), (s * 0.42, 0.31, 0.1), (s * 0.42, 0.4, 0.1), 0.01, 0.005), 'hullLight', bevel=0.002)
+        for k in range(4):
+            u = (k + 1) / 5
+            b.box((0.005, 0.17 - u * 0.08, 0.016), (s * (0.1 + 0.32 * u), 0.18 + 0.17 * u, 0.022 + 0.08 * u), 'hullDark', bevel=0)
+        b.add(slab((s * 0.11, 0.12, -0.025), (s * 0.11, 0.29, -0.025), (s * 0.3, 0.33, -0.085), (s * 0.3, 0.38, -0.085), 0.008, 0.005), 'candy', bevel=0.002)
+        bo = b.build((0, 0, 0))
+        child(bo, torso, (s * 0.19, 0.24, 0.31), (math.radians(35), 0, 0))
+        anchor(f'anchor_exhaust_{0 if s < 0 else 1}', bo, (s * 0.07, 0.36, 0))
+    bm.free()
+    return root
+
+
 # ================================================================ STATION CORE  (Eden)
 def build_station():
     rng = random.Random(21)
@@ -753,7 +1153,7 @@ def preview(name):
     sc.render.resolution_x, sc.render.resolution_y = 900, 600
     sc.render.film_transparent = False
     for i, d in enumerate([Vector((1.0, -1.3, 0.7)), Vector((-1.1, 1.0, 0.55))]):
-        cam.location = centre + d.normalized() * radius * 2.4
+        cam.location = centre + d.normalized() * radius * 3.2
         cam.rotation_euler = (centre - cam.location).to_track_quat('-Z', 'Y').to_euler()
         bpy.context.view_layer.update()
         sc.render.filepath = os.path.join(PREVIEW, f'{name}_{i}.png')
@@ -761,7 +1161,7 @@ def preview(name):
     bpy.data.objects.remove(cam)
 
 
-BUILDERS = {'skiff': build_skiff, 'hauler': build_hauler, 'seed': build_seed, 'drone': build_drone, 'mech': build_mech,
+BUILDERS = {'skiff': build_skiff, 'hauler': build_hauler, 'seed': build_seed, 'drone': build_drone, 'mech': build_mech, 'frame': build_frame,
             'station': build_station, 'junk': build_junk}
 only = [a for a in argv[2:]] or list(BUILDERS)
 for name in only:

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { makeSky } from './sky.js';
 import { glowSprite, NOISE } from './shaders.js';
 import { weather, WEATHER_CREDIT } from './weather.js';
-import { makeSkiff, setThrust } from './models.js';
+import { makeCraft, poseFrame, setThrust } from './models.js';
 import { bodyQuat, planetTexture } from './planets.js';
 import { BODY, helioAU } from '../sim/orbits.js';
 import { simNow, emit } from '../sim/state.js';
@@ -274,12 +274,10 @@ export class EarthView {
     this.hemi = new THREE.HemisphereLight(0x8fb6ff, 0x2a2a28, 0.5);
     this.scene.add(this.sun, this.hemi);
 
-    this.skiff = makeSkiff();
-    this.scene.add(this.skiff);
     this.plasma = glowSprite(0xff7a30, 16, 2);
     this.plasma.material.opacity = 0;
-    this.skiff.add(this.plasma);
     this.plasma.position.set(0, -0.3, 2.6);
+    this.setCraft(app.state.craft);
 
     this.cloudDeck = new THREE.Mesh(new THREE.PlaneGeometry(330000, 330000, 120, 120).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({
       uniforms: {
@@ -300,6 +298,13 @@ export class EarthView {
     this.future = new FutureEarth(this);
     this.info = { alt: 0, agl: 0, speed: 0, lat: 0, lon: 0, mach: 0, target: null, markers: [], autopilot: false, local: '', sun: { x: 0, y: 0, vis: 0 } };
     this.time = 0;
+  }
+
+  setCraft(type) {
+    if (this.craft) this.scene.remove(this.craft);
+    this.craft = makeCraft(type);
+    this.craft.add(this.plasma);
+    this.scene.add(this.craft);
   }
 
   // Enter the atmosphere above a real point (from the station's ground track), 100 km up.
@@ -525,9 +530,15 @@ export class EarthView {
     }
 
     // skiff + plasma sheath on fast descent through thick air
-    this.skiff.position.copy(this.pos);
-    this.skiff.quaternion.setFromEuler(new THREE.Euler(-this.pitch, Math.PI - this.yaw, -I.move.x * 0.5, 'YXZ'));
-    setThrust(this.skiff, 0.15 + (I.lift > 0 || I.boost ? 0.7 : 0.1), this.time);
+    this.craft.position.copy(this.pos);
+    const suit = !!this.craft.userData.parts; // the suit banks its own body; the skiff rolls the hull
+    this.craft.quaternion.setFromEuler(new THREE.Euler(-this.pitch, Math.PI - this.yaw, suit ? 0 : -I.move.x * 0.5, 'YXZ'));
+    if (suit) {
+      // atmospheric flight is always fast: cruise lean, banking on the turn rate
+      poseFrame(this.craft, { vel: new THREE.Vector3(0, 0, 60), acc: new THREE.Vector3(), turn: (this.yaw - (this.prevYaw ?? this.yaw)) / Math.max(dt, 1e-3),
+        input: { x: I.move.x, y: 1 }, lift: 0, boost: I.boost, aim: false }, dt, this.time);
+      this.prevYaw = this.yaw;
+    } else setThrust(this.craft, 0.15 + (I.lift > 0 || I.boost ? 0.7 : 0.1), this.time);
     const heat = THREE.MathUtils.smoothstep(this.speed, 2500, 7000) * (1 - THREE.MathUtils.smoothstep(this.pos.y, 70000, 95000)) * THREE.MathUtils.smoothstep(this.pos.y, 15000, 35000);
     this.plasma.material.opacity = heat * (0.75 + Math.random() * 0.25);
     this.plasma.scale.setScalar(10 + heat * 16);
@@ -535,11 +546,12 @@ export class EarthView {
     // chase camera
     const camYaw = this.yaw + this.lookYaw;
     const back = new THREE.Vector3(-Math.sin(camYaw), 0, Math.cos(camYaw));
-    const desired = this.pos.clone().addScaledVector(back, 16 * Math.cos(this.lookPitch)).add(new THREE.Vector3(0, 4 + 16 * Math.sin(this.lookPitch), 0));
+    const k = this.craft.userData.parts ? 0.4 : 1; // the exosuit is person-sized: sit closer
+    const desired = this.pos.clone().addScaledVector(back, 16 * k * Math.cos(this.lookPitch)).add(new THREE.Vector3(0, (4 + 16 * Math.sin(this.lookPitch)) * k, 0));
     this.camera.position.lerp(desired, 1 - Math.exp(-6 * dt));
-    this.camera.lookAt(this.pos.clone().addScaledVector(fwd, 8));
+    this.camera.lookAt(this.pos.clone().addScaledVector(fwd, 8 * k));
     const horizon = Math.sqrt(2 * R * Math.max(50, this.pos.y)) * 1.25 + 20000;
-    this.camera.near = this.pos.y > 20000 ? 4 : 1;
+    this.camera.near = (this.pos.y > 20000 ? 4 : 1) * k;
     this.camera.far = horizon;
     this.camera.updateProjectionMatrix();
 

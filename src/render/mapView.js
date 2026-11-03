@@ -7,7 +7,7 @@ import { AU_KM } from '../data/bodies.js';
 import { atmosphereMaterial, glowSprite, NOISE } from './shaders.js';
 import { planetMaterial, ringMesh, bodyQuat } from './planets.js';
 import { makeSky } from './sky.js';
-import { makeHauler, makeSeedShip, makeSkiff } from './models.js';
+import { makeHauler, makeSeedShip, makeCraft } from './models.js';
 import { CyberGlobe, loadThreats, cyber } from './cyberView.js';
 
 const col = (h, k = 1) => new THREE.Color(h).multiplyScalar(k);
@@ -776,18 +776,21 @@ export class MapView {
     }
   }
 
+  clearFleet() {
+    if (!this.fleet) return;
+    this.fleet.holder.traverse((o) => { if (o.isCSS2DObject) o.element.remove(); });
+    this.scene.remove(this.fleet.g);
+    this.fleet = null;
+  }
+
   updateFleet(t) {
     const v = this.app.state.voyage;
-    if (!v) {
-      if (this.fleet) {
-        this.fleet.holder.traverse((o) => { if (o.isCSS2DObject) o.element.remove(); });
-        this.scene.remove(this.fleet.g);
-        this.fleet = null;
-      }
-      return;
-    }
+    if (!v) return this.clearFleet();
+    if (this.fleet && this.fleet.craft !== this.app.state.craft) this.clearFleet();
     if (!this.fleet) {
-      this.fleet = this.makeMarker(makeSkiff(), 0x7fd4ff, 0.16);
+      const craft = makeCraft(this.app.state.craft);
+      this.fleet = this.makeMarker(craft, 0x7fd4ff, craft.userData.parts ? 0.45 : 0.16);
+      this.fleet.craft = this.app.state.craft;
       this.fleet.el.classList.add('fleet');
     }
     this.placeMarker(this.fleet, v.from, v.to, v.depart, v.arrive, t, `◆ FLEET → ${BODY[v.to].name} · ${fmtEta(v.arrive - t)}`);

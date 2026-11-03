@@ -3,12 +3,12 @@
 export const TUTORIAL = [
   {
     kicker: 'WELCOME', title: 'Your goal',
-    body: 'Start with one salvage skiff above Earth. Mine, build robot swarms, found outposts across the real solar system and push your drives all the way to <b>light speed</b>. Everything runs in <b>real time</b>, even while you are offline.',
+    body: 'Start in a salvage exosuit above Earth (swap to the skiff any time). Mine, build robot swarms, found outposts across the real solar system and push your drives all the way to <b>light speed</b>. Everything runs in <b>real time</b>, even while you are offline.',
     mobile: [['t:Bottom bar', 'PILOT · MAP · BASE · TECH · FLEET · MARKET'], ['t:Objective card', 'Tap it to see every objective and its reward']],
     desktop: [['k:Bottom bar', 'Click PILOT · MAP · BASE · TECH · FLEET · MARKET'], ['k:Objective card', 'Click it to see every objective and its reward']],
   },
   {
-    kicker: 'PILOT', title: 'Fly your skiff',
+    kicker: 'PILOT', title: 'Fly your exosuit',
     body: 'You start in orbit at Eden. Fly into the debris field around you. The <b>amber bracket</b> marks what you are aimed at.',
     mobile: [['t:Left stick', 'Fly forward, back and sideways'], ['t:Drag the screen', 'Steer and look around'], ['t:▲', 'Rise'], ['t:BOOST', 'Hold to go faster']],
     desktop: [['k:[W] [A] [S] [D]', 'Fly forward, back and sideways'], ['k:Mouse drag · [←] [→] [↑] [↓]', 'Steer and look around'], ['k:[R] / [F]', 'Rise / sink'], ['k:[Shift]', 'Boost']],

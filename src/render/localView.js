@@ -6,7 +6,7 @@ import { SKIFF_CAP, fleetCap, deposit, emit, simNow } from '../sim/state.js';
 import { atmosphereMaterial, glowSprite } from './shaders.js';
 import { planetMaterial, ringMesh, bodyQuat, bodyFrame } from './planets.js';
 import { makeSky } from './sky.js';
-import { makeSkiff, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, makeCanister, rockGeometry, FIELD_MATS, setThrust } from './models.js';
+import { makeCraft, poseFrame, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, makeCanister, rockGeometry, FIELD_MATS, setThrust } from './models.js';
 import { haptic } from '../telegram.js';
 
 const SUN_DIR = new THREE.Vector3(0.85, 0.5, 0.15).normalize();
@@ -17,6 +17,7 @@ const TETHER = 460;
 const ROCK_TINT = { mars: 0x6a3a28, moon: 0x55524e, mercury: 0x4e4a46, ceres: 0x3f3b37, jupiter: 0x5a4636, belt: 0x403a34, trojan: 0x3a2e2a, nea: 0x4a443c, deep: 0x46403a };
 const v3 = () => new THREE.Vector3();
 const tmp = v3(), tmp2 = v3();
+const Y_UP = new THREE.Vector3(0, 1, 0);
 
 // Where the body sits in the local frame: its centre lies along `nadir`, at a distance
 // that gives the station a believable altitude (Earth: ~1,000 km). R is the render radius.
@@ -54,9 +55,9 @@ export class LocalView {
     this.scene.add(this.sun, this.fill);
     this.sunDir = SUN_DIR.clone();
 
-    this.skiff = makeSkiff();
-    this.scene.add(this.skiff);
+    this.setCraft(app.state.craft);
     this.vel = v3();
+    this.prevVel = v3(); this.accel = v3(); // for the suit's motion-driven pose
     this.yaw = 0; this.pitch = 0; this.roll = 0;
     this.cargo = {};
     this.info = { cargo: 0, cap: SKIFF_CAP, target: null, speed: 0, dock: 0, markers: [], sun: { x: 0, y: 0, vis: 0 }, zone: '', voyage: false };
@@ -88,8 +89,21 @@ export class LocalView {
     this.fieldGroup = null;
   }
 
-  resetSkiff(z = 24) {
-    this.skiff.position.set(0, -1, z);
+  // Swap the piloted craft (frame mech or skiff) in place, keeping where it is and where it faces.
+  setCraft(type) {
+    const old = this.craft;
+    this.craft = makeCraft(type);
+    if (old) {
+      this.craft.position.copy(old.position);
+      this.craft.quaternion.copy(old.quaternion);
+      this.scene.remove(old);
+    }
+    this.isFrame = !!this.craft.userData.parts;
+    this.scene.add(this.craft);
+  }
+
+  resetCraft(z = 24) {
+    this.craft.position.set(0, -1, z);
     this.vel.set(0, 0, 0);
     this.yaw = 0; this.pitch = 0;
     this.camera.position.set(0, 3, z - 12);
@@ -135,7 +149,7 @@ export class LocalView {
     this.zone = { ...f, id, density: f.kind === 'none' ? 0 : 40 };
     this.buildField(this.zone, 40, 300);
     this.buildDrones();
-    this.resetSkiff(24);
+    this.resetCraft(24);
     this.updateInfoCaps();
   }
 
@@ -251,7 +265,7 @@ export class LocalView {
     this.zoneAcc = 99;
     this.contactAt = this.time + 25;
     this.skyAcc = 99;
-    this.resetSkiff(6);
+    this.resetCraft(6);
     this.updateInfoCaps();
   }
 
@@ -540,26 +554,39 @@ export class LocalView {
   update(dt, input) {
     this.time += dt;
     const I = input.sample(dt);
-    const s = this.skiff;
+    const s = this.craft;
 
+    const yaw0 = this.yaw, spd = this.vel.length();
     this.yaw -= I.lookX * 0.005;
+    // The suit flies like Iron Man: hovering, A/D strafes; at speed A/D banks into a turn and the
+    // heading swings round (the body roll comes from the pose springs, not the craft frame).
+    const cruise = this.isFrame ? THREE.MathUtils.smoothstep(spd, 5, 20) : 0;
+    if (this.isFrame) this.yaw -= I.move.x * 1.6 * cruise * dt;
     this.pitch = THREE.MathUtils.clamp(this.pitch + I.lookY * 0.004, -1.3, 1.3);
-    this.roll = THREE.MathUtils.lerp(this.roll, THREE.MathUtils.clamp(I.lookX * 0.03 - I.move.x * 0.35, -0.7, 0.7), 1 - Math.exp(-5 * dt));
+    const roll = this.isFrame ? 0 : THREE.MathUtils.clamp(I.lookX * 0.03 - I.move.x * 0.35, -0.7, 0.7);
+    this.roll = THREE.MathUtils.lerp(this.roll, roll, 1 - Math.exp(-5 * dt));
     s.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.roll, 'YXZ'));
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(s.quaternion);
     const up = new THREE.Vector3(0, 1, 0).applyQuaternion(s.quaternion);
     const right = new THREE.Vector3(-1, 0, 0).applyQuaternion(s.quaternion);
 
     const thrust = I.boost ? 70 : 30;
-    const acc = v3().addScaledVector(fwd, I.move.y).addScaledVector(right, I.move.x).addScaledVector(up, I.lift);
+    const acc = v3().addScaledVector(fwd, I.move.y).addScaledVector(right, I.move.x * (1 - cruise)).addScaledVector(up, I.lift);
     if (acc.lengthSq() > 1) acc.normalize();
+    if (this.isFrame) {
+      // carve: momentum follows most of the heading change instead of sliding sideways
+      this.vel.applyAxisAngle(Y_UP, (this.yaw - yaw0) * 0.8 * THREE.MathUtils.smoothstep(spd, 3, 12));
+      // hyper-velocity: boost kicks in with a lunge along the heading
+      if (I.boost && !this.boosting && I.move.y > 0) this.vel.addScaledVector(fwd, 22);
+    }
+    this.boosting = I.boost;
     this.vel.addScaledVector(acc, thrust * dt);
     this.vel.multiplyScalar(Math.exp(-(I.boost ? 0.6 : 1.1) * dt));
     s.position.addScaledVector(this.vel, dt);
 
     for (const r of this.rocks) {
       if (!r.alive) continue;
-      const d = tmp.copy(s.position).sub(r.mesh.position), min = r.radius + 1.4;
+      const d = tmp.copy(s.position).sub(r.mesh.position), min = r.radius + (this.isFrame ? 0.9 : 1.4);
       if (d.lengthSq() < min * min) {
         d.setLength(min);
         s.position.copy(r.mesh.position).add(d);
@@ -585,7 +612,17 @@ export class LocalView {
     }
 
     const thr = Math.max(0, I.move.y) + (I.boost ? 0.6 : 0);
-    setThrust(s, 0.08 + thr * 0.7, this.time);
+    if (this.isFrame) {
+      // the pose reads motion in the suit's own frame (x left, y up, z forward)
+      const inv = s.quaternion.clone().invert();
+      const a = this.accel.lerp(tmp.copy(this.vel).sub(this.prevVel).divideScalar(Math.max(dt, 1e-3)), 1 - Math.exp(-12 * dt));
+      this.prevVel.copy(this.vel);
+      poseFrame(s, {
+        vel: this.vel.clone().applyQuaternion(inv), acc: a.clone().applyQuaternion(inv),
+        turn: -(this.yaw - yaw0) / Math.max(dt, 1e-3), input: I.move, lift: I.lift, boost: I.boost, aim: I.mine && !!this.targetRock,
+      }, dt, this.time);
+    } else setThrust(s, 0.08 + thr * 0.7, this.time);
+    s.updateMatrixWorld(true);
 
     this.updateMining(dt, I.mine, fwd);
     if (this.mode === 'base') { this.updateDrones(dt); this.updateOrbit(dt); }
@@ -622,11 +659,18 @@ export class LocalView {
     const dockDist = this.mode === 'base' ? s.position.length() : Infinity;
     if (dockDist < DOCK_RANGE && this.cargoTotal() > 0) this.unload();
 
-    // chase camera
-    const desired = tmp.copy(s.position).addScaledVector(fwd, -13).addScaledVector(up, 3.6);
-    this.camera.position.lerp(desired, 1 - Math.exp(-7 * dt));
+    // chase camera: carry most of the craft's velocity so it holds station at cruise speed, and
+    // ease the rest (a little lag still sells acceleration)
+    const desired = tmp.copy(s.position).addScaledVector(fwd, this.isFrame ? -5.5 : -13).addScaledVector(up, this.isFrame ? 1.7 : 3.6);
+    this.camera.position.addScaledVector(this.vel, dt * 0.92).lerp(desired, 1 - Math.exp(-7 * dt));
     this.camera.up.lerp(up, 1 - Math.exp(-4 * dt)).normalize();
-    this.camera.lookAt(tmp.copy(s.position).addScaledVector(fwd, 6));
+    this.camera.lookAt(tmp.copy(s.position).addScaledVector(fwd, this.isFrame ? 3 : 6));
+    // speed reads through a wider lens: FOV opens with velocity and kicks on boost
+    const fov = 62 + (this.isFrame ? THREE.MathUtils.clamp((this.vel.length() - 15) / 90, 0, 1) * 12 + (I.boost ? 4 : 0) : 0);
+    if (Math.abs(this.camera.fov - fov) > 0.05) {
+      this.camera.fov += (fov - this.camera.fov) * (1 - Math.exp(-4 * dt));
+      this.camera.updateProjectionMatrix();
+    }
     this.sky.position.copy(this.camera.position);
     this.camera.updateMatrixWorld();
     this.updateDust(dt);
@@ -659,7 +703,7 @@ export class LocalView {
     }
     const markers = [];
     if (this.mode === 'base' && this.station) {
-      const m = this.project(new THREE.Vector3(0, 0, 0), { label: BODY[this.baseId].base, dist: this.skiff.position.length(), kind: 'home' });
+      const m = this.project(new THREE.Vector3(0, 0, 0), { label: BODY[this.baseId].base, dist: this.craft.position.length(), kind: 'home' });
       if (m.dist > 40) markers.push(m);
     }
     if (this.mode === 'voyage' && this.celest?.dest?.dir) {
@@ -667,7 +711,7 @@ export class LocalView {
         const m = this.project(tmp2.copy(c.dir).multiplyScalar(7000).add(this.camera.position), { label: BODY[c.id].name, km: c.km, kind });
         markers.push(m);
       }
-      const conv = this.project(new THREE.Vector3(0, 0, 0), { label: 'CONVOY', dist: this.skiff.position.length(), kind: 'home' });
+      const conv = this.project(new THREE.Vector3(0, 0, 0), { label: 'CONVOY', dist: this.craft.position.length(), kind: 'home' });
       if (conv.dist > 60) markers.push(conv);
     }
     this.info.markers = markers;
@@ -686,7 +730,7 @@ export class LocalView {
   }
 
   updateMining(dt, mining, fwd) {
-    const s = this.skiff;
+    const s = this.craft;
     let target = null, best = 46;
     for (const r of this.rocks) {
       if (!r.alive || r.grow !== undefined) continue;
@@ -699,7 +743,7 @@ export class LocalView {
     const active = mining && target;
     this.beam.visible = this.spark.visible = !!active;
     if (!active) return;
-    const nose = s.userData.nose.clone().applyMatrix4(s.matrixWorld);
+    const nose = s.userData.muzzle.getWorldPosition(v3());
     const hit = target.mesh.position.clone().addScaledVector(nose.clone().sub(target.mesh.position).normalize(), target.radius * 0.85);
     this.setBeam(this.beam, nose, hit);
     this.beam.material.opacity = 0.6 + Math.random() * 0.4;

@@ -220,6 +220,9 @@ b, strong { font-weight: 600; }
 .mode-earth .attrib { display: block; }
 .mode-earth .hint { bottom: calc(var(--bot) + 78px); }
 .land:disabled { background: rgba(255,255,255,0.1); color: var(--dim); box-shadow: none; }
+.craft-swap { position: absolute; left: 12px; bottom: calc(var(--bot) + 300px); padding: 8px 11px; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; color: var(--ice); background: rgba(10,14,22,0.55); border: 1px solid var(--line-2); clip-path: var(--cut); }
+.craft-swap small { display: block; font-size: 8.5px; color: var(--dim); letter-spacing: 0.16em; }
+.mode-surface .craft-swap { display: none; }
 
 /* ---------- touch controls ---------- */
 .controls .joy { position: absolute; left: 20px; bottom: calc(var(--bot) + 84px); width: 124px; height: 124px; border-radius: 50%; border: 1px solid var(--line-2); background: radial-gradient(circle, rgba(255,255,255,0.05), rgba(255,255,255,0.01) 70%); touch-action: none; }
@@ -421,7 +424,7 @@ b, strong { font-weight: 600; }
   .gauge { bottom: 96px; }
   .dockline { bottom: 108px; }
   .readout { bottom: 96px; }
-  .land, .fuel { bottom: 170px; }
+  .land, .fuel, .craft-swap { bottom: 170px; }
   .toasts { top: 120px; }
   .zone { top: 140px; }
 }

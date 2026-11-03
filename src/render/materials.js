@@ -169,6 +169,38 @@ function solarTex() {
   return t;
 }
 
+// 2x2 twill carbon-fibre weave: each tow shaded across its width so the clearcoat reads the pattern.
+function carbonTex() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d'), s = 16;
+  for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) {
+    const hor = (i + j) % 4 < 2;
+    const gr = hor ? g.createLinearGradient(0, j * s, 0, j * s + s) : g.createLinearGradient(i * s, 0, i * s + s, 0);
+    gr.addColorStop(0, '#121418'); gr.addColorStop(0.5, '#3b3f48'); gr.addColorStop(1, '#121418');
+    g.fillStyle = gr;
+    g.fillRect(i * s, j * s, s, s);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.repeat.set(28, 28);
+  ALL.push(t);
+  return t;
+}
+
+// Metallic-flake normals for automotive paint: tiny randomly tilted facets under a smooth clearcoat.
+function flakeNormal() {
+  const d = new Uint8Array(N * N * 4), r = rand(91);
+  for (let i = 0; i < N * N; i++) {
+    const x = (r() - 0.5) * 0.9, y = (r() - 0.5) * 0.9, z = Math.sqrt(Math.max(0, 1 - x * x - y * y));
+    d.set([(x * 0.5 + 0.5) * 255, (y * 0.5 + 0.5) * 255, (z * 0.5 + 0.5) * 255, 255], i * 4);
+  }
+  const t = tex(d, false);
+  t.repeat.set(60, 60);
+  return t;
+}
+
 function windowTex() {
   const c = document.createElement('canvas');
   c.width = 512; c.height = 64;
@@ -202,6 +234,7 @@ const paintN = normalFrom(paint.H, 2.6);
 const light = hullLayers(3, { chips: 'light', dirt: 0.6 });
 const lightTex = pack(light, 0.42, 0.7);
 const lightN = normalFrom(light.H, 2.6);
+const flake = flakeNormal();
 const foilH = fbm(rand(4), 32, 3);
 const foilN = normalFrom(foilH, 14);
 const rockH = fbm(rand(5), 8, 6);
@@ -225,6 +258,17 @@ export const PBR = {
   paintOlive: metalMat(0x5d6328, 1, paintTex, paintN, 0.5),
   paintTeal: metalMat(0x18706c, 1, paintTex, paintN, 0.5),
   paintWhite: metalMat(0xc9c9c2, 1, paintTex, paintN, 0.5),
+  // Vesper exosuit, finished like a supercar: pearlescent paint (metallic flake under a glass-smooth
+  // clearcoat, with a colour shift at grazing angles), candy-blue accents, gloss carbon-fibre tub,
+  // polished chrome rings, gold sun visor, lamps
+  pearl: new THREE.MeshPhysicalMaterial({ color: 0xe9edf2, metalness: 0.3, roughness: 0.32, normalMap: flake, normalScale: new THREE.Vector2(0.22, 0.22),
+    clearcoat: 1, clearcoatRoughness: 0.03, iridescence: 0.4, iridescenceIOR: 1.5, iridescenceThicknessRange: [180, 520], envMapIntensity: 2.2 }),
+  candy: new THREE.MeshPhysicalMaterial({ color: 0x0b2f6e, metalness: 0.75, roughness: 0.34, normalMap: flake, normalScale: new THREE.Vector2(0.3, 0.3),
+    clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 2.2 }),
+  carbon: new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: carbonTex(), metalness: 0.25, roughness: 0.42, clearcoat: 1, clearcoatRoughness: 0.04, envMapIntensity: 1.8 }),
+  chrome: std({ color: 0xdfe3e8, metalness: 1, roughness: 0.08, envMapIntensity: 2.6 }),
+  visor: new THREE.MeshPhysicalMaterial({ color: 0xd8a24a, metalness: 1, roughness: 0.06, clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 2 }),
+  lamp: emissive(0xfff2dc, 1.6),
   foil: std({ color: 0xd9a54a, metalness: 1, roughness: 0.32, normalMap: foilN, normalScale: new THREE.Vector2(1, 1) }),
   solar: std({ color: 0xffffff, map: solarTex(), metalness: 0.6, roughness: 0.28 }),
   glass: std({ color: 0x0a1016, metalness: 1, roughness: 0.04, emissive: 0xff9a40, emissiveIntensity: 0.12 }),

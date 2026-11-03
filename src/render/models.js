@@ -111,11 +111,142 @@ export function makeSkiff() {
   if (!g) return skiffProc();
   const a = anchors(g);
   addPlumes(g, a, 0.27, 2.2);
-  g.userData.nose = a.nose.position.clone();
+  g.userData.muzzle = a.nose;
   const l = new THREE.PointLight(0xffc890, 3, 12, 2);
   l.position.set(0, 0.2, 3.2);
   g.add(l);
   return g;
+}
+
+// ---------------- player craft: the Vesper flight frame or the Kestrel skiff ----------------
+export const CRAFTS = { frame: 'Vesper Exosuit', skiff: 'Kestrel Skiff' };
+export function makeCraft(type) {
+  return (type === 'skiff' ? null : makeFrame()) || makeSkiff();
+}
+
+// The Vesper exosuit: a pressure suit over a real human body (Blender Studio base mesh), split into
+// rigid segments at the joints like a hard suit (pelvis > thigh > shin > foot, torso > head / arm >
+// forearm) plus MMU thruster pods that swing off its life-support pack. Jets fire from the pods, the
+// boot soles and the palms. Its pivot sits at the hips so it banks like a ship.
+export function makeFrame() {
+  const m = instance('frame');
+  if (!m) return null;
+  const g = new THREE.Group(), body = new THREE.Group();
+  const hip = part(m, 'pelvis').position.y;
+  m.position.y = -hip;
+  body.add(m);
+  g.add(body);
+  const a = anchors(m), ex = [], jets = { pods: [], boots: [], palms: [] };
+  const spec = [['exhaust_0', 'pods', 0.05, 0.9], ['exhaust_1', 'pods', 0.05, 0.9], ['exhaust_2', 'boots', 0.045, 1.1], ['exhaust_3', 'boots', 0.045, 1.1],
+    ['exhaust_4', 'palms', 0.025, 0.5], ['exhaust_5', 'palms', 0.025, 0.5]];
+  for (const [k, grp, r, len] of spec) {
+    if (!a[k]) continue;
+    const p = plume(r, len);
+    a[k].add(p);
+    ex.push(p);
+    jets[grp].push(p);
+  }
+  g.userData.exhaust = ex;
+  g.userData.jets = jets;
+  g.userData.muzzle = a.muzzle;
+  g.userData.body = body;
+  g.userData.size = hip;
+  g.userData.parts = Object.fromEntries(['torso', 'head', 'arm_L', 'arm_R', 'forearm_L', 'forearm_R', 'thigh_L', 'thigh_R', 'shin_L', 'shin_R', 'foot_L', 'foot_R', 'booster_L', 'booster_R']
+    .map((n) => [n, part(m, n)]));
+  const l = new THREE.PointLight(0x9fd4ff, 0.5, 3, 2); // thruster glow on the legs, clear of the pack
+  l.position.set(0, -0.6, -1.2);
+  g.add(l);
+  return g;
+}
+
+// Damped spring (semi-implicit, sub-stepped): gives the pose weight, follow-through and a little
+// overshoot instead of the robotic ease of a plain lerp. f = natural frequency (Hz), z = damping ratio.
+function spring(st, key, target, dt, f, z) {
+  const s = st[key] || (st[key] = { x: target, v: 0 });
+  const w = 2 * Math.PI * f, n = Math.ceil(dt / 0.012), h = dt / n;
+  for (let i = 0; i < n; i++) {
+    s.v += (w * w * (target - s.x) - 2 * z * w * s.v) * h;
+    s.x += s.v * h;
+  }
+  return s.x;
+}
+function setJets(list, thr, time) {
+  for (const e of list) {
+    e.material.uniforms.uThr.value = thr;
+    e.material.uniforms.uTime.value = time;
+    e.scale.set(1, 0.35 + thr * 1.3, 1);
+  }
+}
+
+// Iron-Man-style flight, driven by the suit's actual motion (after Marvel Rivals' hover / cruise /
+// Hyper-Velocity split and physics-driven lean: angle = atan2(acceleration, g)).
+//  - Hover: upright on the boot jets, knees soft, arms a little out with palms down, gentle bob.
+//  - Cruise: the body leans into acceleration and holds a forward lean against drag; it banks into
+//    turns from the centripetal term (speed x turn rate); legs trail with inertia; head stays level.
+//  - Braking: the body flares back, legs swing forward and both palms push ahead like air brakes.
+//  - Strafing: the palm on the far side pushes out. Descending tucks the knees, climbing straightens.
+//  - Hyper-velocity (boost): a straight head-first line, arms pinned back, every jet at full burn.
+// c = { vel, acc } in the suit frame (x left, y up, z forward), turn (rad/s, + = right), input,
+// lift, boost and aim flags.
+export function poseFrame(g, c, dt, time) {
+  const p = g.userData.parts;
+  if (!p) return;
+  const st = g.userData.st || (g.userData.st = {});
+  const C = THREE.MathUtils.clamp, L = THREE.MathUtils.lerp, SS = THREE.MathUtils.smoothstep, G = 9.8;
+  const vf = c.vel.z, vu = c.vel.y, af = c.acc.z, ar = -c.acc.x;
+  const cruise = SS(vf, 4, 24);
+  const dash = spring(st, 'dash', c.boost && vf > 10 ? 1 : 0, dt, 1.3, 0.8);
+  const brake = C(-af / 18, 0, 1) * SS(vf, 2, 8);
+  const calm = C(1 - Math.max(cruise, dash), 0, 1);
+  const wc = cruise * (1 - dash), wh = 1 - Math.max(cruise, dash);
+
+  // whole body: lean into acceleration + cruise lean, bank into turns and sideways pushes
+  const pitchT = C(Math.atan2(af * 0.45, G) + cruise * 0.55, -0.6, 1.1);
+  const P = spring(st, 'p', L(pitchT, 1.45, dash), dt, 1.7, 0.5);
+  const B = spring(st, 'b', C(Math.atan2(Math.max(vf, 0) * c.turn * 0.5 + ar * 0.5, G), -1.0, 1.0), dt, 1.5, 0.5);
+  const Ps = spring(st, 'ps', P, dt, 0.7, 0.9), Bs = spring(st, 'bs', B, dt, 0.7, 0.9);
+  const body = g.userData.body;
+  body.rotation.x = P;
+  body.rotation.z = B;
+  body.position.y = Math.sin(time * 1.3) * 0.025 * calm;
+
+  const tuck = C(-vu / 8, 0, 1) * calm, reach = C(vu / 8, 0, 1);
+  const push = C(ar / 14 + c.turn * 0.25, -1, 1); // + = moving / turning toward the suit's right (-x)
+  const set = (o, ax, key, v, f = 2.4, z = 0.55) => { if (o) o.rotation[ax] = spring(st, key, v, dt, f, z); };
+  for (const [s, sg, ph] of [['L', -1, 0], ['R', 1, 1.9]]) {
+    const idle = Math.sin(time * 1.1 + ph) * 0.04 * calm;
+    // legs: soft knees in a hover, trailing in cruise, pointed in a dash; inertia lags body motion
+    const lagX = -(P - Ps) * 0.6, lagZ = (B - Bs) * 0.5;
+    set(p[`thigh_${s}`], 'x', `tx${s}`, (0.1 + idle) * wh + 0.05 * wc - 0.6 * tuck - 0.35 * brake - 0.1 * reach + lagX, 1.6, 0.45);
+    set(p[`thigh_${s}`], 'z', `tz${s}`, sg * (0.05 * wh + 0.01 * (1 - wh)) + lagZ, 1.6, 0.45);
+    set(p[`shin_${s}`], 'x', `sx${s}`, (0.25 + idle * 0.6) * wh + 0.1 * wc + 0.05 * dash + 0.9 * tuck + 0.3 * brake - 0.15 * reach * wh, 1.8, 0.5);
+    set(p[`foot_${s}`], 'x', `fx${s}`, 0.2 * wh + 0.55 * wc + 0.8 * dash, 1.8, 0.6);
+    // pods: against the push in a hover, swung to fire along the body at speed
+    set(p[`booster_${s}`], 'x', `bx${s}`, L(L(C(0.61 - c.lift * 0.8, -0.6, 1.2), 0.15, cruise), -1.3, dash), 2, 0.7);
+    set(p[`booster_${s}`], 'z', `bz${s}`, -push * sg * 0.3, 2, 0.7);
+    if (s === 'R' && c.aim) continue;
+    // arms: stabilisers. Out with palms down in a hover, back along the sides at speed, forward to
+    // brake; the far-side palm pushes out when strafing or carving
+    const out = Math.max(0, sg * push) * 0.55;
+    set(p[`arm_${s}`], 'x', `ax${s}`, (-0.1 + idle) * wh + 0.35 * wc + 0.2 * dash - 1.2 * brake + 0.3 * reach * wh);
+    set(p[`arm_${s}`], 'z', `az${s}`, sg * (0.12 * wh - 0.15 * wc - 0.32 * dash + 0.1 * brake + out));
+    set(p[`forearm_${s}`], 'x', `fax${s}`, -0.35 * wh - 0.15 * wc - 0.5 * brake - out * 0.4);
+  }
+  if (c.aim) {
+    // laser arm levels out along the line of fire, like a palm blast
+    set(p.arm_R, 'x', 'axR', -Math.PI / 2 - P + 0.1, 3, 0.7);
+    set(p.arm_R, 'z', 'azR', -0.3, 3, 0.7);
+    set(p.forearm_R, 'x', 'faxR', -0.05, 3, 0.7);
+  }
+  // head stays level and looks where the suit is going
+  set(p.head, 'x', 'hx', -P * 0.8, 3, 0.8);
+  set(p.head, 'z', 'hz', -B * 0.45, 3, 0.8);
+
+  // each jet group throttles for its job
+  const j = g.userData.jets;
+  setJets(j.boots, C(0.4 * wh + 0.35 * C(c.lift, 0, 1) + 0.6 * wc * Math.max(0, c.input.y) + dash, 0.15, 1.1), time);
+  setJets(j.palms, C(0.12 + Math.abs(push) * 0.7 + brake * 0.9 + dash * 0.6, 0, 1), time);
+  setJets(j.pods, C(0.08 + 0.7 * cruise * Math.max(0, c.input.y) + dash + 0.4 * C(c.lift, 0, 1) * wh, 0, 1.1), time);
 }
 
 function skiffProc() {
@@ -129,7 +260,9 @@ function skiffProc() {
     g.add(cylZ(0.22, 0.27, 1.1, 10, MAT.hullDark, s * 0.48, 0, -1.55));
   }
   addPlumes(g, { exhaust_0: { position: new THREE.Vector3(-0.48, 0, -2.1) }, exhaust_1: { position: new THREE.Vector3(0.48, 0, -2.1) } }, 0.2, 1.8);
-  g.userData.nose = new THREE.Vector3(0, -0.22, 2.2);
+  g.userData.muzzle = new THREE.Object3D();
+  g.userData.muzzle.position.set(0, -0.22, 2.2);
+  g.add(g.userData.muzzle);
   return g;
 }
 
