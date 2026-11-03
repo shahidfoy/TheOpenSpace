@@ -19,7 +19,7 @@ import { setAnisotropy } from './render/materials.js';
 import { LensShader, SanitizeShader } from './render/post.js';
 import { loadSky } from './render/sky.js';
 import { startWeather } from './render/weather.js';
-import { preloadPlanets } from './render/planets.js';
+import { preloadPlanets, setPlanetAnisotropy } from './render/planets.js';
 import { BODIES } from './data/bodies.js';
 import { createInput } from './ui/input.js';
 import { Hud, fmtDur } from './ui/hud.js';
@@ -63,6 +63,7 @@ async function boot() {
   await Promise.all([loadAssets(15000, (k) => progress(0.2 + k * 0.6)), loadSky(), preloadPlanets(BODIES.map((b) => b.id))]);
   progress(0.85, 'SPOOLING REACTORS');
   setAnisotropy(Math.min(8, renderer.capabilities.getMaxAnisotropy()));
+  setPlanetAnisotropy(Math.min(16, renderer.capabilities.getMaxAnisotropy()));
 
   const env = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
   renderer.shadowMap.enabled = true;

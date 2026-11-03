@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { J2000 } from '../data/bodies.js';
 import { eqToScene } from './sky.js';
 import { weather } from './weather.js';
+import { NOISE } from './shaders.js';
+import { SKY_GLSL, CLOUD_H } from './earthSky.js';
 
 // Real surface maps (public/planets: Solar System Scope CC BY 4.0, NASA/USGS public domain)
 // and real orientation: IAU WGCCRE 2015 pole directions (RA/Dec) and prime-meridian angles,
@@ -53,6 +55,7 @@ export function bodyQuat(id, t, out = new THREE.Quaternion()) {
 // ---------------------------------------------------------------- textures
 const loader = new THREE.TextureLoader();
 const CACHE = {};
+let ANISO = 4;
 function tex(name, data = false) {
   if (CACHE[name]) return CACHE[name];
   let done;
@@ -61,8 +64,16 @@ function tex(name, data = false) {
   t.userData.ready = ready;
   t.colorSpace = data ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   t.wrapS = THREE.RepeatWrapping;
-  t.anisotropy = 4;
+  t.anisotropy = ANISO;
   return (CACHE[name] = t);
+}
+// Sharper maps at grazing angles (the Earth close-up sees most of its surface obliquely).
+export function setPlanetAnisotropy(n) {
+  ANISO = n;
+  for (const t of [...Object.values(CACHE), weather.texture]) {
+    t.anisotropy = n;
+    if (t.image) t.needsUpdate = true;
+  }
 }
 // Shared surface map (e.g. the 2k Earth map as a fallback under streamed satellite tiles).
 export const planetTexture = (name) => tex(name);
@@ -78,9 +89,12 @@ export function preloadPlanets(ids) {
 }
 
 const VERT = /* glsl */ `
-varying vec2 vUv; varying vec3 vN; varying vec3 vW;
+uniform vec3 uSunDir;
+varying vec2 vUv; varying vec3 vN; varying vec3 vW; varying vec3 vObj; varying vec3 vLo;
 void main(){
   vUv = uv;
+  vObj = position;
+  vLo = vec3(dot(uSunDir, modelMatrix[0].xyz), dot(uSunDir, modelMatrix[1].xyz), dot(uSunDir, modelMatrix[2].xyz)); // Sun in object space
   vN = normalize(mat3(modelMatrix) * normal);
   vec4 w = modelMatrix * vec4(position, 1.0);
   vW = w.xyz;
@@ -90,7 +104,52 @@ const FRAG = /* glsl */ `
 uniform sampler2D uMap; uniform sampler2D uNight; uniform sampler2D uClouds; uniform sampler2D uSpec;
 uniform int uKind; uniform vec3 uSunDir; uniform vec3 uAtmo; uniform float uAtmoK; uniform float uLight; uniform float uLon0;
 uniform float uCloudK; uniform float uDark; // Earth only: cloud opacity, and a dark "hologram" globe (CYBER view)
-varying vec2 vUv; varying vec3 vN; varying vec3 vW;
+uniform float uReal; uniform float uQ; // Earth close-up (PILOT): clouds and air drawn by separate shells (earthSky.js); detail level
+varying vec2 vUv; varying vec3 vN; varying vec3 vW; varying vec3 vObj; varying vec3 vLo;
+${SKY_GLSL}
+${NOISE}
+vec2 sphUv(vec3 p){ return vec2(atan(p.z, -p.x) / (2.0 * PI), 1.0 - acos(clamp(p.y, -1.0, 1.0)) / PI); } // three.js SphereGeometry uv
+// Earth seen up close: reddened sunlight through the air, cloud shadows offset along the Sun,
+// ocean glint, sub-texel land detail and city lights on the night side only.
+vec3 earthReal(vec2 uv, vec3 col, vec3 N, vec3 L, vec3 V){
+  vec3 P = normalize(vObj), Lo = normalize(vLo);
+  float ndl = dot(N, L);
+  float ocean = texture2D(uSpec, uv).r;
+  float pxl = length(fwidth(vObj)) / length(vObj);
+  if (uQ > 0.5) {
+    float k = smoothstep(2e-3, 5e-4, pxl) * (1.0 - ocean);
+    float n = noise(P * 900.0) * 0.55 + noise(P * 2400.0) * 0.45;
+    if (uQ > 1.5) n = n * 0.7 + noise(P * 6500.0) * 0.3;
+    col *= 1.0 + (n - 0.5) * 0.45 * k;
+  }
+  // where the Sun's ray from this point crosses the cloud deck
+  float cs = dot(P, Lo);
+  vec3 S = normalize(P + (Lo - P * cs) * (${CLOUD_H.toFixed(4)} / max(cs, 0.15)));
+  vec2 d = sphUv(S) - sphUv(P);
+  d.x -= floor(d.x + 0.5);
+  float shade = texture2D(uClouds, uv + d, 1.5).r * uCloudK;
+  float cl = texture2D(uClouds, uv).r * uCloudK;
+  vec3 sun = sunTrans(ndl) * uLight * (1.0 - 0.8 * shade);
+  vec3 sky = vec3(0.07, 0.11, 0.2) * uLight * smoothstep(-0.12, 0.3, ndl) * (1.0 - 0.4 * shade); // skylight, fading through twilight
+  vec3 o = col * (sun * max(ndl, 0.0) + sky);
+  // ocean: GGX glint from the Sun (a sharp core in a wind-roughened sheen)
+  vec3 H = normalize(L + V + vec3(1e-4));
+  float nh = max(dot(N, H), 0.0), nv = max(dot(N, V), 0.05);
+  float F = 0.02 + 0.98 * pow(1.0 - max(dot(H, V), 0.0), 5.0);
+  float a1 = 0.012, a2 = 0.09;
+  float d1 = nh * nh * (a1 - 1.0) + 1.0, d2 = nh * nh * (a2 - 1.0) + 1.0;
+  float D = 0.35 * a1 / (PI * d1 * d1) + 0.65 * a2 / (PI * d2 * d2);
+  o += sun * ocean * D * F / (4.0 * nv) * max(ndl, 0.0);
+  // city lights: night side only, dimmed under cloud
+  vec3 lights = texture2D(uNight, uv).rgb;
+  if (uQ > 0.5) { // break the soft 2k glow into clusters of towns and street grids
+    float k = smoothstep(4e-3, 1e-3, pxl);
+    float s = noise(P * 800.0) * 0.55 + noise(P * 2200.0) * 0.45;
+    lights *= mix(1.0, 0.15 + 2.2 * smoothstep(0.42, 0.78, s), k);
+  }
+  o += pow(lights, vec3(1.7)) * smoothstep(0.03, -0.14, ndl) * (1.0 - cl * 0.75) * vec3(3.2, 2.4, 1.4);
+  return o;
+}
 void main(){
   vec2 uv = vec2(vUv.x + uLon0, vUv.y); // textures wrap (RepeatWrapping); fract() here caused a mipmap seam line
   vec3 N = normalize(vN), L = normalize(uSunDir), V = normalize(cameraPosition - vW);
@@ -103,6 +162,7 @@ void main(){
   if (uKind == 4) { float l = dot(col, vec3(0.333)); col = mix(vec3(0.4, 0.34, 0.29), col, smoothstep(0.02, 0.08, l)); } // Pluto's unimaged south
   if (uKind == 5) { col = mix(col, vec3(0.3, 0.31, 0.33), smoothstep(0.8, 0.94, abs(uv.y - 0.5) * 2.0)); } // Ceres' noisy poles
   vec3 o = col * diff * uLight;
+  if (uKind == 1 && uReal > 0.5) { gl_FragColor = vec4(earthReal(uv, col, N, L, V), 1.0); return; }
   if (uKind == 1) {
     float cl = texture2D(uClouds, uv).r * uCloudK;
     float ocean = texture2D(uSpec, uv).r;
@@ -136,6 +196,7 @@ export function planetMaterial(body, { hi = false, light = 1 } = {}) {
     uKind: { value: KIND[id] || 0 }, uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uAtmo: { value: new THREE.Color(body.atmo || 0x000000) }, uAtmoK: { value: body.atmo ? (id === 'earth' ? 0.9 : 0.5) : 0 },
     uLight: { value: 1.25 * light }, uLon0: { value: iau ? iau[4] : 0 }, uCloudK: { value: 1 }, uDark: { value: 0 },
+    uReal: { value: 0 }, uQ: { value: 2 },
   };
   if (hi) {
     const big = tex(id);

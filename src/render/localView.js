@@ -5,6 +5,7 @@ import { RES } from '../data/economy.js';
 import { SKIFF_CAP, fleetCap, deposit, emit, simNow } from '../sim/state.js';
 import { atmosphereMaterial, glowSprite } from './shaders.js';
 import { planetMaterial, ringMesh, bodyQuat, bodyFrame } from './planets.js';
+import { cloudShell, scatteringShell, EARTH_Q } from './earthSky.js';
 import { makeSky } from './sky.js';
 import { makeCraft, poseFrame, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, makeCanister, rockGeometry, FIELD_MATS, setThrust } from './models.js';
 import { haptic } from '../telegram.js';
@@ -228,8 +229,21 @@ export class LocalView {
     m.position.copy(pos);
     parent.add(m);
     const suns = [m.material.userData.sunDir];
-    if (body.atmo) {
-      const a = new THREE.Mesh(new THREE.SphereGeometry(R * (body.id === 'earth' ? 1.018 : 1.035), 64, 32), atmosphereMaterial(body.atmo));
+    if (body.id === 'earth') {
+      // close-up Earth: live clouds on their own shell, then the scattering atmosphere over both
+      // (child order = draw order: same centre, so the transparent sort falls back to creation order)
+      const u = m.material.uniforms;
+      u.uReal.value = 1;
+      const clouds = cloudShell(R, u.uNight.value), air = scatteringShell(R);
+      suns.push(clouds.userData.sunDir, air.userData.sunDir);
+      m.add(clouds, air);
+      m.onBeforeRender = () => {
+        const q = EARTH_Q[this.app.quality] || EARTH_Q.high;
+        u.uQ.value = clouds.material.uniforms.uQ.value = q.q;
+        air.material.uniforms.uSteps.value = q.steps;
+      };
+    } else if (body.atmo) {
+      const a = new THREE.Mesh(new THREE.SphereGeometry(R * 1.035, 64, 32), atmosphereMaterial(body.atmo));
       suns.push(a.material.uniforms.uSunDir.value);
       m.add(a);
     }
