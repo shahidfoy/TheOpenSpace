@@ -187,6 +187,40 @@ export function latLon(lat, lon, r, out = new THREE.Vector3()) {
   return out.set(Math.cos(la) * Math.cos(lo), Math.sin(la), -Math.cos(la) * Math.sin(lo)).multiplyScalar(r);
 }
 
+// A cable route as points on the surface: follow each leg, splitting long hops along the great
+// circle. ts = each point's fraction of the way along.
+function routePath(r) {
+  const pts = [], len = [];
+  const a = new THREE.Vector3(), b = new THREE.Vector3();
+  for (const leg of r.legs) for (let j = 1; j < leg.pts.length; j++) {
+    latLon(leg.pts[j - 1][0], leg.pts[j - 1][1], 1, a);
+    latLon(leg.pts[j][0], leg.pts[j][1], 1, b);
+    const ang = a.angleTo(b), steps = Math.max(1, Math.ceil(ang / 0.02));
+    for (let k = pts.length ? 1 : 0; k <= steps; k++) {
+      const t = k / steps;
+      const q = ang < 1e-6 ? a.clone() : a.clone().multiplyScalar(Math.sin((1 - t) * ang)).addScaledVector(b, Math.sin(t * ang)).divideScalar(Math.sin(ang)).normalize();
+      len.push(pts.length ? len[len.length - 1] + q.angleTo(pts[pts.length - 1]) : 0);
+      pts.push(q);
+    }
+  }
+  const total = len[len.length - 1] || 1;
+  for (const q of pts) q.multiplyScalar(GLOBE_R * 1.004);
+  return { pts, ts: new Float32Array(len.map((x) => x / total)), total };
+}
+// fallback when no cable route exists: a great-circle arc lifted off the surface
+function liftedArc(from, to) {
+  const va = latLon(from[0], from[1], 1), vb = latLon(to[0], to[1], 1), ang = va.angleTo(vb);
+  if (ang < 1e-3) return null;
+  const steps = Math.max(12, Math.ceil(ang / 0.02)), pts = [], ts = [];
+  for (let k = 0; k <= steps; k++) {
+    const t = k / steps;
+    const q = va.clone().multiplyScalar(Math.sin((1 - t) * ang)).addScaledVector(vb, Math.sin(t * ang)).divideScalar(Math.sin(ang));
+    pts.push(q.multiplyScalar(GLOBE_R * (1.005 + Math.sin(Math.PI * t) * ang * 0.09)));
+    ts.push(t);
+  }
+  return { pts, ts: new Float32Array(ts), total: ang };
+}
+
 // Route: a pulse travels along the cables from the reported origin (t = 0) to the victim (t = 1)
 // at a constant speed over the globe, with a fixed-length trail.
 const ARC_SPEED = 0.35; // radians of the globe per second
@@ -392,34 +426,46 @@ export class CyberGlobe {
     this.buildDdos(data.ddos || []);
   }
 
-  // Cloudflare Radar DDoS pairs: arcs lifted off the surface (they're not cable routes), thickness
-  // of the pulse by the pair's share of attacks.
+  // Cloudflare Radar DDoS pairs, routed over the submarine cables like the ransomware pulses (the
+  // shortest plausible path between the two countries, not a traced one), in orange-red; brightness
+  // by the pair's share of attacks. Pairs the cable graph can't connect keep a lifted arc.
   buildDdos(pairs) {
     if (!pairs.length) return;
     const maxS = Math.max(...pairs.map((p) => p.share), 1e-6);
-    const c0 = new THREE.Color(1.0, 0.45, 0.1), c1 = new THREE.Color(1.0, 0.12, 0.08);
-    pairs.forEach((p, i) => {
-      const a = placeOf(p.from), b = placeOf(p.to);
-      if (!a || !b) return;
-      const va = latLon(a[0], a[1], 1), vb = latLon(b[0], b[1], 1), ang = va.angleTo(vb);
-      if (ang < 1e-3) return;
-      const steps = Math.max(12, Math.ceil(ang / 0.02)), pts = [], ts = [];
-      for (let k = 0; k <= steps; k++) {
-        const t = k / steps;
-        const q = va.clone().multiplyScalar(Math.sin((1 - t) * ang)).addScaledVector(vb, Math.sin(t * ang)).divideScalar(Math.sin(ang));
-        pts.push(q.multiplyScalar(GLOBE_R * (1.005 + Math.sin(Math.PI * t) * ang * 0.09)));
-        ts.push(t);
-      }
-      const geo = new THREE.BufferGeometry().setFromPoints(pts);
-      geo.setAttribute('aT', new THREE.BufferAttribute(new Float32Array(ts), 1));
-      const line = new THREE.Line(geo, new THREE.ShaderMaterial({
-        uniforms: { uTime: { value: this.time }, uPhase: { value: (i * 0.37) % 1 }, uK: { value: 0.3 + 0.7 * (p.share / maxS) }, uLen: { value: ang }, uC0: { value: c0 }, uC1: { value: c1 } },
-        vertexShader: ARC_VERT, fragmentShader: ARC_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
-      }));
-      line.userData = { src: 'ddos', layer: 'routes' };
-      this.markers.add(line);
+    const c0 = new THREE.Color(1.0, 0.55, 0.1), c1 = new THREE.Color(1.0, 0.12, 0.08);
+    const markers = this.markers;
+    loadCables().then(() => {
+      if (this.markers !== markers) return; // rebuilt meanwhile
+      cyber.ddosRoutes = [];
+      pairs.forEach((p, i) => {
+        const a = placeOf(p.from), b = placeOf(p.to);
+        if (!a || !b) return;
+        const r = route(ORIGIN_HUBS[p.from] || a, b);
+        const path = r ? routePath(r) : liftedArc(a, b);
+        if (!path) return;
+        if (r) cyber.ddosRoutes.push({ ...p, km: r.km, cables: [...new Set(r.legs.map((l) => l.cable).filter(Boolean))] });
+        const k = 0.3 + 0.7 * (p.share / maxS);
+        this.addPulse(path, (i * 0.37) % 1, k, c0, c1, 0xff6a2a, 'ddos');
+      });
+      this.applyLayers();
     });
-    this.applyLayers();
+  }
+
+  // a pulse running along a path, with a glowing head
+  addPulse({ pts, ts, total }, phase, k, c0, c1, headColor, src) {
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    geo.setAttribute('aT', new THREE.BufferAttribute(ts, 1));
+    const line = new THREE.Line(geo, new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: this.time }, uPhase: { value: phase }, uK: { value: k }, uLen: { value: total }, uC0: { value: c0 }, uC1: { value: c1 } },
+      vertexShader: ARC_VERT, fragmentShader: ARC_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    line.userData = { layer: 'routes', src };
+    this.markers.add(line);
+    const head = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(headColor).multiplyScalar(1.8), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    head.scale.setScalar(0.18 + 0.16 * k);
+    head.userData = { layer: 'routes', src };
+    this.markers.add(head);
+    this.arcs.push({ pts, ts, head, phase, len: total });
   }
 
   // Live point clouds (rebuilt when reports arrive) and the pickable country hit list.
@@ -516,23 +562,7 @@ export class CyberGlobe {
         const r = route(ORIGIN_HUBS[p.cc] || COUNTRIES[p.cc], p.to);
         if (!r) return;
         cyber.routes.push({ from: p.cc, to: p.to[2], n: p.n, groups: [...p.groups], km: r.km, stations: r.stations, cables: [...new Set(r.legs.map((l) => l.cable).filter(Boolean))] });
-        // follow each leg on the surface, splitting long hops along the great circle
-        const pts = [], len = [];
-        const a = new THREE.Vector3(), b = new THREE.Vector3();
-        for (const leg of r.legs) for (let j = 1; j < leg.pts.length; j++) {
-          latLon(leg.pts[j - 1][0], leg.pts[j - 1][1], 1, a);
-          latLon(leg.pts[j][0], leg.pts[j][1], 1, b);
-          const ang = a.angleTo(b), steps = Math.max(1, Math.ceil(ang / 0.02));
-          for (let k = pts.length ? 1 : 0; k <= steps; k++) {
-            const t = k / steps;
-            const q = ang < 1e-6 ? a.clone() : a.clone().multiplyScalar(Math.sin((1 - t) * ang)).addScaledVector(b, Math.sin(t * ang)).divideScalar(Math.sin(ang)).normalize();
-            len.push(pts.length ? len[len.length - 1] + q.angleTo(pts[pts.length - 1]) : 0);
-            pts.push(q);
-          }
-        }
-        const total = len[len.length - 1] || 1;
-        for (const q of pts) q.multiplyScalar(GLOBE_R * 1.004);
-        const ts = new Float32Array(len.map((x) => x / total));
+        const { pts, ts, total } = routePath(r);
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         geo.setAttribute('aT', new THREE.BufferAttribute(ts, 1));
         const kk = 0.35 + 0.65 * (p.n / maxN);
