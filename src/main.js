@@ -138,6 +138,14 @@ async function boot() {
     resize();
   };
 
+  // Pilot either the Vesper flight frame (mech) or the Kestrel skiff; saved with the game.
+  app.setCraft = (type) => {
+    state.craft = type;
+    app.localView.setCraft(type);
+    app.earthView.setCraft(type);
+    app.save();
+  };
+
   app.canLand = () => !state.aboard && app.localView.mode === 'base' && !!SURFACES[state.presence];
   // Eden: drop into Earth's atmosphere below the station's real ground track
   app.canDescend = () => !state.aboard && app.localView.mode === 'base' && state.presence === 'earth';
@@ -194,7 +202,7 @@ async function boot() {
     jump(() => {
       state.aboard = true;
       app.localView.setVoyage();
-    }, `Uplinked to your skiff · en route to ${BODY[state.voyage.to].name}`);
+    }, `Uplinked to your ${state.craft === 'skiff' ? 'skiff' : 'exosuit'} · en route to ${BODY[state.voyage.to].name}`);
   };
   app.startVoyage = (to, escorts) => {
     if (app.localView.mode === 'base' && app.localView.cargoTotal()) app.localView.unload();

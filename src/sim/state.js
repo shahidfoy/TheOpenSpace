@@ -32,7 +32,7 @@ export function newGame() {
     techs: {}, ships: [], trips: [], nextId: 1,
     goalIdx: 0, stats: { mined: 0, hauled: 0, trips: 0, voyages: 0 },
     presence: 'earth', won: false, seenIntro: false,
-    voyage: null, aboard: false,
+    voyage: null, aboard: false, craft: 'frame',
   };
   Object.assign(s.bases.earth.store, { metal: 60, silicon: 30, ice: 10 });
   return s;

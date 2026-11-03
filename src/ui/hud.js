@@ -10,6 +10,7 @@ import { cyber, placeOf, CYBER_LAYERS } from '../render/cyberView.js';
 import { US_STATES } from '../data/usStates.js';
 import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
+import { CRAFTS } from '../render/models.js';
 
 // ---------- formatting ----------
 export function fmt(n) {
@@ -84,6 +85,7 @@ const TEMPLATE = `
   <div class="zone" id="zone"></div>
   <div class="fuel" id="fuel"><span id="grav"></span><div class="bar"><i id="fuel-b"></i></div></div>
   <button class="land" id="land" data-act="land"></button>
+  <button class="craft-swap" id="craft-swap" data-act="craft"></button>
   <div class="earthnav" id="earthnav"></div>
   <div class="attrib" id="attrib"></div>
 </div>
@@ -184,6 +186,14 @@ export class Hud {
       case 'earthTarget': this.app.earthView.setTarget(arg); this.close(); return;
       case 'autopilot': this.app.earthView.setAutopilot(!this.app.earthView.autopilot); return;
       case 'quality': this.app.setQuality(arg); break;
+      case 'craft': {
+        const k = arg || (s.craft === 'skiff' ? 'frame' : 'skiff');
+        this.app.setCraft(k);
+        this.syncCraft();
+        haptic('medium');
+        if (!arg) { this.toast(`Now piloting the ${CRAFTS[k]}`, 'good'); return; }
+        break;
+      }
       case 'scale': S.setTimeScale(s, +arg); this.toast(`Time warp ×${arg}`); break;
       case 'reset':
         if (confirm('Erase your save and start over?')) this.app.resetGame();
@@ -217,7 +227,13 @@ export class Hud {
     if (this.app.mapView) this.app.mapView.select(null);
     this.syncNav();
   }
+  // Quick-swap chip in the flight HUD names the other craft.
+  syncCraft() {
+    const other = this.app.state.craft === 'skiff' ? 'frame' : 'skiff';
+    this.$('craft-swap').innerHTML = `<small>SWAP CRAFT</small>${other === 'frame' ? '⬢ EXOSUIT' : '▲ SKIFF'}`;
+  }
   syncNav() {
+    this.syncCraft();
     const mode = this.app.mode === 'surface' ? 'local' : this.app.mode;
     this.root.querySelectorAll('#nav button').forEach((b) => {
       b.classList.toggle('active', b.dataset.mode ? b.dataset.mode === mode && !this.panel : b.dataset.open === this.panel);
@@ -693,11 +709,13 @@ export class Hud {
   }
 
   pSettings() {
-    const q = this.app.quality;
+    const q = this.app.quality, c = this.app.state.craft;
     const dev = this.app.dev ? `<h3>Dev time warp</h3><div class="costs">${[1, 60, 600, 3600].map((k) => `<button class="btn sm" data-act="scale" data-arg="${k}">×${k}</button>`).join('')}</div>` : '';
     return {
       title: 'Settings', kicker: 'System',
-      html: `<h3>Graphics</h3><div class="seg wide">${['ultra', 'high', 'low'].map((k) => `<button class="${q === k ? 'on' : ''}" data-act="quality" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
+      html: `<h3>Craft</h3><div class="seg wide">${Object.entries(CRAFTS).map(([k, n]) => `<button class="${c === k ? 'on' : ''}" data-act="craft" data-arg="${k}">${n.toUpperCase()}</button>`).join('')}</div>
+        <p class="note">Fly the Vesper Exosuit, a hard-shell EVA suit with a life-support pack, MMU thruster pods and a forearm cutting laser, or the classic Kestrel Skiff. Both share the same hold and drive. On the surface you always walk in the loader mech.</p>
+        <h3>Graphics</h3><div class="seg wide">${['ultra', 'high', 'low'].map((k) => `<button class="${q === k ? 'on' : ''}" data-act="quality" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
         <p class="note">ULTRA: 4x MSAA, high-DPI, lens effects, sharp shadows. HIGH: bloom and lens effects. LOW: no post-processing, for older phones. Resolution adapts automatically to hold a smooth frame rate${this.app.fps ? ` (now ${this.app.fps.toFixed(0)} fps)` : ''}.</p>${dev}
         <h3>How to play</h3><button class="btn big ghost" data-act="help">OPEN THE TUTORIAL</button>
         <h3>Save</h3><p class="note">Progress saves automatically, and to Telegram Cloud when played inside Telegram.</p>
