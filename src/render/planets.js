@@ -8,31 +8,75 @@ import { SKY_GLSL, CLOUD_H } from './earthSky.js';
 // Real surface maps (public/planets: Solar System Scope CC BY 4.0, NASA/USGS public domain)
 // and real orientation: IAU WGCCRE 2015 pole directions (RA/Dec) and prime-meridian angles,
 // so every world spins at its true rate and shows its true face for the current moment.
-//          α0 (deg)    δ0 (deg)   W0 (deg)  Ẇ (deg/day)       map lon-0 offset
+// The IAU formulas run on Barycentric Dynamical Time, so the clock is shifted from UTC to TT
+// (~69 s — 0.7° of spin for Jupiter). Earth instead uses the Earth Rotation Angle (UT1 ≈ UTC),
+// which pins Greenwich to within ~0.0001° of its true place.
+//          α0 (deg)   α̇ (/cy)     δ0 (deg)   δ̇ (/cy)     W0 (deg)  Ẇ (deg/day)    map lon-0 offset
 const IAU = {
-  sun: [286.13, 63.87, 84.176, 14.1844, 0],
-  mercury: [281.0103, 61.4155, 329.5988, 6.1385108, 0],
-  venus: [272.76, 67.16, 160.2, -1.4813688, 0],
-  earth: [0, 90, 190.147, 360.9856235, 0],
-  moon: [269.9949, 66.5392, 38.3213, 13.17635815, 0],
-  mars: [317.269, 54.432, 176.049, 350.891982443, 0],
-  ceres: [291.418, 66.764, 170.65, 952.1532, 0.5],
-  jupiter: [268.056595, 64.495303, 284.95, 870.536, 0],
-  europa: [268.08, 64.51, 36.022, 101.3747235, 0.5],
-  saturn: [40.589, 83.537, 38.9, 810.7939024, 0],
-  titan: [39.4827, 83.4279, 186.5855, 22.5769768, 0.5],
-  uranus: [257.311, -15.175, 203.81, -501.1600928, 0],
-  neptune: [299.36, 43.46, 249.978, 541.1397757, 0],
-  pluto: [132.993, -6.163, 302.695, 56.3625225, 0.5],
+  sun: [286.13, 0, 63.87, 0, 84.176, 14.1844, 0],
+  mercury: [281.0103, -0.0328, 61.4155, -0.0049, 329.5988, 6.1385108, 0],
+  venus: [272.76, 0, 67.16, 0, 160.2, -1.4813688, 0],
+  earth: [0, -0.641, 90, -0.557, 0, 0, 0], // spin from the Earth Rotation Angle (below)
+  moon: [269.9949, 0.0031, 66.5392, 0.013, 38.3213, 13.17635815, 0],
+  mars: [317.269202, -0.10927547, 54.432516, -0.05827105, 176.049863, 350.891982443297, 0],
+  ceres: [291.418, 0, 66.764, 0, 170.65, 952.1532, 0.5],
+  jupiter: [268.056595, -0.006499, 64.495303, 0.002413, 284.95, 870.536, 0],
+  europa: [268.08, -0.009, 64.51, 0.003, 36.022, 101.3747235, 0.5],
+  saturn: [40.589, -0.036, 83.537, -0.004, 38.9, 810.7939024, 0],
+  titan: [39.4827, 0, 83.4279, 0, 186.5855, 22.5769768, 0.5],
+  uranus: [257.311, 0, -15.175, 0, 203.81, -501.1600928, 0],
+  neptune: [299.36, 0, 43.46, 0, 249.978, 541.1397757, 0],
+  pluto: [132.993, 0, -6.163, 0, 302.695, 56.3625225, 0.5],
 };
+const D2R = Math.PI / 180;
+const sin = (x) => Math.sin(x * D2R), cos = (x) => Math.cos(x * D2R);
+// Periodic terms [Δα, Δδ, ΔW] (deg): the Moon's physical & optical librations of its pole and
+// spin, Europa's forced wobble, Neptune's precessing pole.
+const PERIODIC = {
+  moon(d, T) {
+    const E = [0, 125.045 - 0.0529921 * d, 250.089 - 0.1059842 * d, 260.008 + 13.0120009 * d, 176.625 + 13.3407154 * d,
+      357.529 + 0.9856003 * d, 311.589 + 26.4057084 * d, 134.963 + 13.064993 * d, 276.617 + 0.3287146 * d,
+      34.226 + 1.7484877 * d, 15.134 - 0.1589763 * d, 119.743 + 0.0036096 * d, 239.961 + 0.1643573 * d, 25.053 + 12.9590088 * d];
+    return [
+      -3.8787 * sin(E[1]) - 0.1204 * sin(E[2]) + 0.07 * sin(E[3]) - 0.0172 * sin(E[4]) + 0.0072 * sin(E[6]) - 0.0052 * sin(E[10]) + 0.0043 * sin(E[13]),
+      1.5419 * cos(E[1]) + 0.0239 * cos(E[2]) - 0.0278 * cos(E[3]) + 0.0068 * cos(E[4]) - 0.0029 * cos(E[6]) + 0.0009 * cos(E[7]) + 0.0008 * cos(E[10]) - 0.0009 * cos(E[13]),
+      3.561 * sin(E[1]) + 0.1208 * sin(E[2]) - 0.0642 * sin(E[3]) + 0.0158 * sin(E[4]) + 0.0252 * sin(E[5]) - 0.0066 * sin(E[6]) - 0.0047 * sin(E[7])
+        - 0.0046 * sin(E[8]) + 0.0028 * sin(E[9]) + 0.0052 * sin(E[10]) + 0.004 * sin(E[11]) + 0.0019 * sin(E[12]) - 0.0044 * sin(E[13]),
+    ];
+  },
+  europa(d, T) {
+    const J4 = 355.8 + 1191.3 * T, J5 = 119.9 + 262.1 * T, J6 = 229.8 + 64.3 * T, J7 = 352.25 + 2382.6 * T;
+    return [
+      1.086 * sin(J4) + 0.06 * sin(J5) + 0.015 * sin(J6) + 0.009 * sin(J7),
+      0.468 * cos(J4) + 0.026 * cos(J5) + 0.007 * cos(J6) + 0.002 * cos(J7),
+      -0.98 * sin(J4) - 0.054 * sin(J5) - 0.014 * sin(J6) - 0.008 * sin(J7),
+    ];
+  },
+  neptune(d, T) {
+    const N = 357.85 + 52.316 * T;
+    return [0.7 * sin(N), -0.51 * cos(N), -0.48 * sin(N)];
+  },
+};
+const TT_UTC_MS = 69184;
+// Pole RA/Dec and prime-meridian angle W (deg) at real-world time t (ms, UTC).
+function orientation(id, t) {
+  const [a0, ad, d0, dd, W0, Wd] = IAU[id];
+  const d = (t + TT_UTC_MS - J2000) / 864e5, T = d / 36525;
+  let a = a0 + ad * T, dec = d0 + dd * T, W = W0 + Wd * d;
+  const pt = PERIODIC[id];
+  if (pt) { const [da, ddec, dW] = pt(d, T); a += da; dec += ddec; W += dW; }
+  // Earth: Greenwich sits at RA ≈ ERA in the J2000 frame; W counts from the node at α + 90°
+  if (id === 'earth') W = 360 * (0.779057273264 + 1.00273781191135448 * ((t - J2000) / 864e5)) - 90 - a;
+  return [a, dec, W % 360];
+}
 // shading variant per world
 const KIND = { sun: 2, earth: 1, titan: 3, pluto: 4, ceres: 5 };
 
 const _m = new THREE.Matrix4(), P = new THREE.Vector3(), Q = new THREE.Vector3(), E = new THREE.Vector3(), X = new THREE.Vector3(), Z = new THREE.Vector3();
 
 // Inertial equatorial frame of a body in scene (ecliptic) coordinates: node Q, east E, pole P.
-export function bodyFrame(id) {
-  const [a0, d0] = IAU[id] || IAU.earth;
+export function bodyFrame(id, t = Date.now()) {
+  const [a0, d0] = orientation(IAU[id] ? id : 'earth', t);
   const p = eqToScene(a0, d0);
   const q = eqToScene(a0 + 90, 0);
   return { P: p, Q: q, E: new THREE.Vector3().crossVectors(p, q) };
@@ -40,13 +84,12 @@ export function bodyFrame(id) {
 
 // Orientation of a sphere (three.js SphereGeometry: +Y pole, texture centre at +X, east toward -Z).
 export function bodyQuat(id, t, out = new THREE.Quaternion()) {
-  const iau = IAU[id];
-  if (!iau) return out.identity();
-  const [a0, d0, W0, Wd] = iau;
+  if (!IAU[id]) return out.identity();
+  const [a0, d0, Wd] = orientation(id, t);
   eqToScene(a0, d0, P);
   eqToScene(a0 + 90, 0, Q);
   E.crossVectors(P, Q);
-  const W = ((W0 + Wd * ((t - J2000) / 864e5)) % 360) * Math.PI / 180;
+  const W = Wd * D2R;
   X.copy(Q).multiplyScalar(Math.cos(W)).addScaledVector(E, Math.sin(W)); // longitude 0
   Z.copy(Q).multiplyScalar(Math.sin(W)).addScaledVector(E, -Math.cos(W)); // = -(longitude 90°E)
   return out.setFromRotationMatrix(_m.makeBasis(X, P, Z));
@@ -195,7 +238,7 @@ export function planetMaterial(body, { hi = false, light = 1 } = {}) {
     uMap: { value: small }, uNight: { value: BLACK }, uClouds: { value: BLACK }, uSpec: { value: BLACK },
     uKind: { value: KIND[id] || 0 }, uSunDir: { value: new THREE.Vector3(1, 0, 0) },
     uAtmo: { value: new THREE.Color(body.atmo || 0x000000) }, uAtmoK: { value: body.atmo ? (id === 'earth' ? 0.9 : 0.5) : 0 },
-    uLight: { value: 1.25 * light }, uLon0: { value: iau ? iau[4] : 0 }, uCloudK: { value: 1 }, uDark: { value: 0 },
+    uLight: { value: 1.25 * light }, uLon0: { value: iau ? iau[6] : 0 }, uCloudK: { value: 1 }, uDark: { value: 0 },
     uReal: { value: 0 }, uQ: { value: 2 },
   };
   if (hi) {

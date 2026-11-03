@@ -1,6 +1,6 @@
 import { RES, RES_KEYS, BUILDINGS, TECHS, SHIPS, SKIFF, DRIVES, GOALS, MARKET } from '../data/economy.js';
 import { BODIES, C_KMS, AU_KM, FIELDS } from '../data/bodies.js';
-import { BODY, distKm } from '../sim/orbits.js';
+import { BODY, distKm, orbitTilt } from '../sim/orbits.js';
 import * as S from '../sim/state.js';
 import { backButton, haptic, notify } from '../telegram.js';
 import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
@@ -735,9 +735,9 @@ export class Hud {
     if (!base && id !== 'earth' && seedEarth) actions += `<button class="btn big alt" data-act="launchTo" data-arg="${id}" data-arg2="seed">SEND SEED SHIP UNMANNED · ${fmtDur(S.travelMs(s, seedEarth.at || 'earth', id, t, S.shipKms(s, 'seed')))}</button>`;
     if (base && id !== 'earth' && haul) actions += `<button class="btn big alt" data-act="launchTo" data-arg="${id}" data-arg2="hauler">SEND HAULER · ${fmtDur(S.travelMs(s, 'earth', id, t, S.shipKms(s, 'hauler')) * 2)} round trip</button>`;
     const res = Object.entries(b.drones).map(([r, v]) => `<span class="cost">${resIcon(r)}${fmt(v)}/min</span>`).join('') || '<span class="note">Unmineable · but the power is immense.</span>';
-    const f = FIELDS[id];
+    const f = FIELDS[id], tilt = orbitTilt(id, t);
     return {
-      title: b.name, kicker: `${kindName[b.kind]} · radius ${fmt(b.radiusKm)} km${b.i ? ` · orbit tilted ${b.i.toFixed(1)}°` : ''}`,
+      title: b.name, kicker: `${kindName[b.kind]} · radius ${fmt(b.radiusKm)} km${tilt >= 0.05 ? ` · orbit tilted ${tilt.toFixed(1)}°` : ''}`,
       html: `${base ? `<div class="sub ok">◉ ${b.base}</div>` : ''}<p>${b.desc}</p>
         ${id !== here ? `<div class="table"><div class="row"><span>Distance from ${BODY[here].name}</span><b>${fmtKm(km)}</b></div>
         <div class="row"><span>Light-time</span><b>${fmtDur((km / C_KMS) * 1000)}</b></div></div>` : ''}
