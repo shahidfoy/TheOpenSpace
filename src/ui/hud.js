@@ -12,6 +12,11 @@ import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
 import { CRAFTS } from '../render/models.js';
 
+// Only touch the DOM when the markup actually changed.
+function setHtml(el, html) {
+  if (el._html !== html) { el._html = html; el.innerHTML = html; }
+}
+
 // ---------- formatting ----------
 export function fmt(n) {
   n = +n || 0;
@@ -165,6 +170,7 @@ export class Hud {
       case 'buy': S.buy(s, arg, +arg2); break;
       case 'teleport': this.close(); this.app.teleport(arg); return;
       case 'rejoin': this.close(); this.app.rejoinFleet(); return;
+      case 'findFleet': this.close(); this.app.mapView.focus('fleet', this.app.mapView.mode() === 'true' ? 0.05 : 14); this.syncNav(); return;
       case 'launchTo': {
         const ship = S.dockedAt(s, s.presence).find((x) => x.type === arg2) || s.ships.find((x) => x.status === 'docked' && x.type === arg2);
         if (ship) { S.launch(s, ship.id, arg); notify('success'); }
@@ -362,10 +368,17 @@ export class Hud {
     const aboard = s.aboard;
     const lv = this.app.localView;
     el.classList.add('show');
-    el.innerHTML = `<div class="v-h"><span class="v-k">◆ AUTOPILOT</span><span class="v-r">${BODY[v.from].name} → <b>${BODY[v.to].name}</b></span><span class="v-eta">${fmtDur(v.arrive - t)}</span></div>
-      <div class="v-bar"><i style="width:${pct(k)}"></i></div>
+    // the skeleton (with its buttons) is only rebuilt when it changes; rebuilding a button
+    // between pointer-down and pointer-up swallows the click. Live numbers are patched in.
+    const map = this.app.mode === 'map';
+    setHtml(el, `<div class="v-h"><span class="v-k">◆ AUTOPILOT</span><span class="v-r">${BODY[v.from].name} → <b>${BODY[v.to].name}</b></span><span class="v-eta"></span></div>
+      <div class="v-bar"><i></i></div>
       <div class="v-f"><span>${fmt(v.kms)} km/s</span><span>${v.escorts.length ? `${v.escorts.length + 1} ships` : 'solo'}</span>
-      ${aboard ? `<span class="v-z">${lv.mode === 'voyage' ? lv.info.zone : ''}</span>` : '<button class="btn sm" data-act="rejoin">REJOIN FLEET</button>'}</div>`;
+      ${map ? '<button class="btn sm ghost" data-act="findFleet">◆ LOCATE</button>' : ''}${aboard ? '<span class="v-z"></span>' : '<button class="btn sm" data-act="rejoin">REJOIN FLEET</button>'}</div>`);
+    el.querySelector('.v-eta').textContent = fmtDur(v.arrive - t);
+    el.querySelector('.v-bar i').style.width = pct(k);
+    const z = el.querySelector('.v-z');
+    if (z) z.textContent = lv.mode === 'voyage' ? lv.info.zone : '';
   }
 
   updatePilot() {
@@ -425,8 +438,12 @@ export class Hud {
     const la = info.lat, lo = info.lon;
     this.$('zone').textContent = `${Math.abs(la).toFixed(3)}°${la >= 0 ? 'N' : 'S'} ${Math.abs(lo).toFixed(3)}°${lo >= 0 ? 'E' : 'W'} · ${info.local}`;
     const t = info.target;
-    this.$('earthnav').innerHTML = (t ? `<div class="en-t"><span>NAV</span><b>${t.name}</b><em>${fmt(t.km)} km · ETA ${fmtDur(t.eta * 1000)}</em></div>` : '<div class="en-t"><span>NAV</span><b>No destination</b></div>')
-      + `<div class="en-b"><button class="btn sm ghost" data-open="earthnav">DESTINATIONS</button>${t ? `<button class="btn sm ${info.autopilot ? '' : 'ghost'}" data-act="autopilot">${info.autopilot ? 'AUTOPILOT ON' : 'AUTOPILOT'}</button>` : ''}</div>`;
+    // text and buttons are separate boxes, each only rewritten when it changes (this runs every
+    // frame; rebuilding a button between pointer-down and pointer-up swallows the click)
+    const nav = this.$('earthnav');
+    if (!nav.firstChild) nav.innerHTML = '<div class="en-t"></div><div class="en-b"></div>';
+    setHtml(nav.firstChild, t ? `<span>NAV</span><b>${t.name}</b><em>${fmt(t.km)} km · ETA ${fmtDur(t.eta * 1000)}</em>` : '<span>NAV</span><b>No destination</b><em>pick one under DESTINATIONS</em>');
+    setHtml(nav.lastChild, `<button class="btn sm ${t ? 'ghost' : ''}" data-open="earthnav">DESTINATIONS</button>${t ? `<button class="btn sm ${info.autopilot ? '' : 'ghost'}" data-act="autopilot">${info.autopilot ? 'AUTOPILOT ON' : 'AUTOPILOT'}</button>` : ''}`);
     const land = this.$('land');
     land.style.display = '';
     land.dataset.act = info.canOrbit ? 'toOrbit' : '';
