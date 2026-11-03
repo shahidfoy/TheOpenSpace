@@ -4,7 +4,8 @@ import { AU_KM, FIELDS, ZONES, DEEP } from '../data/bodies.js';
 import { RES } from '../data/economy.js';
 import { SKIFF_CAP, fleetCap, deposit, emit, simNow } from '../sim/state.js';
 import { atmosphereMaterial, glowSprite } from './shaders.js';
-import { planetMaterial, ringMesh, bodyQuat, bodyFrame } from './planets.js';
+import { planetMaterial, planetTexture, ringMesh, bodyQuat, bodyFrame } from './planets.js';
+import { cloudShell, scatteringShell, EARTH_Q } from './earthSky.js';
 import { makeSky } from './sky.js';
 import { makeCraft, poseFrame, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, makeCanister, rockGeometry, FIELD_MATS, setThrust } from './models.js';
 import { haptic } from '../telegram.js';
@@ -228,8 +229,29 @@ export class LocalView {
     m.position.copy(pos);
     parent.add(m);
     const suns = [m.material.userData.sunDir];
-    if (body.atmo) {
-      const a = new THREE.Mesh(new THREE.SphereGeometry(R * (body.id === 'earth' ? 1.018 : 1.035), 64, 32), atmosphereMaterial(body.atmo));
+    if (body.id === 'earth') {
+      // close-up Earth: live clouds on their own shell, then the scattering atmosphere over both
+      // (child order = draw order: same centre, so the transparent sort falls back to creation order)
+      const u = m.material.uniforms;
+      u.uReal.value = 1;
+      const clouds = cloudShell(R, u.uNight.value), air = scatteringShell(R);
+      suns.push(clouds.userData.sunDir, air.userData.sunDir);
+      m.add(clouds, air);
+      // NASA Blue Marble surface: 4k on ULTRA, 2k otherwise (each fetched on first use); until it
+      // arrives, whatever planetMaterial is showing (the small map, then the 2k Solar System Scope one)
+      const bm = {};
+      let sd = u.uMap.value;
+      m.onBeforeRender = () => {
+        const name = this.app.quality === 'ultra' ? 'earth_4k' : 'earth_2k';
+        const t = bm[name] || (bm[name] = planetTexture(name));
+        if (!Object.values(bm).includes(u.uMap.value)) sd = u.uMap.value;
+        u.uMap.value = t.image ? t : sd;
+        const q = EARTH_Q[this.app.quality] || EARTH_Q.high;
+        u.uQ.value = clouds.material.uniforms.uQ.value = q.q;
+        air.material.uniforms.uSteps.value = q.steps;
+      };
+    } else if (body.atmo) {
+      const a = new THREE.Mesh(new THREE.SphereGeometry(R * 1.035, 64, 32), atmosphereMaterial(body.atmo));
       suns.push(a.material.uniforms.uSunDir.value);
       m.add(a);
     }
