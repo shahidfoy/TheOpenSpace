@@ -230,8 +230,15 @@ b, strong { font-weight: 600; }
 .mode-earth .attrib { display: block; }
 .mode-earth .hint { bottom: calc(var(--bot) + 78px); }
 .land:disabled { background: rgba(255,255,255,0.1); color: var(--dim); box-shadow: none; }
-.craft-swap { position: absolute; left: 12px; bottom: calc(var(--bot) + 300px); padding: 8px 11px; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; color: var(--ice); background: rgba(10,14,22,0.55); border: 1px solid var(--line-2); clip-path: var(--cut); }
-.craft-swap small { display: block; font-size: 8.5px; color: var(--dim); letter-spacing: 0.16em; }
+.craft-swap { position: absolute; left: 12px; bottom: calc(var(--bot) + 300px); min-width: 170px; padding: 9px 13px; text-align: left; font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; color: var(--dim); background: rgba(10,14,22,0.6); border: 1px solid var(--line-2); border-left: 2px solid rgba(127,212,255,0.4); clip-path: var(--cut); transition: background 0.2s, color 0.2s; }
+.craft-swap small { display: block; margin-bottom: 2px; font-size: 9px; color: var(--dim); letter-spacing: 0.16em; }
+.craft-swap kbd { display: inline-block; margin-left: 6px; padding: 0 5px; font-family: var(--mono); font-size: 10.5px; color: #0a0e14; background: rgba(10,14,22,0.25); border: 1px solid rgba(10,14,22,0.5); border-radius: 3px; }
+.craft-swap.ready { color: #0a0e14; font-weight: 700; background: linear-gradient(90deg, var(--amber), var(--amber-2)); border-color: var(--amber); animation: swapGlow 1.2s ease-in-out infinite; }
+.craft-swap.ready small { color: rgba(10,14,22,0.7); }
+@keyframes swapGlow { 50% { filter: brightness(1.25) drop-shadow(0 0 10px rgba(255,179,71,0.8)); } }
+.mk.ship i { border-color: var(--amber); background: rgba(255,179,71,0.35); }
+.mk.ship span { color: var(--amber); }
+.mk.edge.ship i { border-left-color: var(--amber); background: none; }
 .mode-surface .craft-swap { display: none; }
 
 /* ---------- touch controls ---------- */

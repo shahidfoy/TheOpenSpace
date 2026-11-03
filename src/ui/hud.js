@@ -150,6 +150,12 @@ export class Hud {
       else this.act(t.dataset.act, t.dataset.arg, t.dataset.arg2);
     });
 
+    // B: board your ship / step out on EVA
+    addEventListener('keydown', (e) => {
+      if (e.code !== 'KeyB' || e.repeat || this.panel || e.target.closest?.('input,textarea')) return;
+      this.act('craft');
+    });
+
     S.onEvent((type, d) => {
       if (type === 'toast') this.toast(d.text, d.kind);
       else if (type === 'changed') this.dirty = true;
@@ -201,12 +207,20 @@ export class Hud {
       case 'autopilot': this.app.earthView.setAutopilot(!this.app.earthView.autopilot); return;
       case 'quality': this.app.setQuality(arg); break;
       case 'craft': {
-        if (!this.app.localView.canSwap()) return;
+        const lv = this.app.localView, st = lv.swapState();
+        if (!st || this.app.mode !== 'local') return;
+        if (!st.ok) {
+          this.toast(st.board ? `Fly to your ship to board · ${fmtDist(st.dist)} to go (follow the YOUR SHIP marker)` : `Come within docking range of the station to step out · ${fmtDist(st.dist)}`, '');
+          return;
+        }
         const k = s.craft === 'skiff' ? 'frame' : 'skiff';
         this.app.setCraft(k);
+        this.swapReady = true; // you step out right beside the ship: no "in reach" toast for that
         this.syncCraft();
         haptic('medium');
-        this.toast(k === 'skiff' ? `Aboard the ${CRAFTS.skiff} · cleared to depart` : `EVA in the ${CRAFTS.frame} · your ship is holding at the berth`, 'good');
+        const voyage = lv.mode === 'voyage';
+        this.toast(k === 'skiff' ? `Aboard the ${CRAFTS.skiff}${voyage ? ' · flying with the convoy' : ' · cleared to depart'}`
+          : `EVA in the ${CRAFTS.frame} · your ship is holding ${voyage ? 'formation' : 'at the berth'} · fly back and tap BOARD (B)`, 'good');
         return;
       }
       case 'scale': S.setTimeScale(s, +arg); this.toast(`Time warp ×${arg}`); break;
@@ -242,10 +256,22 @@ export class Hud {
     if (this.app.mapView) this.app.mapView.select(null);
     this.syncNav();
   }
-  // Berth chip in the flight HUD: board the parked ship from the suit, or step out of the ship on EVA.
+  // Always visible while flying: it says whether you can get in or out right now, and if not, how
+  // far you have to go. Bright and pulsing when the swap is available.
   syncCraft() {
-    const suit = this.app.state.craft !== 'skiff';
-    this.$('craft-swap').innerHTML = suit ? `<small>AT THE BERTH</small>▲ BOARD SHIP` : `<small>DOCKING RANGE</small>⬢ EVA · EXOSUIT`;
+    const el = this.$('craft-swap'), lv = this.app.localView, st = lv.swapState();
+    const show = this.app.mode === 'local' && !!st;
+    el.hidden = !show;
+    if (!show) { this.swapReady = false; return; }
+    const voyage = lv.mode === 'voyage', key = isTouch() ? '' : '<kbd>B</kbd>';
+    const html = st.board
+      ? (st.ok ? `<small>YOUR SHIP · IN REACH</small>▲ BOARD SHIP ${key}` : `<small>YOUR SHIP · ${fmtDist(st.dist)}</small>FLY TO SHIP TO BOARD`)
+      : (st.ok ? `<small>${voyage ? 'SHIP HOLDS FORMATION' : 'DOCKING RANGE'}</small>⬢ EXIT SHIP · EVA ${key}` : `<small>STATION · ${fmtDist(st.dist)}</small>EVA AT THE STATION`);
+    setHtml(el, html);
+    el.classList.toggle('ready', st.ok);
+    // say so once when the ship comes within reach
+    if (st.board && st.ok && !this.swapReady) this.toast(`Your ship is in reach · tap BOARD SHIP${key ? ' or press B' : ''}`, 'good');
+    this.swapReady = st.ok;
   }
   syncNav() {
     this.syncCraft();
@@ -385,7 +411,7 @@ export class Hud {
     const surf = this.app.mode === 'surface';
     const lv = this.app.localView;
     const info = (surf ? this.app.surfaceView : lv).info;
-    this.$('craft-swap').hidden = surf || this.app.mode !== 'local' || !lv.canSwap();
+    this.syncCraft();
     const tgt = info.target;
     const br = this.$('bracket');
     if (tgt && !surf && tgt.on) {
@@ -778,7 +804,7 @@ export class Hud {
     const dev = this.app.dev ? `<h3>Dev time warp</h3><div class="costs">${[1, 60, 600, 3600].map((k) => `<button class="btn sm" data-act="scale" data-arg="${k}">×${k}</button>`).join('')}</div>` : '';
     return {
       title: 'Settings', kicker: 'System',
-      html: `<h3>Craft</h3><p class="note">Now flying the <b>${CRAFTS[c] || CRAFTS.frame}</b>. Switch at a station: on EVA, fly the exosuit to your ship at the berth (follow the YOUR SHIP marker) and tap BOARD SHIP. In the ${CRAFTS.skiff}, come within docking range and tap EVA to step out. Both share the same hold and drive. On the surface you always walk in the loader mech.</p>
+      html: `<h3>Craft</h3><p class="note">Now flying the <b>${CRAFTS[c] || CRAFTS.frame}</b>. On EVA, fly the exosuit to your ship (follow the amber YOUR SHIP marker) and tap BOARD SHIP or press B when it lights up. In the ${CRAFTS.skiff}, tap EXIT SHIP (B) to step out: at a station within docking range, and anywhere during a fleet voyage, where the ship holds formation until you return. Both share the same hold and drive. On the surface you always walk in the loader mech.</p>
         <h3>Graphics</h3><div class="seg wide">${['ultra', 'high', 'low'].map((k) => `<button class="${q === k ? 'on' : ''}" data-act="quality" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
         <p class="note">ULTRA: 4x MSAA, high-DPI, lens effects, sharp shadows. HIGH: bloom and lens effects. LOW: no post-processing, for older phones. Resolution adapts automatically to hold a smooth frame rate${this.app.fps ? ` (now ${this.app.fps.toFixed(0)} fps)` : ''}.</p>${dev}
         <h3>How to play</h3><button class="btn big ghost" data-act="help">OPEN THE TUTORIAL</button>
