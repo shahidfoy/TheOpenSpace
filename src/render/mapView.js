@@ -503,15 +503,15 @@ export class MapView {
     this.scene.add(g);
   }
 
-  // fetch the threat feed (cached 5 min) and rebuild the globe markers when it changes
-  async refreshCyber(force) {
-    const before = cyber.at;
-    await loadThreats(force);
-    if (cyber.at !== before || !this.cyberBuilt) {
+  // poll the threat feed (only changed sources come back) and rebuild what changed
+  async refreshCyber() {
+    await loadThreats();
+    if (cyber.rev !== this.cyberRev) {
+      this.cyberRev = cyber.rev;
       this.cyber.build(cyber.data, cyber.byCountry);
       this.cyber.setLabelsVisible(this.view === 'cyber');
-      this.cyberBuilt = true;
     }
+    if (cyber.liveRev !== this.cyberLiveRev) { this.cyberLiveRev = cyber.liveRev; this.cyber.liveDirty = true; }
     this.app.hud?.syncNav();
   }
 
@@ -528,7 +528,7 @@ export class MapView {
     this.galaxy.visible = v === 'galaxy';
     for (const [, m] of this.trips) m.g.visible = v === 'system';
     this.driftAcc = 99;
-    if (v === 'cyber') { this.follow = null; this.target.set(0, 0, 0); this.dist = 34; this.elev = 0.35; this.cyberAim = true; this.refreshCyber(true); }
+    if (v === 'cyber') { this.follow = null; this.target.set(0, 0, 0); this.dist = 34; this.elev = 0.35; this.cyberAim = true; this.cyberAcc = 0; this.refreshCyber(); }
     else if (v === 'galaxy') { this.follow = null; this.target.set(0, 0, 6); this.dist = 115; this.elev = 0.32; this.az = 0.6; }
     else if (v === 'cosmos') { this.follow = null; this.target.set(0, 0, 0); this.dist = 420; this.elev = 0.45; }
     else if (v === 'drift') {
@@ -693,7 +693,7 @@ export class MapView {
         this.elev = THREE.MathUtils.clamp(Math.asin(s.y) + 0.25, -0.6, 0.9);
         this.cyberAim = false;
       }
-      if ((this.cyberAcc = (this.cyberAcc || 0) + dt) > 300) { this.cyberAcc = 0; this.refreshCyber(); }
+      if ((this.cyberAcc = (this.cyberAcc || 0) + dt) > cyber.poll) { this.cyberAcc = 0; this.refreshCyber(); }
     }
     this.updateTrips(t);
     this.updateFleet(t);

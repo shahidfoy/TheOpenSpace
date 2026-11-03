@@ -6,7 +6,7 @@ import { backButton, haptic, notify } from '../telegram.js';
 import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
 import { FUTURE_CITIES } from '../render/futureEarth.js';
 import { TUTORIAL, isTouch } from './tutorial.js';
-import { cyber, placeOf, CYBER_LAYERS } from '../render/cyberView.js';
+import { cyber, placeOf, CYBER_LAYERS, SOURCE_STYLE, describe, placeName } from '../render/cyberView.js';
 import { US_STATES } from '../data/usStates.js';
 import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
@@ -30,6 +30,8 @@ export function fmtDur(ms) {
   if (s < 86400) return `${(s / 3600) | 0}h ${((s % 3600) / 60) | 0}m`;
   return `${(s / 86400) | 0}d ${((s % 86400) / 3600) | 0}h`;
 }
+// feed text (pulse names, hostnames, group names) goes into innerHTML
+const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmtKm = (km) => (km < 1e6 ? `${fmt(km)} km` : `${(km / 1e6).toFixed(1)}M km`) + (km > AU_KM * 0.05 ? ` · ${(km / AU_KM).toFixed(2)} AU` : '');
 const fmtDist = (m) => (m < 1000 ? `${m.toFixed(0)} m` : `${(m / 1000).toFixed(1)} km`);
 const resIcon = (r) => (r === 'credits' ? '<b class="ic cr">₡</b>' : r === 'rp' ? '<b class="ic rp">◆</b>' : `<b class="ic" style="--c:${RES[r].color}">${RES[r].short}</b>`);
@@ -37,7 +39,7 @@ const kindName = { star: 'Star', planet: 'Planet', moon: 'Moon', dwarf: 'Dwarf p
 const TARGET_KIND = { junk: 'DERELICT HARDWARE', rocks: 'ASTEROID', ice: 'ICE BODY', canister: 'PAYLOAD CANISTER' };
 const ago = (t) => {
   const m = Math.max(0, (Date.now() - Date.parse(t)) / 60000);
-  return m < 60 ? `${Math.round(m)} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+  return m < 1 ? `${Math.round(m * 60)} s ago` : m < 60 ? `${Math.round(m)} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 };
 const pct = (k) => `${Math.max(0, Math.min(100, k * 100)).toFixed(1)}%`;
 
@@ -71,6 +73,7 @@ const TEMPLATE = `
     <div class="seg opt" id="scale-seg"><button data-act="mapScale" data-arg="visible">ILLUSTRATIVE</button><button data-act="mapScale" data-arg="true">TRUE SCALE</button></div>
     <div class="seg cy-seg opt" id="cy-preset"><button data-act="cyPreset" data-arg="all">ALL</button><button data-act="cyPreset" data-arg="clear">NO CLOUDS</button><button data-act="cyPreset" data-arg="cables">CABLES ONLY</button><button data-act="cyPreset" data-arg="threats">THREATS ONLY</button></div>
     <div class="seg cy-seg opt" id="cy-layers">${CYBER_LAYERS.map((k) => `<button data-act="cyLayer" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
+    <div class="seg cy-seg opt" id="cy-sources"></div>
     <div class="legend" id="legend"></div>
   </div>
 </div>
@@ -177,6 +180,11 @@ export class Hud {
       case 'cyberPlace': this.open(`cyber:${arg}`); return;
       case 'mapScale': this.app.mapView.setScale(arg); this.syncNav(); return;
       case 'cyPreset': this.app.mapView.cyber.setPreset(arg); this.syncNav(); return;
+      case 'cySource': {
+        const c = this.app.mapView.cyber, src = cyber.sources.find((x) => x.id === arg);
+        if (!src?.on) { this.open('cyber:sources'); return; }
+        c.setSource(arg, !c.sourceOn(arg)); this.syncNav(); return;
+      }
       case 'cyLayer': { const c = this.app.mapView.cyber; c.setLayer(arg, !c.layers[arg]); this.syncNav(); return; }
       case 'mapInfo': this.mapInfoOpen = !this.mapInfoOpen; this.$('mapbar').classList.toggle('open', this.mapInfoOpen); return;
       case 'mapLines': this.app.mapView.toggleLines(arg); this.syncNav(); return;
@@ -264,11 +272,15 @@ export class Hud {
     const sh = this.app.mapView?.show || {};
     this.root.querySelectorAll('#line-seg button').forEach((b) => b.classList.toggle('on', !!sh[b.dataset.arg]));
     const cy = this.app.mapView?.cyber;
-    this.$('cy-preset').style.display = this.$('cy-layers').style.display = v === 'cyber' ? '' : 'none';
+    this.$('cy-preset').style.display = this.$('cy-layers').style.display = this.$('cy-sources').style.display = v === 'cyber' ? '' : 'none';
     if (cy) {
       const p = cy.preset();
       this.root.querySelectorAll('#cy-preset button').forEach((b) => b.classList.toggle('on', b.dataset.arg === p));
       this.root.querySelectorAll('#cy-layers button').forEach((b) => b.classList.toggle('on', !!cy.layers[b.dataset.arg]));
+      // one toggle per source; sources waiting for an API key show dimmed and open the sources panel
+      const html = cyber.sources.map((x) => `<button data-act="cySource" data-arg="${x.id}" class="${x.on ? '' : 'nokey'}" style="--sc:${SOURCE_STYLE[x.id]?.css || '#fff'}" title="${x.name}: ${x.what}${x.on ? '' : ` (needs ${x.key})`}">${SOURCE_STYLE[x.id]?.short || x.id.toUpperCase()}</button>`).join('');
+      if (this.cySrcHtml !== html) this.$('cy-sources').innerHTML = this.cySrcHtml = html;
+      this.root.querySelectorAll('#cy-sources button:not(.nokey)').forEach((b) => b.classList.toggle('on', cy.sourceOn(b.dataset.arg)));
     }
     this.$('mapbar').classList.toggle('open', !!this.mapInfoOpen);
     this.$('legend').innerHTML = v === 'drift'
@@ -443,13 +455,41 @@ export class Hud {
     const keys = Object.keys(cyber.byCountry);
     const countries = new Set(keys.map((k) => k.slice(0, 2))).size, states = keys.filter((k) => k.startsWith('US-')).length;
     const online = d.botnets.filter((b) => b.status === 'online').length;
-    return legend(`LIVE CYBER THREATS · ${ago(d.updated)}`, `<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware · ${countries} countries</span>`, `<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="o"></i>${d.ransomware.filter((v) => groupOrigin(v.group)).length} with a reported origin (cable routes)</span><span class="cy-k"><i class="c"></i>submarine cables (TeleGeography)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button>`);
+    const on = cyber.sources.filter((s) => s.on), cy = this.app.mapView.cyber;
+    const ev = cyber.events.filter((e) => cy.sourceOn(e.src)).slice(0, 6);
+    const tick = (e) => `<span class="cy-ev"><i style="--sc:${SOURCE_STYLE[e.src].css}">${SOURCE_STYLE[e.src].tag}</i>${esc(describe(e.src, e.it))}<small>${ago(e.it.t && !/^\d{4}-\d{2}-\d{2}$/.test(e.it.t) ? e.it.t : new Date(e.at).toISOString())}</small></span>`;
+    const live = (d.bruteforce || []).filter((v) => Date.now() - Date.parse(v.t) < 10 * 60000).length;
+    // where attacking machines are right now (IP location, not who operates them)
+    const orig = {};
+    for (const src of ['bruteforce', 'attackers', 'malware', 'abuseipdb']) if (cy.sourceOn(src)) for (const v of d[src] || []) if (v.country) orig[v.country] = (orig[v.country] || 0) + 1;
+    const topOrig = Object.entries(orig).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([c, n]) => `${esc(COUNTRIES[c]?.[2] || c)} ${n}`).join(' · ');
+    return legend(`LIVE · ${on.length} SOURCES · ${ago(d.updated)}`, ev[0] ? `<span class="cy-ev one">${tick(ev[0])}</span>` : `<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware · ${countries} countries</span>`,
+      `<div class="cy-ticker">${ev.map(tick).join('') || '<span class="cy-ev">Waiting for the next report…</span>'}</div><span class="cy-k"><i class="l"></i>${live} attacks reported in the last 10 min</span>${topOrig ? `<span class="cy-k">top attack origins (machines): ${topOrig}</span>` : ''}<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="o"></i>${d.ransomware.filter((v) => groupOrigin(v.group)).length} with a reported origin (cable routes)</span><span class="cy-k"><i class="c"></i>submarine cables (TeleGeography)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button> <button class="btn sm ghost" data-open="cyber:sources">SOURCES</button>`);
+  }
+
+  // every feed, whether it's on, how fresh it is, and the API key that would switch it on
+  pCyberSources() {
+    const why = {
+      malware: 'Free key from auth.abuse.ch (sign in with GitHub/Google/X). Brings back URLhaus malware-download URLs and ThreatFox C2 indicators, both updated every few minutes: the richest live feed missing today.',
+      ddos: 'Free Cloudflare API token with Account · Radar · Read. Adds real DDoS origin → target country pairs from Cloudflare\'s network, drawn as arcs.',
+      otx: 'Free AlienVault OTX account key (Settings → API key). Adds named campaigns, malware families and the countries and industries they target.',
+      abuseipdb: 'Free AbuseIPDB key. Adds its most-reported IPs (100% confidence). The free tier allows 5 downloads a day, so it refreshes every 8 hours.',
+    };
+    const rows = cyber.sources.map((s) => `<div class="row"><span><i class="cy-dot" style="--sc:${SOURCE_STYLE[s.id]?.css || '#fff'}"></i>${esc(s.name)}<small>${esc(s.what)} · ${s.on ? `${s.count} now · refreshed every ${s.every >= 3600 ? `${s.every / 3600} h` : `${Math.round(s.every / 60)} min`}${s.at ? ` · changed ${ago(s.at)}` : ''}${s.error ? ` · <span class="bad">last try failed: ${esc(s.error)}</span>` : ''}` : `off · set <b>${s.key}</b>`}</small>${!s.on && why[s.id] ? `<small>${why[s.id]}</small>` : ''}</span><b class="${s.on ? '' : 'bad'}">${s.on ? 'LIVE' : 'NEEDS KEY'}</b></div>`).join('');
+    return {
+      title: 'Threat sources', kicker: `${cyber.sources.filter((s) => s.on).length} of ${cyber.sources.length} live`,
+      html: `<div class="table">${rows}</div><p class="note">Keys live only on the server: set them as encrypted environment variables on the DigitalOcean "api" component (or in an untracked .env.local for the dev server). A source switches on by itself once its key is present. Tap a source's button on the map bar to show or hide it.</p>`,
+    };
   }
 
   pCyber(cc) {
     const d = cyber.data;
     if (!d) return { title: 'Cyber threats', kicker: 'Live feed', html: `<p class="note">${cyber.error ? `Feed unavailable: ${cyber.error}` : 'Loading…'}</p>` };
+    if (cc === 'sources') return this.pCyberSources();
     const flag = (c) => (c && COUNTRIES[c] ? COUNTRIES[c][2] : 'Unknown');
+    // reports from the other live sources, newest first, one line each with the source's tag
+    const liveRows = (src, list, n = 15) => list.slice().sort((a, b) => String(b.t).localeCompare(String(a.t))).slice(0, n).map((it) => `<div class="row"><span><i class="cy-dot" style="--sc:${SOURCE_STYLE[src].css}"></i>${esc(describe(src, it))}<small>${SOURCE_STYLE[src].tag}</small></span><b>${ago(it.t)}</b></div>`).join('');
+    const LIVE_SECTIONS = [['bruteforce', 'Live attacks', 'reported in the last hour'], ['phishing', 'Phishing sites hosted here', 'OpenPhish'], ['malware', 'Malware URLs and C2', 'URLhaus · ThreatFox'], ['abuseipdb', 'Most-reported IPs', 'AbuseIPDB'], ['ddos', 'DDoS', 'Cloudflare Radar, last 24 h'], ['otx', 'Campaigns targeting here', 'AlienVault OTX']];
     // where an item is: "Texas, USA" for located US incidents, else the country
     const where = (x) => (x.country === 'US' && x.region && US_STATES[x.region] ? `${US_STATES[x.region][2]}, USA` : flag(x.country));
     const from = (g) => { const o = groupOrigin(g); return o ? ` · from ${flag(o.cc)} (reported)` : ''; };
@@ -478,7 +518,8 @@ export class Hud {
         html: `${state ? '<button class="btn sm ghost" data-act="cyberPlace" data-arg="US">‹ ALL US STATES</button>' : ''}${c.ransomware.length ? `<h3>Ransomware incidents <small>last 72 h</small></h3><div class="table">${c.ransomware.slice(0, 25).map(rRow).join('')}</div>` : ''}
           ${c.attackers.length ? `<h3>Attack sources <small>machines here hitting sensors</small></h3><div class="table">${c.attackers.map(aRow).join('')}</div>` : ''}
           ${c.botnets.length ? `<h3>Botnet command servers</h3><div class="table">${c.botnets.map((b) => `<div class="row"><span>${b.malware}<small>${b.as || ''}${b.city ? ` · ${b.city}` : ''}</small></span><b class="${b.status === 'online' ? 'bad' : ''}">${b.status}</b></div>`).join('')}</div>` : ''}
-          <p class="note">Reported by public trackers; victims are shown by sector only.</p>`,
+          ${LIVE_SECTIONS.map(([src, h, sub]) => ((c[src] || []).length ? `<h3>${h} <small>${(c[src] || []).length} · ${sub}</small></h3><div class="table">${liveRows(src, c[src])}</div>` : '')).join('')}
+          <p class="note">Reported by public trackers; victims are shown by sector only. Phishing sites are named by host only and are not links.</p>`,
       };
     }
     // global log
@@ -491,16 +532,20 @@ export class Hud {
     const top = (o, n, f = (k) => k) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, c]) => `<span class="cost">${f(k)} <b>${c}</b></span>`).join('');
     return {
       title: 'Cyber threat log', kicker: `Live · updated ${ago(d.updated)}`,
-      html: `<div class="cy-stats"><div><b>${d.ransomware.length}</b><span>ransomware posts · 72 h</span></div><div><b>${d.attackers.length}</b><span>top attack sources</span></div><div><b>${d.botnets.filter((b) => b.status === 'online').length}</b><span>botnet C2 online</span></div><div><b>${d.exploits.length}</b><span>new exploited CVEs</span></div></div>
+      html: `<div class="cy-stats"><div><b>${d.ransomware.length}</b><span>ransomware posts · 72 h</span></div><div><b>${d.attackers.length}</b><span>top attack sources</span></div><div><b>${d.botnets.filter((b) => b.status === 'online').length}</b><span>botnet C2 online</span></div><div><b>${d.exploits.length}</b><span>new exploited CVEs</span></div><div><b>${(d.bruteforce || []).length}</b><span>attacks reported · 1 h</span></div><div><b>${(d.phishing || []).length}</b><span>live phishing sites</span></div></div>
+        <h3>Live feed <small>newest first · <button class="btn sm ghost" data-open="cyber:sources">${cyber.sources.filter((x) => x.on).length} SOURCES</button></small></h3><div class="table">${cyber.events.slice(0, 30).map((e) => `<div class="row"><span><i class="cy-dot" style="--sc:${SOURCE_STYLE[e.src].css}"></i>${esc(describe(e.src, e.it))}<small>${SOURCE_STYLE[e.src].tag}</small></span><b>${ago(new Date(e.at).toISOString())}</b></div>`).join('') || '<p class="note">Waiting for the first reports…</p>'}</div>
         <h3>Most active ransomware groups</h3><div class="costs">${top(groups, 8)}</div>
         <h3>Most targeted</h3><div class="costs">${top(places, 8, flag)}</div>${Object.keys(states).length ? `<h3>Most targeted US states <small><button class="btn sm ghost" data-act="cyberPlace" data-arg="US">ALL STATES</button></small></h3><div class="costs">${top(states, 10, (k) => US_STATES[k][2])}</div>` : ''}<div class="costs" style="margin-top:4px">${top(sectors, 6)}</div>
         <h3>Reported origins <small>routed on the globe</small></h3><div class="costs">${(() => { const o = {}; let unk = 0; for (const v of d.ransomware) { const g = groupOrigin(v.group); if (g) o[g.cc] = (o[g.cc] || 0) + 1; else unk++; } return top(o, 6, flag) + `<span class="cost">origin unknown <b>${unk}</b></span>`; })()}</div>
         ${(cyber.routes || []).length ? `<h3>Paths through the cables <small>shortest route over the real network</small></h3><div class="table">${cyber.routes.slice(0, 8).map((r) => `<div class="row"><span>${flag(r.from)} → ${r.to}<small>${r.cables.slice(0, 4).join(' · ')}${r.cables.length > 4 ? ` +${r.cables.length - 4} more` : ''}</small></span><b>${fmt(r.km)} km</b></div>`).join('')}</div>` : ''}
+        <p class="note">Why most arcs start in Russia: arcs only exist for ransomware groups with solid public attribution, and most attributed groups are Russian-speaking. Where attacking machines actually sit (cyan, amber and green dots) is far more spread out; see "top attack origins" in the legend. Cloudflare Radar, once its key is set, adds measured DDoS origin → target arcs.</p>
         <p class="note">Pulses run from a group's publicly reported base to its victims, only for groups with solid public attribution (government actions or major research). That reporting is about where operators are believed to be, not proof or state sponsorship; most groups stay "origin unknown". Each path follows real submarine cables (TeleGeography's Submarine Cable Map) from the origin's main internet hub, with straight links standing in for land fibre between landing stations. It is the shortest plausible path over the network, not a traced one: actual routes aren't public and attackers usually relay through VPNs and proxies elsewhere.</p>
         <h3>Latest ransomware incidents</h3><div class="table">${d.ransomware.slice(0, 30).map(rRow).join('')}</div>
         <h3>Newly exploited vulnerabilities <small>CISA KEV</small></h3><div class="table">${d.exploits.map((x) => `<div class="row"><span>${x.vendor} ${x.product}<small>${x.cve}${x.ransomware ? ' · used by ransomware' : ''}</small></span><b>${x.t}</b></div>`).join('')}</div>
         <h3>Top attack sources <small>SANS ISC sensors</small></h3><div class="table">${d.attackers.slice(0, 15).map((a) => `<div class="row"><span>${where(a)}<small>${a.as || ''} · ${a.ip}${a.city ? ` · ${a.city}` : ''}</small></span><b>${fmt(a.attacks)} targets</b></div>`).join('')}</div>
-        <p class="note">Sources: ${d.sources.join(' · ')}. Victim organisations are not named; only sector and country are shown. Everything here is a public report, not live packet traffic.</p>`,
+        ${(d.cves || []).length ? `<h3>Just-published CVEs <small>NVD · last 12 h</small></h3><div class="table">${d.cves.slice(0, 12).map((x) => `<div class="row"><span>${x.cve}${x.score != null ? ` · ${x.severity} ${x.score}` : ''}<small>${esc(x.summary)}</small></span><b>${ago(x.t)}</b></div>`).join('')}</div>` : ''}
+        ${(d.c2certs || []).length ? `<h3>New malware C&amp;C certificates <small>abuse.ch SSLBL · 48 h</small></h3><div class="costs">${(() => { const m = {}; for (const c of d.c2certs) m[c.malware] = (m[c.malware] || 0) + 1; return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, n]) => `<span class="cost">${esc(k)} <b>${n}</b></span>`).join(''); })()}</div>` : ''}
+        <p class="note">Sources: ${cyber.sources.filter((x) => x.on).map((x) => x.name).join(' · ')} · ip-api.com (IP locations). Victim organisations are not named; only sector and country are shown. Everything here is a public report, not live packet traffic.</p>`,
     };
   }
 

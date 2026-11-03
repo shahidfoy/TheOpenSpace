@@ -22,6 +22,14 @@ functions:
       branch: main
       deploy_on_push: true
     source_dir: /functions
+    # Optional threat-feed keys (functions/project.yml passes them to the function). Add the ones
+    # you have as encrypted variables, in the console or here, e.g.:
+    # envs:
+    #   - key: ABUSECH_KEY
+    #     type: SECRET
+    #     scope: RUN_AND_BUILD_TIME
+    #     value: <set in the console, never commit a real key>
+    # Others: OTX_KEY, CLOUDFLARE_RADAR_TOKEN, ABUSEIPDB_KEY, NVD_API_KEY.
 ingress:
   rules:
     - component:

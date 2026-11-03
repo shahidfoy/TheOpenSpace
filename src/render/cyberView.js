@@ -9,27 +9,64 @@ import { planetMaterial, bodyQuat } from './planets.js';
 import { atmosphereMaterial } from './shaders.js';
 
 // Live cyber-threat globe. Data comes from our own aggregator (/api/threats/feed, a DigitalOcean
-// Function that reads ransomware.live, abuse.ch Feodo, SANS ISC and CISA KEV). Everything shown is
-// a real report: ransomware leak-site posts (by victim country), the IPs attacking the most sensors
-// (by network country), botnet command servers. No invented attack arcs.
+// Function that reads blocklist.de, ransomware.live, SANS ISC, abuse.ch, OpenPhish, CISA KEV, NVD
+// and, when their keys are set, URLhaus/ThreatFox, Cloudflare Radar, OTX and AbuseIPDB). Everything
+// shown is a real report. The game polls every ~30 s and only receives the sources that changed;
+// new reports are played onto the globe one by one over the time they arrived in.
 
 export const GLOBE_R = 10;
 const D2R = Math.PI / 180;
 const FEED = `${import.meta.env.BASE_URL}api/threats/feed`;
-export const cyber = { data: null, error: null, loading: false, at: 0, byCountry: {} };
+export const cyber = { data: null, error: null, loading: false, at: 0, byCountry: {}, sources: [], poll: 30, rev: 0, liveRev: 0, queue: [], events: [], seen: new Set(), arrived: new Set() };
 
-export async function loadThreats(force = false) {
-  if (cyber.loading || (!force && cyber.data && Date.now() - cyber.at < 5 * 60 * 1000)) return cyber.data;
+// How each source looks. globe: 'points' (one dot per report), 'country' (aggregated per country),
+// 'arcs' (country pairs) or null (no location: ticker and log only).
+export const SOURCE_STYLE = {
+  bruteforce: { tag: 'BLOCKLIST.DE', short: 'ATTACKS', css: '#00e5ff', globe: 'points' },
+  ransomware: { tag: 'RANSOMWARE.LIVE', short: 'RANSOMWARE', css: '#ff2bd6', globe: 'country' },
+  attackers: { tag: 'DSHIELD', short: 'SCANNERS', css: '#ffb347', globe: 'country' },
+  botnets: { tag: 'FEODO', short: 'BOTNET C2', css: '#ff2a3a', globe: 'country' },
+  phishing: { tag: 'OPENPHISH', short: 'PHISHING', css: '#3fff9a', globe: 'points' },
+  malware: { tag: 'URLHAUS · THREATFOX', short: 'MALWARE', css: '#ff8a1a', globe: 'points' },
+  abuseipdb: { tag: 'ABUSEIPDB', short: 'ABUSIVE IPS', css: '#ff9ec7', globe: 'points' },
+  ddos: { tag: 'CLOUDFLARE RADAR', short: 'DDOS', css: '#ff5a3c', globe: 'arcs' },
+  otx: { tag: 'ALIENVAULT OTX', short: 'CAMPAIGNS', css: '#7aa2ff', globe: 'country' },
+  c2certs: { tag: 'SSLBL', short: 'C2 CERTS', css: '#b46bff', globe: null },
+  exploits: { tag: 'CISA KEV', short: 'EXPLOITED', css: '#ffe14d', globe: null },
+  cves: { tag: 'NVD', short: 'NEW CVES', css: '#e8e07a', globe: null },
+};
+// sources whose change means the aggregated markers and arcs must be rebuilt
+const STRUCTURAL = new Set(['ransomware', 'attackers', 'botnets', 'ddos', 'otx']);
+
+export async function loadThreats() {
+  if (cyber.loading) return cyber.data;
   cyber.loading = true;
   try {
-    const r = await fetch(FEED, { cache: 'no-store' });
+    const since = cyber.data?.updated;
+    const r = await fetch(since ? `${FEED}?since=${encodeURIComponent(since)}` : FEED, { cache: 'no-store' });
     if (!r.ok) throw new Error(`feed ${r.status}`);
     const d = await r.json();
-    if (!d || !Array.isArray(d.ransomware)) throw new Error('feed unavailable');
-    cyber.data = d;
+    if (!d || !Array.isArray(d.sources) || typeof d.sources[0] !== 'object') throw new Error('feed unavailable');
+    const first = !cyber.data;
+    const data = first ? d : { ...cyber.data, updated: d.updated, sources: d.sources };
+    const changed = d.sources.filter((s) => Array.isArray(d[s.id])).map((s) => s.id);
+    const hour = Date.now() - 3600e3;
+    for (const s of d.sources) {
+      if (!first && (d.append || []).includes(s.id)) {
+        // rolling source: only the new reports came; keep the last hour
+        const have = new Set(d[s.id].map((x) => x.id));
+        data[s.id] = [...d[s.id], ...(data[s.id] || []).filter((x) => !have.has(x.id) && Date.parse(x.t) > hour)];
+      } else data[s.id] = (Array.isArray(d[s.id]) ? d[s.id] : data[s.id]) || [];
+    }
+    cyber.data = data;
+    cyber.sources = d.sources;
+    cyber.poll = d.poll || 30;
+    enqueue(data, first ? d.sources.map((s) => s.id) : changed, first);
+    if (first || changed.some((id) => STRUCTURAL.has(id))) cyber.rev++;
+    if (changed.length) cyber.liveRev++;
     cyber.error = null;
     cyber.at = Date.now();
-    cyber.byCountry = summarize(d);
+    cyber.byCountry = summarize(data);
   } catch (e) {
     cyber.error = String(e.message || e);
   } finally {
@@ -37,6 +74,90 @@ export async function loadThreats(force = false) {
   }
   return cyber.data;
 }
+
+// New reports are scheduled across the window they arrived in (a source refreshed every 2 min
+// spreads its new reports over the next 2 min), oldest first. On the first load the newest few
+// replay over ~20 s so the globe comes alive at once; the rest are simply there.
+function enqueue(data, ids, first) {
+  const now = Date.now(), fresh = [];
+  for (const id of ids) {
+    const s = cyber.sources.find((x) => x.id === id);
+    for (const it of data[id] || []) {
+      if (cyber.seen.has(it.id)) continue;
+      cyber.seen.add(it.id);
+      fresh.push({ src: id, it, win: Math.min(120, Math.max(20, s?.every || 60)) });
+    }
+  }
+  fresh.sort((a, b) => String(a.it.t).localeCompare(String(b.it.t)));
+  let play = fresh;
+  if (first) {
+    const pick = {};
+    for (const e of fresh) if ((SOURCE_STYLE[e.src]?.globe === 'points' || e.src === 'ransomware') && whereOf(e.it)) (pick[e.src] = pick[e.src] || []).push(e);
+    play = Object.values(pick).flatMap((l) => l.slice(l[0].src === 'bruteforce' ? -12 : -5));
+    const replay = new Set(play);
+    for (const e of fresh) if (!replay.has(e)) cyber.arrived.add(e.it.id);
+    // the ticker starts with the newest few from every source, not just the busiest one
+    const per = {};
+    for (const e of fresh) if (!replay.has(e)) (per[e.src] = per[e.src] || []).push(e);
+    const recent = Object.values(per).flatMap((l) => l.slice(-3));
+    recent.sort((a, b) => String(a.it.t).localeCompare(String(b.it.t)));
+    for (const e of recent) cyber.events.unshift({ src: e.src, it: e.it, at: now });
+  }
+  const bySrc = {};
+  for (const e of play) (bySrc[e.src] = bySrc[e.src] || []).push(e);
+  for (const list of Object.values(bySrc)) list.forEach((e, i) => cyber.queue.push({ ...e, due: now + ((first ? 20 : e.win) * 1000 * (i + 0.5)) / list.length }));
+  cyber.queue.sort((a, b) => a.due - b.due);
+}
+
+// release reports whose time has come; returns the ones that just arrived
+export function drainQueue() {
+  const now = Date.now(), out = [];
+  while (cyber.queue.length && cyber.queue[0].due <= now) {
+    const e = cyber.queue.shift();
+    cyber.arrived.add(e.it.id);
+    const ev = { src: e.src, it: e.it, at: now, stale: now - e.due > 30000 };
+    cyber.events.unshift(ev);
+    out.push(ev);
+  }
+  if (cyber.events.length > 80) cyber.events.length = 80;
+  return out;
+}
+
+// where a report sits on the globe: its own coordinates, else its country's (or US state's) centroid
+export function whereOf(it) {
+  if (it.lat != null) return [it.lat, it.lon];
+  const p = placeOf(keyOf(it.country, it.region));
+  return p ? [p[0], p[1]] : null;
+}
+const cname = (cc) => (cc && COUNTRIES[cc] ? COUNTRIES[cc][2] : null);
+export function placeName(it) {
+  const c = it.country === 'US' && it.region && US_STATES[it.region] ? `${US_STATES[it.region][2]}, USA` : cname(it.country);
+  return [it.city, c].filter(Boolean).join(', ') || 'location unknown';
+}
+// one line per report, for the ticker and logs
+export function describe(src, it) {
+  switch (src) {
+    case 'bruteforce': return `${it.service === 'attack' ? 'Attack' : `${it.service.toUpperCase()} attack`} from ${placeName(it)}`;
+    case 'ransomware': return `${it.group} posted a victim · ${it.sector} · ${placeName({ country: it.country, region: it.region })}`;
+    case 'attackers': return `${it.as || it.ip} scanning ${fmtN(it.attacks)} targets · ${placeName(it)}`;
+    case 'botnets': return `${it.malware} C2 ${it.status} · ${placeName(it)}`;
+    case 'phishing': return `Phishing site ${it.host} · hosted in ${placeName(it)}`;
+    case 'malware': return `${it.malware} ${it.kind} · ${placeName(it)}`;
+    case 'abuseipdb': return `${it.ip} reported (${it.score}%) · ${placeName(it)}`;
+    case 'ddos': return `DDoS ${cname(it.from) || it.from} → ${cname(it.to) || it.to} · ${it.share.toFixed(1)}% of ${it.layer}`;
+    case 'otx': return `${it.name}${it.targets.length ? ` · targets ${it.targets.slice(0, 3).join(', ')}` : ''}`;
+    case 'c2certs': return `New ${it.reason} certificate`;
+    case 'exploits': return `${it.cve} ${it.vendor} ${it.product} now exploited${it.ransomware ? ' (ransomware)' : ''}`;
+    case 'cves': return `${it.cve}${it.score != null ? ` ${it.severity} ${it.score}` : ''} · ${it.summary}`;
+    default: return src;
+  }
+}
+const fmtN = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+
+// OTX names countries in full; match them to our ISO codes
+const NAME_CC = Object.fromEntries(Object.entries(COUNTRIES).map(([cc, c]) => [c[2].toLowerCase(), cc]));
+Object.assign(NAME_CC, { 'united states of america': 'US', 'russian federation': 'RU', 'korea, republic of': 'KR', "korea, democratic people's republic of": 'KP', 'united kingdom of great britain and northern ireland': 'GB', 'iran, islamic republic of': 'IR', 'viet nam': 'VN', 'taiwan, province of china': 'TW', 'czechia': 'CZ', 'syrian arab republic': 'SY', 'moldova, republic of': 'MD', 'türkiye': 'TR', 'turkey': 'TR' });
+export const ccOfName = (n) => (n ? NAME_CC[n.toLowerCase()] || (n.length === 2 && COUNTRIES[n.toUpperCase()] ? n.toUpperCase() : null) : null);
 
 // Incidents are grouped by country, and inside the US by state ("US-TX"); "US" holds US incidents
 // whose state isn't known.
@@ -50,12 +171,13 @@ export function placeOf(key) {
   const c = COUNTRIES[key];
   return c ? [c[0], c[1], key === 'US' ? 'United States' : c[2]] : null;
 }
+const PLACED = ['ransomware', 'attackers', 'botnets', 'bruteforce', 'phishing', 'malware', 'abuseipdb'];
 function summarize(d) {
   const by = {};
-  const C = (k) => (by[k] = by[k] || { cc: k, ransomware: [], attackers: [], botnets: [] });
-  for (const v of d.ransomware) { const k = keyOf(v.country, v.region); if (placeOf(k)) C(k).ransomware.push(v); }
-  for (const a of d.attackers) { const k = keyOf(a.country, a.region); if (placeOf(k)) C(k).attackers.push(a); }
-  for (const b of d.botnets) { const k = keyOf(b.country, b.region); if (placeOf(k)) C(k).botnets.push(b); }
+  const C = (k) => (by[k] = by[k] || { cc: k, ransomware: [], attackers: [], botnets: [], bruteforce: [], phishing: [], malware: [], abuseipdb: [], ddos: [], otx: [] });
+  for (const src of PLACED) for (const v of d[src] || []) { const k = keyOf(v.country, v.region); if (placeOf(k)) C(k)[src].push(v); }
+  for (const p of d.ddos || []) for (const cc of [p.from, p.to]) if (placeOf(cc)) C(cc).ddos.push(p);
+  for (const p of d.otx || []) for (const n of p.targets) { const cc = ccOfName(n); if (cc && placeOf(cc)) C(cc).otx.push(p); }
   return by;
 }
 
@@ -69,12 +191,12 @@ export function latLon(lat, lon, r, out = new THREE.Vector3()) {
 // at a constant speed over the globe, with a fixed-length trail.
 const ARC_SPEED = 0.35; // radians of the globe per second
 const ARC_VERT = /* glsl */ `attribute float aT; varying float vT; void main(){ vT = aT; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-const ARC_FRAG = /* glsl */ `uniform float uTime; uniform float uPhase; uniform float uK; uniform float uLen; varying float vT;
+const ARC_FRAG = /* glsl */ `uniform float uTime; uniform float uPhase; uniform float uK; uniform float uLen; uniform vec3 uC0; uniform vec3 uC1; varying float vT;
 void main(){
   float head = fract(uTime * ${ARC_SPEED.toFixed(2)} / uLen + uPhase);
   float d = (head - vT) * uLen; // radians behind the pulse
   float trail = d > 0.0 ? exp(-d * 5.0) : 0.0;
-  vec3 c = mix(vec3(1.0, 0.16, 0.24), vec3(1.0, 0.17, 0.84), vT);
+  vec3 c = mix(uC0, uC1, vT);
   gl_FragColor = vec4(c * (0.18 * uK + 2.6 * trail * (0.5 + 0.5 * uK)), 1.0);
 }`;
 
@@ -133,11 +255,26 @@ export class CyberGlobe {
     this.labelsShown = false;
     this.layers = { ...CYBER_PRESETS.all };
     try { Object.assign(this.layers, JSON.parse(localStorage.getItem('openspace_cyber_layers') || '{}')); } catch {}
+    // per-source toggles (independent of the view layers and presets); missing = on
+    this.src = {};
+    try { Object.assign(this.src, JSON.parse(localStorage.getItem('openspace_cyber_sources') || '{}')); } catch {}
+    // live reports: one point cloud per source, plus short "strike" flashes as reports arrive
+    this.live = new THREE.Group();
+    this.group.add(this.live);
+    this.clouds = {};
+    this.strikes = [];
+    this.liveDirty = true;
   }
 
   setLayer(k, on) {
     this.layers[k] = on ? 1 : 0;
     try { localStorage.setItem('openspace_cyber_layers', JSON.stringify(this.layers)); } catch {}
+    this.applyLayers();
+  }
+  sourceOn(id) { return this.src[id] !== 0; }
+  setSource(id, on) {
+    this.src[id] = on ? 1 : 0;
+    try { localStorage.setItem('openspace_cyber_sources', JSON.stringify(this.src)); } catch {}
     this.applyLayers();
   }
   setPreset(name) {
@@ -153,7 +290,8 @@ export class CyberGlobe {
     u.uCloudK.value = L.clouds && L.earth ? 1 : 0;
     this.atmo.visible = !!L.earth;
     if (this.cables) this.cables.visible = !!L.cables;
-    for (const o of this.markers.children) o.visible = !!L[o.userData.layer || 'threats'];
+    for (const o of this.markers.children) o.visible = !!L[o.userData.layer || 'threats'] && this.sourceOn(o.userData.src);
+    for (const o of this.live.children) o.visible = !!L.threats && this.sourceOn(o.userData.src);
     this.setLabelsVisible(this.labelsShown);
   }
 
@@ -192,11 +330,13 @@ export class CyberGlobe {
         }));
         m.position.copy(base);
         m.quaternion.setFromUnitVectors(up, n);
+        m.userData.src = 'ransomware';
         this.markers.add(m);
         cols.push(m);
         const g = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xff2bd6).multiplyScalar(1.6), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
         g.position.copy(base).addScaledVector(n, 0.05);
         g.scale.setScalar(0.5 + 0.18 * Math.log2(k + 1));
+        g.userData.src = 'ransomware';
         this.markers.add(g);
         if (k >= Math.max(2, maxR * 0.15)) {
           const el = document.createElement('div');
@@ -204,6 +344,7 @@ export class CyberGlobe {
           el.innerHTML = `<b>${cc === 'US' ? 'USA · state unknown' : name.replace(', USA', '')}</b><small>${k} ransomware</small>`;
           const l = new CSS2DObject(el);
           l.position.copy(base).addScaledVector(n, h + 0.25);
+          l.userData.src = 'ransomware';
           this.markers.add(l);
           this.labels.push(l);
         }
@@ -222,24 +363,130 @@ export class CyberGlobe {
           ring.position.copy(base).addScaledVector(n, 0.03);
           ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
         }
-        ring.userData = { pulse: true, s: 0.25 + 0.55 * Math.sqrt(att / maxA), phase: rnd(lon) };
+        ring.userData = { pulse: true, s: 0.25 + 0.55 * Math.sqrt(att / maxA), phase: rnd(lon), src: 'attackers' };
         this.markers.add(ring);
         const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xffb347).multiplyScalar(1.4), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
         dot.position.copy(ring.position);
         dot.scale.setScalar(0.35);
+        dot.userData.src = 'attackers';
         this.markers.add(dot);
       }
       // botnet command servers: red diamonds hovering above the country
       c.botnets.forEach((b, i) => {
         const d = new THREE.Mesh(new THREE.OctahedronGeometry(0.12), new THREE.MeshBasicMaterial({ color: new THREE.Color(b.status === 'online' ? 0xff2a3a : 0x803038).multiplyScalar(b.status === 'online' ? 2.5 : 1) }));
         d.position.copy(base).addScaledVector(n, 0.35 + i * 0.28);
-        d.userData.spin = true;
+        d.userData = { spin: true, src: 'botnets' };
         this.markers.add(d);
       });
-      this.hits.push({ pos: base.clone().addScaledVector(n, 0.3), cc });
+      // OTX campaigns: a slow blue square pulse on each targeted country, size by campaign count
+      if (c.otx.length) {
+        const sq = new THREE.Mesh(new THREE.RingGeometry(0.8, 0.9, 4), new THREE.MeshBasicMaterial({ color: new THREE.Color(0x7aa2ff).multiplyScalar(2.2), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+        sq.position.copy(base).addScaledVector(n, 0.05);
+        sq.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+        sq.userData = { pulse: true, s: 0.5 + 0.25 * Math.log2(c.otx.length + 1), phase: rnd(lat), src: 'otx' };
+        this.markers.add(sq);
+      }
     }
     this.columns = cols;
     this.buildArcs(data);
+    this.buildDdos(data.ddos || []);
+  }
+
+  // Cloudflare Radar DDoS pairs: arcs lifted off the surface (they're not cable routes), thickness
+  // of the pulse by the pair's share of attacks.
+  buildDdos(pairs) {
+    if (!pairs.length) return;
+    const maxS = Math.max(...pairs.map((p) => p.share), 1e-6);
+    const c0 = new THREE.Color(1.0, 0.45, 0.1), c1 = new THREE.Color(1.0, 0.12, 0.08);
+    pairs.forEach((p, i) => {
+      const a = placeOf(p.from), b = placeOf(p.to);
+      if (!a || !b) return;
+      const va = latLon(a[0], a[1], 1), vb = latLon(b[0], b[1], 1), ang = va.angleTo(vb);
+      if (ang < 1e-3) return;
+      const steps = Math.max(12, Math.ceil(ang / 0.02)), pts = [], ts = [];
+      for (let k = 0; k <= steps; k++) {
+        const t = k / steps;
+        const q = va.clone().multiplyScalar(Math.sin((1 - t) * ang)).addScaledVector(vb, Math.sin(t * ang)).divideScalar(Math.sin(ang));
+        pts.push(q.multiplyScalar(GLOBE_R * (1.005 + Math.sin(Math.PI * t) * ang * 0.09)));
+        ts.push(t);
+      }
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      geo.setAttribute('aT', new THREE.BufferAttribute(new Float32Array(ts), 1));
+      const line = new THREE.Line(geo, new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: this.time }, uPhase: { value: (i * 0.37) % 1 }, uK: { value: 0.3 + 0.7 * (p.share / maxS) }, uLen: { value: ang }, uC0: { value: c0 }, uC1: { value: c1 } },
+        vertexShader: ARC_VERT, fragmentShader: ARC_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      line.userData = { src: 'ddos', layer: 'routes' };
+      this.markers.add(line);
+    });
+    this.applyLayers();
+  }
+
+  // Live point clouds (rebuilt when reports arrive) and the pickable country hit list.
+  buildLive(data, by) {
+    this.liveDirty = false;
+    if (!data) return;
+    for (const id in SOURCE_STYLE) {
+      if (SOURCE_STYLE[id].globe !== 'points') continue;
+      const items = (data[id] || []).filter((it) => cyber.arrived.has(it.id));
+      let cloud = this.clouds[id];
+      if (!cloud) {
+        cloud = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ map: this.glow, size: 0.32, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+        cloud.userData.src = id;
+        this.clouds[id] = cloud;
+        this.live.add(cloud);
+      }
+      // brighter the newer; an hour-old report is a faint ember
+      const pos = [], col = [], base = new THREE.Color(SOURCE_STYLE[id].css), v = new THREE.Vector3(), now = Date.now();
+      for (const it of items) {
+        const w = whereOf(it);
+        if (!w) continue;
+        latLon(w[0], w[1], GLOBE_R * 1.006, v);
+        pos.push(v.x, v.y, v.z);
+        const age = Math.max(0, (now - Date.parse(it.t)) / 3600e3);
+        const k = 0.35 + 1.4 * Math.exp(-age * 2);
+        col.push(base.r * k, base.g * k, base.b * k);
+      }
+      cloud.geometry.dispose();
+      cloud.geometry = new THREE.BufferGeometry();
+      cloud.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      cloud.geometry.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    }
+    this.hits = [];
+    for (const cc in by) {
+      const p = placeOf(cc);
+      const base = latLon(p[0], p[1], GLOBE_R);
+      this.hits.push({ pos: base.addScaledVector(base.clone().normalize(), 0.3), cc });
+    }
+    this.applyLayers();
+  }
+
+  // a report just arrived: a beam and an expanding ring at its location, ~2.5 s
+  strike(ev) {
+    const w = whereOf(ev.it), st = SOURCE_STYLE[ev.src];
+    if (!w || !st?.globe || !this.sourceOn(ev.src) || !this.layers.threats) return;
+    const p = latLon(w[0], w[1], GLOBE_R), n = p.clone().normalize();
+    const c = new THREE.Color(st.css);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 32), new THREE.MeshBasicMaterial({ color: c.clone().multiplyScalar(2.6), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+    ring.position.copy(p).addScaledVector(n, 0.04);
+    ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    const h = 1.6, beamGeo = new THREE.CylinderGeometry(0.012, 0.05, h, 6, 1, true);
+    beamGeo.translate(0, h / 2, 0);
+    const beam = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({ color: c.clone().multiplyScalar(3), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    beam.position.copy(p);
+    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+    const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: c.clone().multiplyScalar(2.5), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    flash.position.copy(p).addScaledVector(n, 0.08);
+    const g = new THREE.Group();
+    g.add(ring, beam, flash);
+    g.userData.src = ev.src;
+    this.live.add(g);
+    this.strikes.push({ g, ring, beam, flash, age: 0 });
+    while (this.strikes.length > 40) this.endStrike(this.strikes.shift());
+  }
+  endStrike(s) {
+    this.live.remove(s.g);
+    s.g.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); });
   }
 
   // Reported origin → victim arcs, aggregated per (origin country, victim country/state).
@@ -290,14 +537,14 @@ export class CyberGlobe {
         geo.setAttribute('aT', new THREE.BufferAttribute(ts, 1));
         const kk = 0.35 + 0.65 * (p.n / maxN);
         const line = new THREE.Line(geo, new THREE.ShaderMaterial({
-          uniforms: { uTime: { value: this.time }, uPhase: { value: rnd(i + 1) }, uK: { value: kk }, uLen: { value: total } },
+          uniforms: { uTime: { value: this.time }, uPhase: { value: rnd(i + 1) }, uK: { value: kk }, uLen: { value: total }, uC0: { value: new THREE.Color(1.0, 0.16, 0.24) }, uC1: { value: new THREE.Color(1.0, 0.17, 0.84) } },
           vertexShader: ARC_VERT, fragmentShader: ARC_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
         }));
-        line.userData.layer = 'routes';
+        line.userData = { layer: 'routes', src: 'ransomware' };
         this.markers.add(line);
         const head = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xff3cb0).multiplyScalar(1.8), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
         head.scale.setScalar(0.18 + 0.16 * kk);
-        head.userData.layer = 'routes';
+        head.userData = { layer: 'routes', src: 'ransomware' };
         this.markers.add(head);
         this.arcs.push({ pts, ts, head, phase: rnd(i + 1), len: total });
       });
@@ -311,14 +558,14 @@ export class CyberGlobe {
       const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.5, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2a3a).multiplyScalar(2.4), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
       ring.position.copy(pos).addScaledVector(n, 0.04);
       ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-      ring.userData = { pulse: true, s: 1.4, phase: 0.5, layer: 'routes' };
+      ring.userData = { pulse: true, s: 1.4, phase: 0.5, layer: 'routes', src: 'ransomware' };
       this.markers.add(ring);
       const el = document.createElement('div');
       el.className = 'cyber-label origin';
       el.innerHTML = `<b>REPORTED BASE · ${name}</b><small>${[...origins[cc]].join(', ')}</small>`;
       const l = new CSS2DObject(el);
       l.position.copy(pos).addScaledVector(n, 0.9);
-      l.userData.layer = 'routes';
+      l.userData = { layer: 'routes', src: 'ransomware' };
       this.markers.add(l);
       this.labels.push(l);
     }
@@ -382,6 +629,19 @@ export class CyberGlobe {
         m.material.opacity = 1 - f;
       } else if (m.userData.spin) m.rotation.y += dt * 1.5;
       else if (m.material?.uniforms?.uTime) m.material.uniforms.uTime.value = this.time;
+    }
+    // live reports: release what's due, flash them in, and refresh the point clouds once a second
+    for (const ev of drainQueue()) { if (!ev.stale) this.strike(ev); this.liveDirty = true; }
+    if (this.liveDirty && (this.liveAcc = (this.liveAcc || 0) + dt) > 1) { this.liveAcc = 0; this.buildLive(cyber.data, cyber.byCountry); }
+    for (let i = this.strikes.length - 1; i >= 0; i--) {
+      const s = this.strikes[i], f = (s.age += dt) / 2.5;
+      if (f >= 1) { this.endStrike(s); this.strikes.splice(i, 1); continue; }
+      s.ring.scale.setScalar(0.1 + f * 0.9);
+      s.ring.material.opacity = 1 - f;
+      s.beam.scale.set(1, Math.min(1, f * 6) * (1 - f), 1);
+      s.beam.material.opacity = 1 - f;
+      s.flash.scale.setScalar(0.9 * (1 - f) + 0.15);
+      s.flash.material.opacity = 1 - f * f;
     }
   }
 
