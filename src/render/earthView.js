@@ -314,6 +314,7 @@ export class EarthView {
     this.originM = { x: 0, z: 0 };
     this.yaw = 60 * D2R; this.pitch = -0.12; this.speed = 7600;
     this.lookYaw = 0; this.lookPitch = 0;
+    this.camOff = null; // snap the chase camera in behind the craft
     this.autopilot = false;
     this.target = this.target || null;
     for (const m of this.meshes.values()) { this.terrain.remove(m); m.geometry.dispose(); }
@@ -543,12 +544,16 @@ export class EarthView {
     this.plasma.material.opacity = heat * (0.75 + Math.random() * 0.25);
     this.plasma.scale.setScalar(10 + heat * 16);
 
-    // chase camera
+    // chase camera. The smoothing runs on the offset from the craft, not on the absolute camera
+    // position: at entry speed (7.6 km/s) an absolute lerp trails the craft by over a kilometre,
+    // and a floating-origin recenter would make the camera fly 30 km to catch up.
     const camYaw = this.yaw + this.lookYaw;
     const back = new THREE.Vector3(-Math.sin(camYaw), 0, Math.cos(camYaw));
     const k = this.craft.userData.parts ? 0.4 : 1; // the exosuit is person-sized: sit closer
-    const desired = this.pos.clone().addScaledVector(back, 16 * k * Math.cos(this.lookPitch)).add(new THREE.Vector3(0, (4 + 16 * Math.sin(this.lookPitch)) * k, 0));
-    this.camera.position.lerp(desired, 1 - Math.exp(-6 * dt));
+    const want = back.multiplyScalar(16 * k * Math.cos(this.lookPitch)).add(new THREE.Vector3(0, (4 + 16 * Math.sin(this.lookPitch)) * k, 0));
+    if (!this.camOff || this.camOff.distanceTo(want) > 200) this.camOff = want.clone();
+    else this.camOff.lerp(want, 1 - Math.exp(-6 * dt));
+    this.camera.position.copy(this.pos).add(this.camOff);
     this.camera.lookAt(this.pos.clone().addScaledVector(fwd, 8 * k));
     const horizon = Math.sqrt(2 * R * Math.max(50, this.pos.y)) * 1.25 + 20000;
     this.camera.near = (this.pos.y > 20000 ? 4 : 1) * k;

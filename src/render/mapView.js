@@ -589,8 +589,12 @@ export class MapView {
     });
     const up = (e) => {
       if (pts.has(e.pointerId) && pts.size === 1 && down && down.moved < 10 && active() && this.view === 'system') {
-        const id = this.pick(e.clientX, e.clientY);
-        if (id) this.app.selectBody(id);
+        // the fleet marker wins when it sits on top of a planet (it starts right at one)
+        if (this.pickFleet(e.clientX, e.clientY)) this.focus('fleet', this.mode() === 'true' ? 0.05 : 14);
+        else {
+          const id = this.pick(e.clientX, e.clientY);
+          if (id) this.app.selectBody(id);
+        }
       } else if (pts.has(e.pointerId) && pts.size === 1 && down && down.moved < 10 && active() && this.view === 'cyber') {
         const cc = this.cyber.pick(e.clientX, e.clientY, this.camera);
         if (cc) this.app.hud.open(`cyber:${cc}`);
@@ -623,6 +627,13 @@ export class MapView {
     if (this.view !== 'system') this.setView('system');
     this.follow = id;
     if (dist) this.dist = dist;
+  }
+
+  pickFleet(x, y) {
+    if (!this.fleet?.g.visible) return false;
+    const v = this.fleet.holder.getWorldPosition(tmpA).project(this.camera);
+    if (v.z > 1) return false;
+    return Math.hypot((v.x * 0.5 + 0.5) * innerWidth - x, (-v.y * 0.5 + 0.5) * innerHeight - y) < 22;
   }
 
   pick(x, y) {
@@ -787,13 +798,52 @@ export class MapView {
     const v = this.app.state.voyage;
     if (!v) return this.clearFleet();
     if (this.fleet && this.fleet.craft !== this.app.state.craft) this.clearFleet();
-    if (!this.fleet) {
+    const f0 = this.fleet;
+    if (!f0) {
       const craft = makeCraft(this.app.state.craft);
-      this.fleet = this.makeMarker(craft, 0x7fd4ff, craft.userData.parts ? 0.45 : 0.16);
-      this.fleet.craft = this.app.state.craft;
-      this.fleet.el.classList.add('fleet');
+      const f = (this.fleet = this.makeMarker(craft, 0x7fd4ff, craft.userData.parts ? 0.45 : 0.16));
+      f.craft = this.app.state.craft;
+      f.el.classList.add('fleet');
+      // a pulsing beacon drawn over everything: at departure the convoy sits right on a planet
+      f.beacon = glowSprite(0x7fd4ff, 3.2, 2.4);
+      f.beacon.material.depthTest = false;
+      f.beacon.renderOrder = 20;
+      f.holder.add(f.beacon);
+      f.holder.traverse((o) => { if (o.material) { o.material.depthTest = false; o.renderOrder = Math.max(o.renderOrder, 19); } });
+      // the whole planned route (both worlds move, so it's a curve), and the part already flown
+      const N = 64;
+      f.route = new THREE.Line(new THREE.BufferGeometry().setFromPoints(Array.from({ length: N + 1 }, () => new THREE.Vector3())),
+        new THREE.LineDashedMaterial({ color: col(0x7fd4ff, 1.8), transparent: true, opacity: 0.85, depthWrite: false, dashSize: 0.6, gapSize: 0.45 }));
+      f.flown = line(Array.from({ length: N + 1 }, () => new THREE.Vector3()), col(0x7fd4ff, 2), 0.9);
+      f.N = N;
+      f.g.add(f.route, f.flown);
     }
-    this.placeMarker(this.fleet, v.from, v.to, v.depart, v.arrive, t, `◆ FLEET → ${BODY[v.to].name} · ${fmtEta(v.arrive - t)}`);
+    const f = this.fleet;
+    this.placeMarker(f, v.from, v.to, v.depart, v.arrive, t, `◆ FLEET → ${BODY[v.to].name} · ${fmtEta(v.arrive - t)}`);
+    f.line.visible = false;
+    f.beacon.scale.setScalar(3.2 * (1 + 0.25 * Math.sin(this.time * 5)));
+    // re-sample the route a few times a second (and right away when the scale changes)
+    const mode = this.mode();
+    if (this.time - (f.routeT ?? -1) > 0.5 || f.routeMode !== mode) {
+      f.routeT = this.time;
+      f.routeMode = mode;
+      const k = THREE.MathUtils.clamp((t - v.depart) / Math.max(1, v.arrive - v.depart), 0, 1);
+      const rp = f.route.geometry.attributes.position, fp = f.flown.geometry.attributes.position;
+      for (let i = 0; i <= f.N; i++) {
+        const u = i / f.N;
+        this.auToMap(transitAU(v.from, v.to, v.depart, v.arrive, v.depart + (v.arrive - v.depart) * u), tmpB);
+        rp.setXYZ(i, tmpB.x, tmpB.y, tmpB.z);
+        // flown part ends exactly at the convoy
+        if (u > k) this.auToMap(transitAU(v.from, v.to, v.depart, v.arrive, t), tmpB);
+        fp.setXYZ(i, tmpB.x, tmpB.y, tmpB.z);
+      }
+      rp.needsUpdate = fp.needsUpdate = true;
+      f.route.geometry.computeBoundingSphere();
+      f.route.computeLineDistances();
+      f.route.material.dashSize = this.dist * 0.012; // dashes stay the same size on screen
+      f.route.material.gapSize = this.dist * 0.009;
+      f.flown.geometry.computeBoundingSphere();
+    }
   }
 }
 
