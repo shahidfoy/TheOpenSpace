@@ -268,7 +268,7 @@ export class Hud {
       ? 'Stick: turn and climb · ▲ throttle · BOOST burn · BRAKE · drag to look'
       : surf
       ? 'Stick to walk · drag to look · ▲ jetpack · hold DRILL at glowing deposits'
-      : voyage ? 'Fleet on autopilot · fly around your convoy · salvage what drifts past'
+      : voyage ? 'Fleet on autopilot · fly around your convoy · real space is empty between worlds'
         : 'Drag to steer · stick to fly · hold MINE on salvage and rock';
     const v = this.app.mapView?.view || 'system';
     const sm = this.app.mapView?.scaleMode || 'visible';

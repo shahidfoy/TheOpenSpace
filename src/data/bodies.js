@@ -136,12 +136,22 @@ export const FIELDS = {
   pluto: { kind: 'ice', name: 'Kuiper belt objects', res: { ice: 4, exotics: 0.25 } },
 };
 
-// Deep-space regions crossed in transit (heliocentric distance, AU). density = objects in the
-// local field; 0 means empty space with only rare drifting contacts.
+// Where a cruising fleet really passes through enough matter to collect anything: only close to
+// a few worlds. reach = distance from the body's centre (km). Your own canister traffic only
+// exists once you have a base there.
+export const TRANSIT_FIELDS = {
+  earth: { reach: 42000, name: 'Earth orbital debris · LEO to the GEO graveyard' }, // ~10,000 t of junk
+  moon: { reach: 60000, own: true },
+  venus: { reach: 60000, own: true },
+  saturn: { reach: 140000, name: 'Saturn\'s rings · 99.9% water ice' }, // out to the F ring
+};
+
+// Regions crossed in transit (heliocentric distance, AU). Even the "belts" are almost empty: the
+// fleet sees nothing but stars, the Sun and the worlds it's flying between.
 export const ZONES = [
-  { id: 'nea', from: 0.9, to: 1.7, kind: 'rocks', name: 'Near-Earth asteroid lanes', res: { ore: 4, metal: 1.5, ice: 0.5 }, density: 0 },
-  { id: 'belt', from: 2.1, to: 3.3, kind: 'rocks', name: 'Main Asteroid Belt', res: { ore: 4, metal: 2, ice: 2, exotics: 0.12 }, density: 26 },
-  { id: 'trojan', from: 4.9, to: 5.5, kind: 'rocks', name: 'Jupiter Trojan swarm', res: { ore: 3, ice: 2, exotics: 0.1 }, density: 10 },
-  { id: 'kuiper', from: 30, to: 55, kind: 'ice', name: 'Kuiper Belt', res: { ice: 5, exotics: 0.3 }, density: 14 },
+  { id: 'nea', from: 0.9, to: 1.7, name: 'Near-Earth asteroid region', note: 'nearest known asteroid typically tens of millions of km away' },
+  { id: 'belt', from: 2.1, to: 3.3, name: 'Main Asteroid Belt', note: 'asteroids average ~1 million km apart · nothing in sight' },
+  { id: 'trojan', from: 4.9, to: 5.5, name: 'Jupiter Trojan region', note: 'swarm members millions of km apart' },
+  { id: 'kuiper', from: 30, to: 55, name: 'Kuiper Belt', note: 'icy bodies tens of millions of km apart · sunlight ~1/1000 of Earth\'s' },
 ];
-export const DEEP = { id: 'deep', kind: 'rocks', name: 'Interplanetary space', res: { ice: 2, ore: 2 }, density: 0 };
+export const DEEP = { id: 'deep', name: 'Interplanetary space', note: 'solar wind ~5 protons per cm³ · nearest object millions of km away' };

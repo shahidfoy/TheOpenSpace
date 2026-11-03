@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BODY, sunDistAU, helioAU, transitAU } from '../sim/orbits.js';
-import { AU_KM, FIELDS, ZONES, DEEP } from '../data/bodies.js';
+import { AU_KM, FIELDS, ZONES, DEEP, TRANSIT_FIELDS } from '../data/bodies.js';
 import { RES } from '../data/economy.js';
 import { SKIFF_CAP, fleetCap, deposit, emit, simNow } from '../sim/state.js';
 import { atmosphereMaterial, glowSprite } from './shaders.js';
@@ -78,7 +78,6 @@ export class LocalView {
     this.fullWarned = 0;
     this.time = 0;
     this.mode = 'base';
-    this.buildDust();
   }
 
   clear() {
@@ -318,24 +317,31 @@ export class LocalView {
 
     this.zone = null;
     this.zoneAcc = 99;
-    this.contactAt = this.time + 25;
     this.skyAcc = 99;
     this.resetCraft(6);
     this.updateInfoCaps();
   }
 
   // Which region of the solar system the fleet is crossing right now.
+  // Only a few places hold enough matter to collect at cruise; everywhere else is empty space.
   zoneAt(P) {
-    let best = null;
-    for (const id in FIELDS) {
-      const q = helioAU(BODY[id], simNow(this.app.state));
+    const s = this.app.state;
+    for (const id in TRANSIT_FIELDS) {
+      const tf = TRANSIT_FIELDS[id];
+      if (tf.own && !s.bases[id]) continue;
+      const q = helioAU(BODY[id], simNow(s));
       const d = Math.hypot(P[0] - q[0], P[1] - q[1], P[2] - q[2]) * AU_KM;
-      const reach = id === 'earth' ? 45000 : id === 'sun' ? 0 : GAS.includes(id) ? 2e6 : 250000;
-      if (d < reach && (!best || d < best.d)) best = { id, d };
+      if (d < tf.reach) return { ...FIELDS[id], ...(tf.name ? { name: tf.name } : {}), id, density: 34 };
     }
-    if (best && FIELDS[best.id].kind !== 'none') return { ...FIELDS[best.id], id: best.id, density: 34 };
+    // close to a world (but not in a field): name its neighbourhood, still empty
+    for (const id in BODY) {
+      if (id === 'sun' || BODY[id].parent) continue;
+      const q = helioAU(BODY[id], simNow(s));
+      const d = Math.hypot(P[0] - q[0], P[1] - q[1], P[2] - q[2]) * AU_KM;
+      if (d < (GAS.includes(id) ? 3e6 : 1e6)) return { id: `near-${id}`, name: `${BODY[id].name} space`, note: 'nothing but the planet and its moons in view', density: 0 };
+    }
     const r = Math.hypot(P[0], P[1], P[2]);
-    return ZONES.find((z) => r >= z.from && r <= z.to) || DEEP;
+    return { ...(ZONES.find((z) => r >= z.from && r <= z.to) || DEEP), density: 0 };
   }
 
   updateVoyage(dt) {
@@ -394,22 +400,11 @@ export class LocalView {
         const first = !this.zone;
         this.zone = z;
         this.buildField(z, z.density, 320, !first);
-        if (!first) emit('toast', { text: `Entering ${z.name}`, kind: '' });
+        if (!first) emit('toast', { text: `Entering ${z.name}${z.note ? ` · ${z.note}` : ''}`, kind: '' });
       }
     }
-    // rare drifting contacts in open space
-    if (this.zone && this.zone.density === 0 && this.time > this.contactAt) {
-      this.contactAt = this.time + 70 + Math.random() * 90;
-      const n = 1 + ((Math.random() * 3) | 0);
-      const c = new THREE.Vector3((Math.random() - 0.5) * 160, (Math.random() - 0.5) * 60, 380);
-      for (let i = 0; i < n; i++) this.spawnContact(c.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(18)));
-      emit('toast', { text: n > 1 ? `Survey contact · ${n} objects closing ahead` : 'Survey contact · object closing ahead', kind: '' });
-    }
-    for (const r of this.rocks) {
-      if (!r.drift || !r.alive) continue;
-      r.mesh.position.z -= dt * 3.5;
-      if (r.mesh.position.z < -380) { r.alive = false; r.mesh.visible = false; r.gone = true; }
-    }
+    // Out here nothing drifts past: there is no "speed" to see against empty space, and the stars
+    // don't move. Progress shows as the destination slowly growing and the Sun changing size.
 
     for (const e of this.escorts) {
       e.mesh.position.copy(e.base);
@@ -417,34 +412,6 @@ export class LocalView {
       e.mesh.rotation.z = Math.sin(this.time * 0.3 + e.phase) * 0.03;
       setThrust(e.mesh, 0.55, this.time + e.phase);
     }
-    this.dust.visible = true;
-  }
-
-  // ---------------- dust streaks: sense of cruise speed ----------------
-  buildDust() {
-    const n = 360, pos = new Float32Array(n * 6);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    this.dustSeeds = Array.from({ length: n }, () => new THREE.Vector3((Math.random() - 0.5) * 240, (Math.random() - 0.5) * 140, (Math.random() - 0.5) * 240));
-    this.dust = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: new THREE.Color(0x9fd4ff).multiplyScalar(0.8), transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
-    this.dust.frustumCulled = false;
-    this.dust.visible = false;
-    this.scene.add(this.dust);
-  }
-
-  updateDust(dt) {
-    if (!this.dust.visible) return;
-    const tier = Math.log10(Math.max(15, this.app.state.voyage?.kms || 15));
-    const speed = 30 + tier * 28, len = 1 + tier * 2.2;
-    const p = this.dust.geometry.attributes.position, c = this.camera.position;
-    this.dustSeeds.forEach((s, i) => {
-      s.z -= speed * dt;
-      if (s.z < -120) s.z += 240;
-      const x = c.x + s.x, y = c.y + s.y, z = c.z + s.z;
-      p.setXYZ(i * 2, x, y, z);
-      p.setXYZ(i * 2 + 1, x, y, z - len);
-    });
-    p.needsUpdate = true;
   }
 
   // ---------------- salvage / mining field ----------------
@@ -499,11 +466,6 @@ export class LocalView {
     this.fieldGroup.add(m);
     this.rocks.push(rock);
     return rock;
-  }
-
-  spawnContact(at) {
-    const rock = this.addFieldObject(this.zone, (Math.random() * 6) | 0, this.fieldMat || FIELD_MATS.rock, 0, false, at);
-    rock.drift = true;
   }
 
   placeRock(rock) {
@@ -682,7 +644,6 @@ export class LocalView {
     this.updateMining(dt, I.mine, fwd);
     if (this.mode === 'base') { this.updateDrones(dt); this.updateOrbit(dt); }
     else this.updateVoyage(dt);
-    this.dust.visible = this.mode === 'voyage';
 
     for (const r of this.rocks) {
       if (r.grow !== undefined) {
@@ -693,7 +654,7 @@ export class LocalView {
       if (r.alive) {
         r.mesh.rotation.x += r.spin.x * dt; r.mesh.rotation.y += r.spin.y * dt;
         if (r.mesh.userData.blink) r.mesh.userData.blink.visible = Math.sin(this.time * 4 + r.spin.x * 50) > 0.3;
-      } else if (!r.gone && this.time > r.respawnAt && !r.drift) this.placeRock(r);
+      } else if (this.time > r.respawnAt) this.placeRock(r);
     }
 
     if (this.station) {
@@ -728,7 +689,6 @@ export class LocalView {
     }
     this.sky.position.copy(this.camera.position);
     this.camera.updateMatrixWorld();
-    this.updateDust(dt);
 
 
     this.info.cargo = Math.round(this.cargoTotal());
@@ -828,7 +788,6 @@ export class LocalView {
       target.alive = false;
       target.mesh.visible = false;
       target.respawnAt = this.time + 40;
-      if (target.drift) target.gone = true;
     }
   }
 }
