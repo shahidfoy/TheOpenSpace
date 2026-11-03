@@ -307,7 +307,7 @@ async function refresh(s) {
   c.tried = now;
   try {
     const items = await Promise.race([s.fn(), new Promise((_, no) => setTimeout(() => no(new Error('timed out')), 35000))]);
-    const sig = items.map((x) => x.id).join('|');
+    const sig = items.map((x) => `${x.id}:${x.share ?? ''}`).join('|'); // Radar pairs keep their ids while shares move
     if (sig !== c.sig || items.some((x, i) => x.lat !== c.items[i]?.lat)) { c.items = items; c.sig = sig; c.changed = now; }
     c.fetched = now;
     c.error = null;
