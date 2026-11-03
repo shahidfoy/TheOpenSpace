@@ -478,7 +478,7 @@ export class Hud {
     const rows = cyber.sources.map((s) => `<div class="row"><span><i class="cy-dot" style="--sc:${SOURCE_STYLE[s.id]?.css || '#fff'}"></i>${esc(s.name)}<small>${esc(s.what)} · ${s.on ? `${s.count} now · refreshed every ${s.every >= 3600 ? `${s.every / 3600} h` : `${Math.round(s.every / 60)} min`}${s.at ? ` · changed ${ago(s.at)}` : ''}${s.error ? ` · <span class="bad">last try failed: ${esc(s.error)}</span>` : ''}` : `off · set <b>${s.key}</b>`}</small>${!s.on && why[s.id] ? `<small>${why[s.id]}</small>` : ''}</span><b class="${s.on ? '' : 'bad'}">${s.on ? 'LIVE' : 'NEEDS KEY'}</b></div>`).join('');
     return {
       title: 'Threat sources', kicker: `${cyber.sources.filter((s) => s.on).length} of ${cyber.sources.length} live`,
-      html: `<div class="table">${rows}</div><p class="note">Keys live only on the server: set them as encrypted environment variables on the DigitalOcean "api" component (or in an untracked .env.local for the dev server). A source switches on by itself once its key is present. Tap a source's button on the map bar to show or hide it.</p>`,
+      html: `<div class="table">${rows}</div><p class="note">Keys live only on the server: set them as encrypted environment variables on the DigitalOcean "api" component (or in an untracked .env.local for the dev server). Once a key is set there and listed in functions/project.yml, its source switches on by itself. Tap a source's button on the map bar to show or hide it.</p>`,
     };
   }
 

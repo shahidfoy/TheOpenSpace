@@ -29,7 +29,8 @@ functions:
     #     type: SECRET
     #     scope: RUN_AND_BUILD_TIME
     #     value: <set in the console, never commit a real key>
-    # Others: OTX_KEY, CLOUDFLARE_RADAR_TOKEN, ABUSEIPDB_KEY, NVD_API_KEY.
+    # Others: OTX_KEY, CLOUDFLARE_RADAR_TOKEN, ABUSEIPDB_KEY, NVD_API_KEY. Each must also be listed
+    # in functions/project.yml, and only once it is set here: an unset one fails the build.
 ingress:
   rules:
     - component:
