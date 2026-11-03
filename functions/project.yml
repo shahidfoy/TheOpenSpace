@@ -1,14 +1,13 @@
 # DigitalOcean Functions project, deployed as the "api" component of the App Platform app
 # (see .do/app.yaml). The function is served at /api/threats/feed on the game's own domain.
 #
-# Optional threat-feed keys reach the function through the environment block below. The build
-# substitutes each ${NAME} from the api component's environment variables and FAILS if one isn't
-# set, so list only keys that exist (App Platform → api → Settings → Environment Variables,
-# encrypted). To switch on another source, set its variable there, then add its line here:
-#   ABUSECH_KEY: "${ABUSECH_KEY}"            abuse.ch URLhaus + ThreatFox
-#   OTX_KEY: "${OTX_KEY}"                    AlienVault OTX
-#   ABUSEIPDB_KEY: "${ABUSEIPDB_KEY}"        AbuseIPDB
-#   NVD_API_KEY: "${NVD_API_KEY}"            higher NVD rate limit
+# Optional threat-feed keys reach the function through the environment block below. App Platform
+# checks every dollar-brace reference in this file (comments included) against the api
+# component's environment variables and fails the build if one isn't set. So list only keys that
+# exist (App Platform → api → Settings → Environment Variables, encrypted, run and build time).
+# To switch on another source, set its variable there, then add a line below in the same form as
+# the Cloudflare one, named: ABUSECH_KEY (abuse.ch), OTX_KEY (AlienVault OTX), ABUSEIPDB_KEY
+# (AbuseIPDB) or NVD_API_KEY (higher NVD rate limit).
 packages:
   - name: threats
     environment:
