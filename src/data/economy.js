@@ -85,7 +85,7 @@ export const GOALS = [
   { title: 'Tycho Yards', text: 'Your Seed Ship travels in real time. When it lands, teleport there from the MAP.', check: (s) => !!s.bases.moon, reward: 3000 },
   { title: 'Moonwalker', text: 'At Tycho Yards, tap DEPLOY MECH. Walk the regolith in 1/6 g, drill glowing deposits and bring 20 t back to the landing pad.', check: (s) => (s.stats.surface || 0) >= 20, reward: 2500 },
   { title: 'Supply Line', text: 'Build a Hauler and send it to collect cargo from the Moon.', check: (s) => s.stats.hauled > 0, reward: 2000 },
-  { title: 'Flight Plan', text: 'Open MAP, pick a world and tap AUTOPILOT FLEET. Ride along in third person: fly around your convoy and salvage whatever drifts past on the way.', check: (s) => (s.stats.voyages || 0) >= 1, reward: 3000 },
+  { title: 'Flight Plan', text: 'Open MAP, pick a world and tap AUTOPILOT FLEET. Ride along in third person: debris only crowds a few places (Earth orbit, the rings of Saturn); between worlds space is truly empty and your destination slowly grows ahead.', check: (s) => (s.stats.voyages || 0) >= 1, reward: 3000 },
   { title: 'Star Fire', text: 'Research the Fusion Torch. It needs Helium-3, mined on the Moon.', check: (s) => !!s.techs.fusion, reward: 5000 },
   { title: 'Red Spire', text: 'Establish a base on Mars.', check: (s) => !!s.bases.mars, reward: 8000 },
   { title: 'Freeport', text: 'Establish Ceres Freeport in the Asteroid Belt.', check: (s) => !!s.bases.ceres, reward: 12000 },
