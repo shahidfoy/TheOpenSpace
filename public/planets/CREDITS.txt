@@ -12,6 +12,11 @@ Pluto:   NASA / Johns Hopkins APL / SwRI, New Horizons colour global mosaic. Pub
 
 Resized to 2048x1024 (close-up) and 512x256 (map) JPEGs.
 
+Earth 4k (earth_4k.jpg, ULTRA close-up only):
+  NASA Earth Observatory, Blue Marble: Next Generation (Reto Stöckli, NASA GSFC), November 2004,
+  world.200411.3x5400x2700.jpg from https://visibleearth.nasa.gov/images/74192. Public domain.
+  Resized to 4096x2048 JPEG.
+
 Live clouds (downloaded at runtime, not bundled):
   NASA Global Imagery Browse Services (GIBS), part of NASA's Earth Science Data and Information System (ESDIS).
   VIIRS Corrected Reflectance (True Color), Suomi-NPP and NOAA-20. Open data, no restrictions on use.

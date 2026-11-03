@@ -4,7 +4,7 @@ import { AU_KM, FIELDS, ZONES, DEEP } from '../data/bodies.js';
 import { RES } from '../data/economy.js';
 import { SKIFF_CAP, fleetCap, deposit, emit, simNow } from '../sim/state.js';
 import { atmosphereMaterial, glowSprite } from './shaders.js';
-import { planetMaterial, ringMesh, bodyQuat, bodyFrame } from './planets.js';
+import { planetMaterial, planetTexture, ringMesh, bodyQuat, bodyFrame } from './planets.js';
 import { cloudShell, scatteringShell, EARTH_Q } from './earthSky.js';
 import { makeSky } from './sky.js';
 import { makeCraft, poseFrame, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, makeCanister, rockGeometry, FIELD_MATS, setThrust } from './models.js';
@@ -237,7 +237,13 @@ export class LocalView {
       const clouds = cloudShell(R, u.uNight.value), air = scatteringShell(R);
       suns.push(clouds.userData.sunDir, air.userData.sunDir);
       m.add(clouds, air);
+      // ULTRA: the 4k Blue Marble surface (fetched on first use); other levels keep the 2k map
+      let hd = null, sd = u.uMap.value;
       m.onBeforeRender = () => {
+        const ultra = this.app.quality === 'ultra';
+        if (ultra && !hd) hd = planetTexture('earth_4k');
+        if (u.uMap.value !== hd) sd = u.uMap.value; // the 2k map once it has replaced the small one
+        u.uMap.value = ultra && hd.image ? hd : sd;
         const q = EARTH_Q[this.app.quality] || EARTH_Q.high;
         u.uQ.value = clouds.material.uniforms.uQ.value = q.q;
         air.material.uniforms.uSteps.value = q.steps;
