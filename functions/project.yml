@@ -1,7 +1,15 @@
 # DigitalOcean Functions project, deployed as the "api" component of the App Platform app
 # (see .do/app.yaml). The function is served at /api/threats/feed on the game's own domain.
+# Optional threat-feed keys come from the api component's environment variables (App Platform →
+# api → Settings → Environment Variables, encrypted); an unset one leaves that source off.
 packages:
   - name: threats
+    environment:
+      ABUSECH_KEY: "${ABUSECH_KEY}"
+      OTX_KEY: "${OTX_KEY}"
+      CLOUDFLARE_RADAR_TOKEN: "${CLOUDFLARE_RADAR_TOKEN}"
+      ABUSEIPDB_KEY: "${ABUSEIPDB_KEY}"
+      NVD_API_KEY: "${NVD_API_KEY}"
     functions:
       - name: feed
         runtime: nodejs:18

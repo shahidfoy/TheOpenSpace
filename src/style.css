@@ -119,7 +119,17 @@ b, strong { font-weight: 600; }
 .legend .cy-k i.c { background: linear-gradient(90deg, #3fd0ff, #b46bff, #3fffa0); border-radius: 1px; width: 14px; height: 2px; opacity: 0.7; }
 .legend .cy-k i.o { background: linear-gradient(90deg, #ff2a3a, #ff2bd6); border-radius: 2px; width: 14px; height: 3px; }
 .legend .cy-k i.r { background: #ff2a3a; transform: rotate(45deg); border-radius: 1px; }
+.legend .cy-k i.l { background: #00e5ff; box-shadow: 0 0 6px #00e5ff; }
 .legend .btn { margin-top: 6px; pointer-events: auto; }
+#cy-sources button { border-bottom: 2px solid transparent; }
+#cy-sources button.on { color: #10131a; background: var(--sc); }
+#cy-sources button:not(.on):not(.nokey) { text-decoration: line-through; opacity: 0.7; border-bottom-color: var(--sc); }
+#cy-sources button.nokey { opacity: 0.4; border-bottom: 2px dashed var(--sc); }
+.cy-ticker { display: grid; gap: 3px; margin-bottom: 6px; }
+.cy-ev { display: block; font-family: var(--mono); font-size: 10.5px; line-height: 1.3; color: #dfe6ec; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cy-ev i { font-style: normal; color: var(--sc); margin-right: 5px; letter-spacing: 0.06em; }
+.cy-ev small { color: var(--dim); margin-left: 5px; }
+.cy-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--sc); box-shadow: 0 0 5px var(--sc); }
 .cyber-label { display: grid; font-family: var(--mono); font-size: 9.5px; color: #ffc6f1; text-align: center; text-shadow: 0 0 6px #000, 0 0 2px #000; white-space: nowrap; pointer-events: none; }
 .cyber-label.origin { color: #ff9aa4; }
 .cyber-label.origin b { color: #ff5a66; }
