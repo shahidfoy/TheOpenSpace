@@ -78,6 +78,8 @@ export class LocalView {
     this.fullWarned = 0;
     this.time = 0;
     this.mode = 'base';
+    this.berth = BERTH.clone();
+    this.berthYaw = BERTH_YAW;
   }
 
   clear() {
@@ -106,19 +108,33 @@ export class LocalView {
     this.scene.add(this.craft);
   }
 
-  // Craft changes happen at the station: while you are in the exosuit your ship waits at a berth
-  // beside the station; fly up to it to board, or bring the ship into docking range to step out.
+  // Getting in and out of your ship. At a station the ship waits at a berth beside it: fly the
+  // exosuit up to it to board, or bring the ship into docking range to step out. On a fleet voyage
+  // everything coasts together, so you can step out anywhere: the ship holds formation where you
+  // left it until you fly back.
+  swapState() {
+    if (!this.craft || (this.mode !== 'base' && this.mode !== 'voyage')) return null;
+    if (this.isFrame) {
+      const dist = this.craft.position.distanceTo(this.berth);
+      return { board: true, ok: dist < BOARD_RANGE, dist: Math.max(0, dist - BOARD_RANGE) };
+    }
+    if (this.mode === 'voyage') return { board: false, ok: true, dist: 0 };
+    const dist = this.craft.position.length() - (BERTH.length() + 12);
+    return { board: false, ok: dist < 0, dist: Math.max(0, dist) };
+  }
   canSwap() {
-    if (this.mode !== 'base' || !this.craft) return false;
-    return this.isFrame ? this.craft.position.distanceTo(BERTH) < BOARD_RANGE : this.craft.position.length() < BERTH.length() + 12;
+    return !!this.swapState()?.ok;
   }
 
   switchCraft(type) {
+    const from = this.craft.position.clone(), fromYaw = this.yaw;
     this.setCraft(type);
-    this.yaw = BERTH_YAW; this.pitch = 0; this.roll = 0;
+    // EVA during a voyage: the ship stays exactly where you stopped it, nose along your heading
+    if (type === 'frame' && this.mode === 'voyage') { this.berth.copy(from); this.berthYaw = fromYaw; }
+    this.yaw = this.berthYaw; this.pitch = 0; this.roll = 0;
     // board: take the ship off its berth; EVA: the ship parks there and you step out beside it
-    this.craft.position.copy(BERTH);
-    if (type === 'frame') this.craft.position.add(tmp.set(-4, 1.2, -1).applyAxisAngle(Y_UP, BERTH_YAW));
+    this.craft.position.copy(this.berth);
+    if (type === 'frame') this.craft.position.add(tmp.set(-4, 1.2, -1).applyAxisAngle(Y_UP, this.berthYaw));
     this.craft.quaternion.setFromEuler(new THREE.Euler(0, this.yaw, 0, 'YXZ'));
     this.vel.set(0, 0, 0);
     this.updateParked();
@@ -126,11 +142,15 @@ export class LocalView {
 
   updateParked() {
     if (this.parked) { this.content?.remove(this.parked); disposeTree(this.parked); this.parked = null; }
-    if (this.mode !== 'base' || !this.isFrame || !this.content) return;
+    if ((this.mode !== 'base' && this.mode !== 'voyage') || !this.isFrame || !this.content) return;
     this.parked = makeCraft('skiff');
-    this.parked.position.copy(BERTH);
-    this.parked.rotation.y = BERTH_YAW;
+    this.parked.position.copy(this.berth);
+    this.parked.rotation.y = this.berthYaw;
     setThrust(this.parked, 0, 0);
+    // a beacon that lights up when you're close enough to climb aboard
+    this.parked.userData.beacon = glowSprite(0xffb347, 9, 1.6);
+    this.parked.userData.beacon.position.set(0, 1.4, 0);
+    this.parked.add(this.parked.userData.beacon);
     this.content.add(this.parked);
   }
 
@@ -182,6 +202,8 @@ export class LocalView {
     this.buildField(this.zone, 40, 300);
     this.buildDrones();
     this.resetCraft(24);
+    this.berth = BERTH.clone();
+    this.berthYaw = BERTH_YAW;
     this.updateParked();
     this.updateInfoCaps();
   }
@@ -319,6 +341,10 @@ export class LocalView {
     this.zoneAcc = 99;
     this.skyAcc = 99;
     this.resetCraft(6);
+    // on EVA your ship flies in formation off the convoy's starboard side
+    this.berth = new THREE.Vector3(-16, 1, 4);
+    this.berthYaw = 0;
+    this.updateParked();
     this.updateInfoCaps();
   }
 
@@ -720,10 +746,15 @@ export class LocalView {
     if (this.mode === 'base' && this.station) {
       const m = this.project(new THREE.Vector3(0, 0, 0), { label: BODY[this.baseId].base, dist: this.craft.position.length(), kind: 'home' });
       if (m.dist > 40) markers.push(m);
-      if (this.parked) {
-        const b = this.project(BERTH, { label: 'YOUR SHIP', dist: this.craft.position.distanceTo(BERTH), kind: 'home' });
-        if (b.dist > BOARD_RANGE) markers.push(b);
-      }
+    }
+    if (this.parked) {
+      // always point at your ship while you're out on EVA, with a pulsing beacon once you're in reach
+      const near = this.craft.position.distanceTo(this.berth) < BOARD_RANGE;
+      const b = this.project(this.berth, { label: near ? 'YOUR SHIP · BOARD' : 'YOUR SHIP', dist: this.craft.position.distanceTo(this.berth), kind: 'ship' });
+      markers.push(b);
+      const bc = this.parked.userData.beacon;
+      bc.material.opacity = near ? 0.75 + 0.25 * Math.sin(this.time * 6) : 0.25;
+      bc.scale.setScalar(near ? 12 + 2 * Math.sin(this.time * 6) : 7);
     }
     if (this.mode === 'voyage' && this.celest?.dest?.dir) {
       for (const [c, kind] of [[this.celest.dest, 'dest'], [this.celest.origin, 'origin']]) {

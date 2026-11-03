@@ -14,6 +14,12 @@ export const TUTORIAL = [
     desktop: [['k:[W] [A] [S] [D]', 'Fly forward, back and sideways'], ['k:Mouse drag · [←] [→] [↑] [↓]', 'Steer and look around'], ['k:[R] / [F]', 'Rise / sink'], ['k:[Shift]', 'Boost']],
   },
   {
+    kicker: 'YOUR SHIP', title: 'Board and step out',
+    body: 'Your <b>Kestrel Mk II</b> waits beside the station, marked by the amber <b>YOUR SHIP</b> marker. Fly up to it: when it glows the button on the left turns amber and reads <b>BOARD SHIP</b>. To step out again, tap <b>EXIT SHIP</b> near a station, or anywhere while your fleet is on autopilot (the ship holds formation until you come back).',
+    mobile: [['t:BOARD SHIP', 'Climb in when the button turns amber'], ['t:EXIT SHIP', 'Step out on EVA in the exosuit']],
+    desktop: [['k:[B]', 'Board your ship / step out on EVA'], ['k:Amber marker', 'Points to your ship while you are out']],
+  },
+  {
     kicker: 'SALVAGE', title: 'Mine and unload',
     body: 'Aim at a dead satellite, rocket stage or rock and hold mine. Each world has realistic material: scrap metal near Earth, ice at Saturn, asteroids in the Belt. Fly back near the station and your hold <b>unloads automatically</b>.',
     mobile: [['t:Hold MINE', 'Cut the targeted object into cargo'], ['t:Cargo ring', 'Bottom left: how full your hold is']],
