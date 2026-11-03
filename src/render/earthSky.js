@@ -78,8 +78,8 @@ void main(){
   float day = smoothstep(-0.09, 0.04, ndlG + 0.03);
   vec3 Ts = sunTrans(ndlG + 0.03);
   float wrap = clamp((ndl + 0.4) / 1.4, 0.0, 1.0); // light diffusing through the cloud body
-  vec3 lit = Ts * uLight * 1.05 * wrap * day * mix(1.0, 0.72, thick * (1.0 - clamp(ndl, 0.0, 1.0)));
-  vec3 amb = vec3(0.10, 0.14, 0.22) * uLight * smoothstep(-0.2, 0.3, ndlG);
+  vec3 lit = Ts * uLight * 0.72 * wrap * day * mix(1.0, 0.72, thick * (1.0 - clamp(ndl, 0.0, 1.0)));
+  vec3 amb = vec3(0.05, 0.07, 0.11) * uLight * smoothstep(-0.2, 0.3, ndlG);
   float fwd = pow(max(dot(-V, L), 0.0), 6.0) * (1.0 - thick) * 0.8; // thin edges glow toward the Sun
   vec3 col = vec3(0.96) * (lit + amb) + Ts * fwd * uLight * day;
   // city light from below faintly lights cloud bases on the night side

@@ -237,13 +237,15 @@ export class LocalView {
       const clouds = cloudShell(R, u.uNight.value), air = scatteringShell(R);
       suns.push(clouds.userData.sunDir, air.userData.sunDir);
       m.add(clouds, air);
-      // ULTRA: the 4k Blue Marble surface (fetched on first use); other levels keep the 2k map
-      let hd = null, sd = u.uMap.value;
+      // NASA Blue Marble surface: 4k on ULTRA, 2k otherwise (each fetched on first use); until it
+      // arrives, whatever planetMaterial is showing (the small map, then the 2k Solar System Scope one)
+      const bm = {};
+      let sd = u.uMap.value;
       m.onBeforeRender = () => {
-        const ultra = this.app.quality === 'ultra';
-        if (ultra && !hd) hd = planetTexture('earth_4k');
-        if (u.uMap.value !== hd) sd = u.uMap.value; // the 2k map once it has replaced the small one
-        u.uMap.value = ultra && hd.image ? hd : sd;
+        const name = this.app.quality === 'ultra' ? 'earth_4k' : 'earth_2k';
+        const t = bm[name] || (bm[name] = planetTexture(name));
+        if (!Object.values(bm).includes(u.uMap.value)) sd = u.uMap.value;
+        u.uMap.value = t.image ? t : sd;
         const q = EARTH_Q[this.app.quality] || EARTH_Q.high;
         u.uQ.value = clouds.material.uniforms.uQ.value = q.q;
         air.material.uniforms.uSteps.value = q.steps;
