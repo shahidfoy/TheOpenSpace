@@ -12,6 +12,8 @@ import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
 import { CRAFTS } from '../render/models.js';
 
+const VIEW_NAMES = { chase: 'CHASE', free: 'FREE LOOK', cockpit: 'COCKPIT', flyby: 'FLY-BY', overhead: 'OVERHEAD', wide: 'WIDE' };
+
 // Only touch the DOM when the markup actually changed.
 function setHtml(el, html) {
   if (el._html !== html) { el._html = html; el.innerHTML = html; }
@@ -94,6 +96,7 @@ const TEMPLATE = `
   <div class="fuel" id="fuel"><span id="grav"></span><div class="bar"><i id="fuel-b"></i></div></div>
   <button class="land" id="land" data-act="land"></button>
   <button class="craft-swap" id="craft-swap" data-act="craft"></button>
+  <button class="cam-view" id="cam-view" data-act="camView"></button>
   <div class="earthnav" id="earthnav"></div>
   <div class="attrib" id="attrib"></div>
 </div>
@@ -144,16 +147,17 @@ export class Hud {
       const t = e.target.closest('[data-open],[data-mode],[data-close],[data-act]');
       if (!t) return;
       haptic('light');
-      if (t.dataset.mode) { this.close(); app.setMode(t.dataset.mode); }
+      if (t.dataset.mode) { this.close(); t.dataset.mode === 'local' ? app.resumePilot() : app.setMode(t.dataset.mode); }
       else if (t.dataset.open) this.panel === t.dataset.open ? this.close() : this.open(t.dataset.open);
       else if (t.dataset.close !== undefined) this.close();
       else this.act(t.dataset.act, t.dataset.arg, t.dataset.arg2);
     });
 
-    // B: board your ship / step out on EVA
+    // B: board your ship / step out on EVA · C: cycle camera views
     addEventListener('keydown', (e) => {
-      if (e.code !== 'KeyB' || e.repeat || this.panel || e.target.closest?.('input,textarea')) return;
-      this.act('craft');
+      if (e.repeat || this.panel || e.target.closest?.('input,textarea')) return;
+      if (e.code === 'KeyB') this.act('craft');
+      else if (e.code === 'KeyC') this.act('camView');
     });
 
     S.onEvent((type, d) => {
@@ -206,6 +210,21 @@ export class Hud {
       case 'earthTarget': this.app.earthView.setTarget(arg); this.close(); return;
       case 'autopilot': this.app.earthView.setAutopilot(!this.app.earthView.autopilot); return;
       case 'quality': this.app.setQuality(arg); break;
+      case 'camView': {
+        const v = this.app.mode === 'earth' ? this.app.earthView : this.app.mode === 'local' ? this.app.localView : null;
+        if (!v) return;
+        const name = v.cycleView();
+        const voyage = this.app.mode === 'local' && this.app.localView.mode === 'voyage';
+        const tips = {
+          chase: 'Chase camera', free: 'Free look · drag to orbit, scroll or pinch to zoom',
+          cockpit: this.app.mode === 'earth' ? "Pilot's eye · drag to look around" : "Pilot's eye",
+          flyby: 'Fly-by camera · watch yourself streak past', overhead: 'Overhead · scroll or pinch to zoom',
+          wide: voyage ? 'Wide shot · the whole convoy' : 'Wide shot · the station and you',
+        };
+        this.toast(`${VIEW_NAMES[name]} · ${tips[name]}`, '');
+        this.syncView();
+        return;
+      }
       case 'craft': {
         const lv = this.app.localView, st = lv.swapState();
         if (!st || this.app.mode !== 'local') return;
@@ -256,6 +275,14 @@ export class Hud {
     if (this.app.mapView) this.app.mapView.select(null);
     this.syncNav();
   }
+  // Camera view chip: which view you're in, tap (or C) for the next one.
+  syncView() {
+    const el = this.$('cam-view'), m = this.app.mode;
+    const v = m === 'earth' ? this.app.earthView : m === 'local' ? this.app.localView : null;
+    el.hidden = !v;
+    if (v) setHtml(el, `<small>CAMERA</small>◎ ${VIEW_NAMES[v.view]}${isTouch() ? '' : ' <kbd>C</kbd>'}`);
+  }
+
   // Always visible while flying: it says whether you can get in or out right now, and if not, how
   // far you have to go. Bright and pulsing when the swap is available.
   syncCraft() {
@@ -275,7 +302,7 @@ export class Hud {
   }
   syncNav() {
     this.syncCraft();
-    const mode = this.app.mode === 'surface' ? 'local' : this.app.mode;
+    const mode = this.app.mode === 'map' ? 'map' : 'local'; // PILOT covers orbit, surface and Earth flight
     this.root.querySelectorAll('#nav button').forEach((b) => {
       b.classList.toggle('active', b.dataset.mode ? b.dataset.mode === mode && !this.panel : b.dataset.open === this.panel);
     });
@@ -356,6 +383,7 @@ export class Hud {
     }
     if (this.panel && (this.sheetAcc > 1 || this.dirty)) this.renderSheet();
     if (this.app.mode === 'map' && this.app.mapView.view === 'cyber' && (this.cyAcc = (this.cyAcc || 0) + dt) > 2) { this.cyAcc = 0; this.$('legend').innerHTML = this.cyberLegend(); }
+    this.syncView();
     if (this.app.mode === 'earth') this.updateEarth();
     else if (this.app.mode !== 'map') this.updatePilot();
     if (s.won && !this.winShown) this.showWin();

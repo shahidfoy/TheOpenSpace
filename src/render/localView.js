@@ -18,6 +18,7 @@ const BERTH = new THREE.Vector3(32, -4, 24); // where your ship waits beside the
 const BERTH_YAW = Math.atan2(32, 24); // nose pointing away from the station
 const BOARD_RANGE = 9;
 const TETHER = 460;
+export const LOCAL_VIEWS = ['chase', 'free', 'cockpit', 'flyby', 'wide'];
 const ROCK_TINT = { mars: 0x6a3a28, moon: 0x55524e, mercury: 0x4e4a46, ceres: 0x3f3b37, jupiter: 0x5a4636, belt: 0x403a34, trojan: 0x3a2e2a, nea: 0x4a443c, deep: 0x46403a };
 const v3 = () => new THREE.Vector3();
 const tmp = v3(), tmp2 = v3();
@@ -80,6 +81,70 @@ export class LocalView {
     this.mode = 'base';
     this.berth = BERTH.clone();
     this.berthYaw = BERTH_YAW;
+    this.view = 'chase';
+    this.oYaw = 0; this.oPitch = 0.3; this.camZoom = 1;
+  }
+
+  // ---------------- camera views (VIEW button / C key)
+  cycleView() {
+    const i = LOCAL_VIEWS.indexOf(this.view);
+    this.view = LOCAL_VIEWS[(i + 1) % LOCAL_VIEWS.length];
+    this.oYaw = 0; this.oPitch = 0.3;
+    this.flyPt = null;
+    return this.view;
+  }
+
+  updateCamera(dt, I, fwd, up, right) {
+    const s = this.craft, cam = this.camera, z = this.camZoom, f = this.isFrame;
+    s.visible = !(this.view === 'cockpit' && f);
+    const ease = (target) => cam.up.lerp(target, 1 - Math.exp(-4 * dt)).normalize();
+    if (this.view === 'cockpit') {
+      // pilot's eye, looking where the craft points
+      cam.position.copy(s.localToWorld(tmp.set(0, f ? 0.6 : 0.74, f ? 0.35 : 1.45)));
+      cam.up.copy(up);
+      cam.lookAt(tmp.copy(cam.position).add(fwd));
+    } else if (this.view === 'free') {
+      // orbit the craft: drag to swing round, wheel / pinch to zoom
+      const d = (f ? 6 : 18) * z;
+      const off = tmp.set(0, 0, -d).applyEuler(new THREE.Euler(-this.oPitch, this.oYaw, 0, 'YXZ')).applyAxisAngle(Y_UP, this.yaw);
+      cam.position.copy(s.position).add(off);
+      ease(Y_UP);
+      cam.lookAt(s.position);
+    } else if (this.view === 'flyby') {
+      // a fixed camera off your flight path: you sweep past it, then it moves on ahead
+      const spd = this.vel.length(), lead = Math.max(f ? 30 : 70, spd * 4);
+      const rel = this.flyPt ? tmp2.copy(this.flyPt).sub(s.position) : null;
+      if (!rel || rel.dot(fwd) < -lead * 0.7 || rel.length() > lead * 3) {
+        const heading = spd > 2 ? tmp2.copy(this.vel).normalize() : fwd;
+        this.flyPt = s.position.clone().addScaledVector(heading, lead).addScaledVector(right, (f ? 6 : 16) * z).addScaledVector(up, (f ? 2 : 5) * z);
+      }
+      cam.position.copy(this.flyPt);
+      ease(Y_UP);
+      cam.lookAt(s.position);
+    } else if (this.view === 'wide') {
+      // establishing shot: the station or the whole convoy with you in frame
+      const mid = tmp2.copy(s.position).multiplyScalar(0.5);
+      const d = Math.max(this.mode === 'voyage' ? 170 : 140, s.position.length() * 1.3) * z;
+      cam.position.copy(mid).add(tmp.set(0.62, 0.32, -0.72).normalize().multiplyScalar(d));
+      ease(Y_UP);
+      cam.lookAt(mid);
+    } else {
+      // CHASE: carry most of the craft's velocity so it holds station at cruise speed, and ease the
+      // rest (a little lag still sells acceleration)
+      const desired = tmp.copy(s.position).addScaledVector(fwd, (f ? -5.5 : -17) * z).addScaledVector(up, (f ? 1.7 : 4.8) * z);
+      cam.position.addScaledVector(this.vel, dt * 0.92).lerp(desired, 1 - Math.exp(-7 * dt));
+      ease(up);
+      cam.lookAt(tmp.copy(s.position).addScaledVector(fwd, f ? 3 : 8));
+    }
+    // speed reads through a wider lens in chase: FOV opens with velocity and kicks on boost
+    const fov = this.view === 'chase' ? 62 + (f ? THREE.MathUtils.clamp((this.vel.length() - 15) / 90, 0, 1) * 12 + (I.boost ? 4 : 0) : 0) : this.view === 'cockpit' ? 72
+      : this.view === 'flyby' ? THREE.MathUtils.clamp(2 * Math.atan((f ? 5 : 14) / cam.position.distanceTo(s.position)) * 180 / Math.PI, 4, 62) : 55;
+    if (Math.abs(cam.fov - fov) > 0.05) {
+      cam.fov = this.view === 'flyby' ? fov : cam.fov + (fov - cam.fov) * (1 - Math.exp(-4 * dt));
+      cam.updateProjectionMatrix();
+    }
+    const near = this.view === 'cockpit' ? 0.05 : 0.1;
+    if (cam.near !== near) { cam.near = near; cam.updateProjectionMatrix(); }
   }
 
   clear() {
@@ -600,13 +665,21 @@ export class LocalView {
     const s = this.craft;
 
     const yaw0 = this.yaw, spd = this.vel.length();
-    this.yaw -= I.lookX * 0.005;
+    // in FREE view a drag orbits the camera instead of steering (WASD still flies)
+    const orbitCam = this.view === 'free';
+    if (orbitCam) {
+      this.oYaw -= I.lookX * 0.005;
+      this.oPitch = THREE.MathUtils.clamp(this.oPitch + I.lookY * 0.004, -1.45, 1.45);
+    }
+    const lookX = orbitCam ? 0 : I.lookX, lookY = orbitCam ? 0 : I.lookY;
+    this.camZoom = THREE.MathUtils.clamp(this.camZoom * (I.zoom || 1), 0.35, 30);
+    this.yaw -= lookX * 0.005;
     // The suit flies like Iron Man: hovering, A/D strafes; at speed A/D banks into a turn and the
     // heading swings round (the body roll comes from the pose springs, not the craft frame).
     const cruise = this.isFrame ? THREE.MathUtils.smoothstep(spd, 5, 20) : 0;
     if (this.isFrame) this.yaw -= I.move.x * 1.6 * cruise * dt;
-    this.pitch = THREE.MathUtils.clamp(this.pitch + I.lookY * 0.004, -1.3, 1.3);
-    const roll = this.isFrame ? 0 : THREE.MathUtils.clamp(I.lookX * 0.03 - I.move.x * 0.35, -0.7, 0.7);
+    this.pitch = THREE.MathUtils.clamp(this.pitch + lookY * 0.004, -1.3, 1.3);
+    const roll = this.isFrame ? 0 : THREE.MathUtils.clamp(lookX * 0.03 - I.move.x * 0.35, -0.7, 0.7);
     this.roll = THREE.MathUtils.lerp(this.roll, roll, 1 - Math.exp(-5 * dt));
     s.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.roll, 'YXZ'));
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(s.quaternion);
@@ -701,18 +774,7 @@ export class LocalView {
     const dockDist = this.mode === 'base' ? s.position.length() : Infinity;
     if (dockDist < DOCK_RANGE && this.cargoTotal() > 0) this.unload();
 
-    // chase camera: carry most of the craft's velocity so it holds station at cruise speed, and
-    // ease the rest (a little lag still sells acceleration)
-    const desired = tmp.copy(s.position).addScaledVector(fwd, this.isFrame ? -5.5 : -17).addScaledVector(up, this.isFrame ? 1.7 : 4.8);
-    this.camera.position.addScaledVector(this.vel, dt * 0.92).lerp(desired, 1 - Math.exp(-7 * dt));
-    this.camera.up.lerp(up, 1 - Math.exp(-4 * dt)).normalize();
-    this.camera.lookAt(tmp.copy(s.position).addScaledVector(fwd, this.isFrame ? 3 : 8));
-    // speed reads through a wider lens: FOV opens with velocity and kicks on boost
-    const fov = 62 + (this.isFrame ? THREE.MathUtils.clamp((this.vel.length() - 15) / 90, 0, 1) * 12 + (I.boost ? 4 : 0) : 0);
-    if (Math.abs(this.camera.fov - fov) > 0.05) {
-      this.camera.fov += (fov - this.camera.fov) * (1 - Math.exp(-4 * dt));
-      this.camera.updateProjectionMatrix();
-    }
+    this.updateCamera(dt, I, fwd, up, right);
     this.sky.position.copy(this.camera.position);
     this.camera.updateMatrixWorld();
 

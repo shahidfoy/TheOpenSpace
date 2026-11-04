@@ -5,7 +5,8 @@ export function createInput(app) {
   const joy = { x: 0, y: 0, id: null };
   const held = { up: false, down: false, boost: false, mine: false };
   const look = { x: 0, y: 0 };
-  const out = { move: { x: 0, y: 0 }, lift: 0, lookX: 0, lookY: 0, mine: false, boost: false };
+  let zoom = 1; // camera distance factor gathered from the wheel / pinch since the last sample
+  const out = { move: { x: 0, y: 0 }, lift: 0, lookX: 0, lookY: 0, mine: false, boost: false, zoom: 1 };
 
   addEventListener('keydown', (e) => {
     if (e.target.closest?.('input,textarea')) return;
@@ -22,13 +23,27 @@ export function createInput(app) {
     drags.set(e.pointerId, { x: e.clientX, y: e.clientY });
     canvas.setPointerCapture?.(e.pointerId);
   });
+  const spread = () => { const [a, b] = [...drags.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   canvas.addEventListener('pointermove', (e) => {
     const p = drags.get(e.pointerId);
     if (!p) return;
+    if (drags.size === 2) {
+      // two fingers: pinch to zoom the camera in and out
+      const d0 = spread();
+      p.x = e.clientX; p.y = e.clientY;
+      const d1 = spread();
+      if (d0 > 10 && d1 > 10) zoom *= d0 / d1;
+      return;
+    }
     look.x += e.clientX - p.x;
     look.y += e.clientY - p.y;
     p.x = e.clientX; p.y = e.clientY;
   });
+  canvas.addEventListener('wheel', (e) => {
+    if (app.mode === 'map') return; // the map has its own zoom
+    e.preventDefault();
+    zoom *= Math.exp(e.deltaY * 0.0012);
+  }, { passive: false });
   const end = (e) => drags.delete(e.pointerId);
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
@@ -72,6 +87,8 @@ export function createInput(app) {
     out.lookX = look.x + (k('ArrowRight') - k('ArrowLeft')) * 320 * dt;
     out.lookY = look.y + (k('ArrowDown') - k('ArrowUp')) * 260 * dt;
     look.x = look.y = 0;
+    out.zoom = zoom;
+    zoom = 1;
     out.mine = held.mine || !!keys.Space;
     out.boost = held.boost || !!keys.ShiftLeft || !!keys.ShiftRight;
     return out;
