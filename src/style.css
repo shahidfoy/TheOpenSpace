@@ -120,6 +120,9 @@ b, strong { font-weight: 600; }
 .legend .cy-k i.o { background: linear-gradient(90deg, #ff2a3a, #ff2bd6); border-radius: 2px; width: 14px; height: 3px; }
 .legend .cy-k i.r { background: #ff2a3a; transform: rotate(45deg); border-radius: 1px; }
 .legend .cy-k i.l { background: #00e5ff; box-shadow: 0 0 6px #00e5ff; }
+.legend .cy-k i.lc { background: #ffb347; border-radius: 1px; width: 14px; height: 2px; opacity: 0.85; }
+.legend .cy-k i.sat { background: #9fd8ff; box-shadow: 0 0 6px #9fd8ff; width: 5px; height: 5px; }
+.legend .cy-k i.ol { background: none; border: 1.5px solid #ff2bd6; border-radius: 2px; width: 10px; height: 8px; }
 .legend .btn { margin-top: 6px; pointer-events: auto; }
 #cy-sources button { border-bottom: 2px solid transparent; }
 #cy-sources button.on { color: #10131a; background: var(--sc); }
