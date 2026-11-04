@@ -409,14 +409,15 @@ export class LocalView {
     this.celest.dest = mk(v.to);
     this.celest.origin = mk(v.from);
 
-    // the convoy in formation, all heading +Z
-    const slots = [[-26, -5, -14], [24, 4, -22], [-18, 9, -44], [30, -8, -50], [0, -12, -36], [-38, 2, -70]];
+    // the convoy in formation, all heading +Z. You start just behind it (z 6) with the chase camera
+    // ~17 m further back, so the formation sits ahead and to the sides where you can see it
+    const slots = [[-24, -4, 30], [24, 3, 38], [-14, 8, 62], [30, -7, 70], [0, -10, 50], [-36, 2, 88]];
     v.escorts.forEach((id, i) => {
       const sh = this.app.state.ships.find((x) => x.id === id);
       if (!sh) return;
       const m = sh.type === 'seed' ? makeSeedShip() : makeHauler();
       const [x, y, z] = slots[i % slots.length];
-      m.position.set(x, y, z - Math.floor(i / slots.length) * 40);
+      m.position.set(x, y, z + Math.floor(i / slots.length) * 40);
       this.content.add(m);
       this.escorts.push({ mesh: m, base: m.position.clone(), phase: Math.random() * 6 });
     });
@@ -904,7 +905,11 @@ export class LocalView {
         const m = this.project(tmp2.copy(c.dir).multiplyScalar(7000).add(this.camera.position), { label: BODY[c.id].name, km: c.km, kind });
         markers.push(m);
       }
-      const conv = this.project(new THREE.Vector3(0, 0, 0), { label: 'CONVOY', dist: this.craft.position.length(), kind: 'home' });
+      // point at the middle of the formation (or the convoy's position if you're flying solo)
+      const mid = new THREE.Vector3();
+      for (const e of this.escorts) mid.add(e.mesh.position);
+      if (this.escorts.length) mid.divideScalar(this.escorts.length);
+      const conv = this.project(mid, { label: this.escorts.length ? `CONVOY · ${this.escorts.length + 1} SHIPS` : 'CONVOY', dist: this.craft.position.distanceTo(mid), kind: 'home' });
       if (conv.dist > 60) markers.push(conv);
     }
     this.info.markers = markers;
