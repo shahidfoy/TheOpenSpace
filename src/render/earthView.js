@@ -22,6 +22,8 @@ export const ATTRIBUTION = `Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0
 const SEG = 32; // quads per tile edge (+1 skirt ring)
 const K = 2; // tiles each side of the player per level (5 x 5)
 const RECENTER = 30000;
+export const EARTH_VIEWS = ['chase', 'free', 'cockpit', 'flyby', 'overhead'];
+const CLOUD_BASE = 1900; // cumulus base (m); the deck is ~760 m thick, its middle casts the ground shadows
 
 export const PLACES = [
   { id: 'singapore', name: 'Singapore', lat: 1.2903, lon: 103.8519 },
@@ -86,6 +88,28 @@ function tileData(z, x, y) {
   t.used = performance.now();
   return t;
 }
+// Nearest loaded ancestor of tile t that has `key` (tex or h), with where t sits inside it:
+// t's [0,1] square maps to off + u * k in the ancestor's [0,1] square.
+function ancestor(t, key) {
+  for (let dz = 1; dz <= t.z; dz++) {
+    const a = CACHE.get(`${t.z - dz}/${t.x >> dz}/${t.y >> dz}`);
+    if (a?.[key]) {
+      const k = 1 / 2 ** dz;
+      return { t: a, k, ox: (t.x - (a.x << dz)) * k, oy: (t.y - (a.y << dz)) * k };
+    }
+  }
+  return null;
+}
+function heightSource(t) {
+  return t.h ? { t, k: 1, ox: 0, oy: 0 } : ancestor(t, 'h');
+}
+// bilinear height at (u, v) in tile space from a height source
+function sampleH(s, u, v) {
+  const x = (s.ox + u * s.k) * SEG, y = (s.oy + v * s.k) * SEG;
+  const i = Math.min(SEG - 1, Math.floor(x)), j = Math.min(SEG - 1, Math.floor(y)), a = x - i, b = y - j;
+  const H = (ii, jj) => s.t.h[jj * (SEG + 1) + ii];
+  return (H(i, j) * (1 - a) + H(i + 1, j) * a) * (1 - b) + (H(i, j + 1) * (1 - a) + H(i + 1, j + 1) * a) * b;
+}
 async function fetchBitmap(url) {
   const r = await fetch(url, { mode: 'cors' });
   if (!r.ok) throw new Error(r.status);
@@ -134,6 +158,19 @@ function pump() {
   }
 }
 
+// Cumulus field shared by the cloud layers and the shadows they cast on the ground. m = metres in
+// a frame that drifts with the wind; cov = today's real cloud cover there (0..1).
+const CLOUD_LIB = /* glsl */ `
+${NOISE}
+float cloudN(vec2 m){ return fbm(vec3(m / 5200.0, 0.0)) * 0.62 + fbm(vec3(m / 1400.0, 3.1)) * 0.28 + noise(vec3(m / 380.0, 7.7)) * 0.1; }
+// lift > 0 keeps only the thickest cores (upper layers: the clouds narrow toward their tops)
+float cloudA(float n, float cov, float lift){
+  float th = 0.68 - 0.5 * cov + lift;
+  return smoothstep(th, th + 0.06, n) * smoothstep(0.03, 0.18, cov);
+}
+vec2 cloudWind(float t){ return vec2(t * 12.0, t * 3.0); }
+`;
+
 // ---------------------------------------------------------------- terrain material
 const TERRAIN_VERT = /* glsl */ `
 attribute vec2 aMerc; attribute vec2 aGeo; attribute float aWater;
@@ -149,14 +186,15 @@ void main(){
   gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0);
 }`;
 const TERRAIN_FRAG = /* glsl */ `
-uniform sampler2D uMap; uniform sampler2D uGlobal; uniform sampler2D uLights; uniform float uHasMap;
+uniform sampler2D uMap; uniform sampler2D uGlobal; uniform sampler2D uLights; uniform float uHasMap; uniform vec3 uMapXf;
 uniform vec4 uHole; uniform vec3 uSun; uniform float uDay; uniform vec3 uCam; uniform vec3 uFog; uniform float uFogK; uniform vec3 uSky;
-uniform vec4 uCities[4]; uniform float uTime; uniform sampler2D uClouds;
+uniform vec4 uCities[4]; uniform float uTime; uniform sampler2D uClouds; uniform vec2 uOffset;
+${CLOUD_LIB}
 float gridLine(float x, float s, float w){ float d = abs(fract(x / s + 0.5) - 0.5) * s; return 1.0 - smoothstep(w, w + fwidth(x) * 1.5, d); }
 varying vec2 vUv; varying vec2 vMerc; varying vec2 vGeo; varying float vWater; varying vec3 vN; varying vec3 vW; varying float vDist;
 void main(){
   if (vMerc.x > uHole.x && vMerc.x < uHole.z && vMerc.y > uHole.y && vMerc.y < uHole.w) discard; // a finer level draws here
-  vec3 albedo = uHasMap > 0.5 ? texture2D(uMap, vUv).rgb : texture2D(uGlobal, vec2(fract(vGeo.y / 360.0 + 0.5), 0.5 + vGeo.x / 180.0)).rgb;
+  vec3 albedo = uHasMap > 0.5 ? texture2D(uMap, uMapXf.xy + vUv * uMapXf.z).rgb : texture2D(uGlobal, vec2(fract(vGeo.y / 360.0 + 0.5), 0.5 + vGeo.x / 180.0)).rgb;
   vec3 N = normalize(vN), L = normalize(uSun);
   float ndl = max(dot(N, L), 0.0);
   vec3 col = albedo * (vec3(1.0, 0.96, 0.9) * ndl * 1.25 * uDay + uSky * (0.35 * uDay) + vec3(0.025, 0.03, 0.045));
@@ -168,6 +206,14 @@ void main(){
     float sp = pow(max(dot(reflect(-L, vec3(0.0, 1.0, 0.0)), V), 0.0), 120.0);
     float fr = pow(clamp(1.0 - V.y, 0.0, 1.0), 4.0);
     col = mix(col, uSky * (0.4 * uDay + 0.03), fr * 0.6) + vec3(1.0, 0.92, 0.8) * sp * 2.0 * uDay;
+  }
+  // cloud shadows: follow the ray toward the Sun up to the middle of the cumulus deck
+  if (L.y > 0.04 && uDay > 0.05 && vDist < 90000.0) {
+    vec3 sp = vW + L * ((${CLOUD_BASE + 380}.0 - vW.y) / L.y);
+    vec2 sg = vec2(fract(vGeo.y / 360.0 + 0.5), 0.5 + vGeo.x / 180.0);
+    float sc = texture2D(uClouds, sg).r;
+    float sh = cloudA(cloudN(sp.xz + uOffset + cloudWind(uTime)), sc, 0.02);
+    col *= 1.0 - 0.38 * sh * uDay * (1.0 - smoothstep(60000.0, 90000.0, vDist));
   }
   // 2087: neon street grids light up the megacities (brightest at night)
   for (int i = 0; i < 4; i++) {
@@ -204,26 +250,65 @@ void main(){
   vDist = distance(w.xyz, uCam);
   gl_Position = projectionMatrix * viewMatrix * w;
 }`;
+// Three stacked sheets (base / middle / tops) give the deck real thickness and parallax.
 const CLOUD_FRAG = /* glsl */ `
 uniform sampler2D uClouds; uniform vec2 uOrigin; uniform vec2 uOffset; uniform vec3 uSun; uniform float uDay;
-uniform vec3 uFog; uniform float uFogK; uniform float uTime;
+uniform vec3 uFog; uniform float uFogK; uniform float uTime; uniform vec3 uCam; uniform float uLayer;
+varying vec3 vW; varying float vDist;
+${CLOUD_LIB}
+void main(){
+  float lat = uOrigin.x + (-vW.z / 6371000.0) * 57.29578;
+  float lon = uOrigin.y + (vW.x / (6371000.0 * cos(uOrigin.x * 0.0174533))) * 57.29578;
+  float cov = texture2D(uClouds, vec2(fract(lon / 360.0 + 0.5), 0.5 + lat / 180.0)).r;
+  vec2 m = vW.xz + uOffset + cloudWind(uTime);
+  float n = cloudN(m);
+  float lift = uLayer * 0.055;
+  float a = cloudA(n, cov, lift);
+  a *= 1.0 - smoothstep(110000.0, 160000.0, vDist);
+  if (a < 0.01) discard;
+  vec3 L = normalize(uSun);
+  // self-shadowing: if the cloud is thicker a little way toward the Sun, this side faces away
+  vec2 toSun = normalize(L.xz + vec2(1e-4)) * 900.0;
+  float occl = cloudN(m + toSun) - n;
+  float lit = clamp(0.7 - occl * 4.5 + uLayer * 0.18 + (n - 0.6) * 1.2, 0.15, 1.0);
+  vec3 col = mix(vec3(0.42, 0.47, 0.56), vec3(1.0, 0.985, 0.96), lit);
+  // dense cores are brighter on top; seen from underneath, the bases sit in their own shade
+  float below = step(uCam.y, vW.y);
+  col *= mix(1.0, 0.62 + 0.18 * uLayer, below);
+  // silver lining: thin edges blaze when you look toward the Sun
+  vec3 V = normalize(vW - uCam);
+  float fwd = pow(max(dot(V, L), 0.0), 10.0);
+  col += vec3(1.0, 0.9, 0.72) * fwd * (1.0 - a) * 1.6;
+  // low sun warms the clouds, night darkens them
+  col *= mix(vec3(1.0, 0.6, 0.38), vec3(1.0), smoothstep(0.0, 0.3, L.y));
+  col *= (smoothstep(-0.05, 0.3, L.y) * 0.95 + 0.1) * uDay + 0.015; // sunlit cloud is the brightest thing in view
+  col = mix(col, uFog, clamp(1.0 - exp(-vDist * uFogK), 0.0, 1.0));
+  gl_FragColor = vec4(col, a * (uLayer < 0.5 ? 0.85 : 0.92));
+}`;
+// High, thin cirrus streaks ~9.5 km up, combed out by the jet stream.
+const CIRRUS_FRAG = /* glsl */ `
+uniform sampler2D uClouds; uniform vec2 uOrigin; uniform vec2 uOffset; uniform vec3 uSun; uniform float uDay;
+uniform vec3 uFog; uniform float uFogK; uniform float uTime; uniform vec3 uCam;
 varying vec3 vW; varying float vDist;
 ${NOISE}
 void main(){
   float lat = uOrigin.x + (-vW.z / 6371000.0) * 57.29578;
   float lon = uOrigin.y + (vW.x / (6371000.0 * cos(uOrigin.x * 0.0174533))) * 57.29578;
   float cov = texture2D(uClouds, vec2(fract(lon / 360.0 + 0.5), 0.5 + lat / 180.0)).r;
-  vec2 m = vW.xz + uOffset + vec2(uTime * 12.0, uTime * 3.0); // drifting with the wind
-  float n = fbm(vec3(m / 5200.0, 0.0)) * 0.62 + fbm(vec3(m / 1400.0, 3.1)) * 0.28 + noise(vec3(m / 380.0, 7.7)) * 0.1;
-  float a = smoothstep(0.66 - 0.5 * cov, 0.84 - 0.5 * cov, n) * smoothstep(0.03, 0.18, cov);
-  a *= 1.0 - smoothstep(110000.0, 160000.0, vDist);
+  vec2 m = vW.xz + uOffset + vec2(uTime * 35.0, uTime * 6.0);
+  mat2 r = mat2(0.88, 0.47, -0.47, 0.88);
+  vec2 q = r * m;
+  float n = fbm(vec3(q.x / 16000.0, q.y / 2600.0, 5.0)) * 0.7 + noise(vec3(q.x / 3000.0, q.y / 500.0, 9.0)) * 0.3;
+  float a = smoothstep(0.56, 0.82, n) * smoothstep(0.05, 0.5, cov + 0.15) * 0.42;
+  a *= 1.0 - smoothstep(100000.0, 160000.0, vDist);
   if (a < 0.01) discard;
-  float lit = max(uSun.y, 0.0) * 0.72 * uDay + 0.16 * uDay + 0.02;
-  // billowy tops: brighter crests, grey-blue hollows
-  float shape = smoothstep(0.25, 0.95, n + noise(vec3(m / 900.0, 2.0)) * 0.25);
-  vec3 col = mix(vec3(0.55, 0.6, 0.7), vec3(1.0, 0.99, 0.97), shape) * lit;
-  col = mix(col, uFog, clamp(1.0 - exp(-vDist * uFogK), 0.0, 1.0));
-  gl_FragColor = vec4(col, a * 0.92);
+  vec3 L = normalize(uSun);
+  vec3 V = normalize(vW - uCam);
+  vec3 col = vec3(1.0, 0.99, 0.97) * ((max(L.y, 0.0) * 0.8 + 0.25) * uDay + 0.015);
+  col *= mix(vec3(1.0, 0.65, 0.45), vec3(1.0), smoothstep(0.0, 0.25, L.y));
+  col += vec3(1.0, 0.92, 0.8) * pow(max(dot(V, L), 0.0), 12.0) * 0.8 * uDay;
+  col = mix(col, uFog, clamp(1.0 - exp(-vDist * uFogK * 0.4), 0.0, 1.0));
+  gl_FragColor = vec4(col, a);
 }`;
 
 const SKY_FRAG = /* glsl */ `
@@ -279,16 +364,29 @@ export class EarthView {
     this.plasma.position.set(0, -0.3, 2.6);
     this.setCraft(app.state.craft);
 
-    this.cloudDeck = new THREE.Mesh(new THREE.PlaneGeometry(330000, 330000, 120, 120).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({
-      uniforms: {
-        uClouds: { value: weather.texture }, uCam: { value: new THREE.Vector3() }, uOrigin: { value: new THREE.Vector2() }, uOffset: { value: new THREE.Vector2() },
-        uSun: { value: new THREE.Vector3(0, 1, 0) }, uDay: { value: 1 }, uFog: { value: new THREE.Color() }, uFogK: { value: 0 }, uTime: { value: 0 },
-      },
-      vertexShader: CLOUD_VERT, fragmentShader: CLOUD_FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide,
-    }));
-    this.cloudDeck.frustumCulled = false;
-    this.cloudDeck.renderOrder = 3;
-    this.scene.add(this.cloudDeck);
+    // cloud layers: base, middle and tops of the cumulus deck, plus high cirrus. They share one set
+    // of uniforms (each layer adds its own uLayer); cloudOffset also drives the ground shadows.
+    this.cloudOffset = new THREE.Vector2();
+    this.cloudU = {
+      uClouds: { value: weather.texture }, uCam: { value: new THREE.Vector3() }, uOrigin: { value: new THREE.Vector2() }, uOffset: { value: this.cloudOffset },
+      uSun: { value: new THREE.Vector3(0, 1, 0) }, uDay: { value: 1 }, uFog: { value: new THREE.Color() }, uFogK: { value: 0 }, uTime: { value: 0 },
+    };
+    const deckGeo = new THREE.PlaneGeometry(330000, 330000, 120, 120).rotateX(-Math.PI / 2);
+    const layer = (h, frag, extra, order) => {
+      const m = new THREE.Mesh(deckGeo, new THREE.ShaderMaterial({
+        uniforms: { ...this.cloudU, ...extra }, vertexShader: CLOUD_VERT, fragmentShader: frag,
+        transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      }));
+      m.frustumCulled = false;
+      m.userData.h = h;
+      m.renderOrder = order;
+      this.scene.add(m);
+      return m;
+    };
+    this.cloudLayers = [
+      layer(9500, CIRRUS_FRAG, {}, 2),
+      ...[0, 1, 2].map((i) => layer(CLOUD_BASE + i * 380, CLOUD_FRAG, { uLayer: { value: i } }, 3 + i)),
+    ];
     this.terrain = new THREE.Group();
     this.scene.add(this.terrain);
     this.meshes = new Map();
@@ -297,6 +395,7 @@ export class EarthView {
     this.lightsTex = planetTexture('earth_night');
     this.future = new FutureEarth(this);
     this.info = { alt: 0, agl: 0, speed: 0, lat: 0, lon: 0, mach: 0, target: null, markers: [], autopilot: false, local: '', sun: { x: 0, y: 0, vis: 0 } };
+    this.view = 'chase';
     this.time = 0;
   }
 
@@ -338,7 +437,7 @@ export class EarthView {
       uCam: { value: new THREE.Vector3() }, uHole: { value: new THREE.Vector4(2, 2, 2, 2) }, uSun: { value: new THREE.Vector3(0, 1, 0) },
       uDay: { value: 1 }, uFog: { value: new THREE.Color() }, uFogK: { value: 0 }, uSky: { value: new THREE.Color() },
       uGlobal: { value: this.globalTex }, uLights: { value: this.lightsTex },
-      uCities: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTime: { value: 0 }, uClouds: { value: weather.texture },
+      uCities: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTime: { value: 0 }, uClouds: { value: weather.texture }, uOffset: { value: this.cloudOffset },
     };
     return (this.levelMats[i] = u);
   }
@@ -349,14 +448,17 @@ export class EarthView {
     const pos = new Float32Array(N * N * 3), uv = new Float32Array(N * N * 2), merc = new Float32Array(N * N * 2), geo = new Float32Array(N * N * 2), water = new Float32Array(N * N);
     const tmp = { x: 0, z: 0 };
     const size = (40075016 / n) * Math.cos(latOfRow(t.y + 0.5, n) * D2R);
+    // heights from this tile, or (until it arrives) the matching corner of a loaded parent tile,
+    // so a tile never pops in flat and wrongly flagged as sea
+    const hs = heightSource(t);
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const ci = THREE.MathUtils.clamp(i - 1, 0, SEG), cj = THREE.MathUtils.clamp(j - 1, 0, SEG);
       const skirt = i === 0 || j === 0 || i === N - 1 || j === N - 1;
       const fx = ux + ci / SEG, fy = t.y + cj / SEG;
       const lat = latOfRow(fy, n), lon = lonOfCol(fx, n);
       project(this.origin, lat, lon, tmp);
-      let h = t.h ? t.h[cj * (SEG + 1) + ci] : 0;
-      const wet = h <= 0.5;
+      let h = hs ? sampleH(hs, ci / SEG, cj / SEG) : 0;
+      const wet = !!hs && h <= 0.5;
       h = Math.max(0, h);
       const k = j * N + i;
       pos.set([tmp.x, h - (skirt ? size * 0.03 : 0), tmp.z], k * 3);
@@ -377,7 +479,20 @@ export class EarthView {
     g.setAttribute('aGeo', new THREE.BufferAttribute(geo, 2));
     g.setAttribute('aWater', new THREE.BufferAttribute(water, 1));
     g.setIndex(idx);
-    g.computeVertexNormals();
+    // Lighting normals from the height grid alone. computeVertexNormals() would fold in the skirt
+    // (dropped tens of km on coarse tiles), darkening every tile border into a visible grid.
+    const nrm = new Float32Array(N * N * 3);
+    const P = (ci, cj) => (THREE.MathUtils.clamp(cj, 0, SEG) + 1) * N + THREE.MathUtils.clamp(ci, 0, SEG) + 1;
+    const vs = new THREE.Vector3(), ve = new THREE.Vector3(), vt = new THREE.Vector3();
+    const at = (k, out) => out.set(pos[k * 3], pos[k * 3 + 1], pos[k * 3 + 2]);
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const ci = THREE.MathUtils.clamp(i - 1, 0, SEG), cj = THREE.MathUtils.clamp(j - 1, 0, SEG);
+      at(P(ci, cj + 1), vs).sub(at(P(ci, cj - 1), vt)); // southward (+z)
+      at(P(ci + 1, cj), ve).sub(at(P(ci - 1, cj), vt)); // eastward (+x)
+      vs.cross(ve).normalize(); // +z × +x = up
+      nrm.set([vs.x, vs.y, vs.z], (j * N + i) * 3);
+    }
+    g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
     g.computeBoundingSphere();
     g.boundingSphere.radius += size; // curvature is applied in the shader
     return g;
@@ -386,11 +501,11 @@ export class EarthView {
   makeMesh(t, ux, level) {
     const lu = this.levelMat(level);
     const mat = new THREE.ShaderMaterial({
-      uniforms: { ...lu, uMap: { value: t.tex }, uHasMap: { value: t.tex ? 1 : 0 } },
+      uniforms: { ...lu, uMap: { value: null }, uHasMap: { value: 0 }, uMapXf: { value: new THREE.Vector3(0, 0, 1) } },
       vertexShader: TERRAIN_VERT, fragmentShader: TERRAIN_FRAG,
     });
     const m = new THREE.Mesh(this.buildGeometry(t, ux), mat);
-    m.userData = { t, ux, level, version: t.version || 0, origin: this.origin };
+    m.userData = { t, ux, level, version: t.version || 0, hsrc: heightSource(t)?.t.key, origin: this.origin };
     m.frustumCulled = true;
     return m;
   }
@@ -424,7 +539,7 @@ export class EarthView {
         const key = `${li}|${z}/${ux}/${y}`;
         want.add(key);
         let m = this.meshes.get(key);
-        if (m && (m.userData.version !== (t.version || 0) || m.userData.origin !== this.origin)) {
+        if (m && (m.userData.version !== (t.version || 0) || m.userData.hsrc !== heightSource(t)?.t.key || m.userData.origin !== this.origin)) {
           this.terrain.remove(m); m.geometry.dispose(); m.material.dispose();
           this.meshes.delete(key);
           m = null;
@@ -446,6 +561,12 @@ export class EarthView {
   }
 
   // Ground height under (lat, lon) from the finest loaded tile.
+  // ground height under a scene-space point
+  groundAt(p) {
+    const g = unproject(this.origin, p.x, p.z);
+    return this.groundHeight(g.lat, g.lon);
+  }
+
   groundHeight(lat = this.info.lat, lon = this.info.lon) {
     for (let z = this.zc || 10; z >= 1; z--) {
       const [fx, fy] = tileXY(lat, lon, z);
@@ -507,9 +628,12 @@ export class EarthView {
       this.speed += acc * dt - (I.mine ? 400 * dt : 0);
     }
     this.speed = THREE.MathUtils.clamp(this.speed, 0, this.vmax(alt) * (I.boost ? 1.05 : 1));
+    // drag to look; in CHASE the view eases back behind you, FREE stays where you leave it
+    const free = this.view !== 'chase';
     this.lookYaw -= I.lookX * 0.004;
-    this.lookPitch = THREE.MathUtils.clamp(this.lookPitch + I.lookY * 0.003, -0.6, 1.0);
-    this.lookYaw *= Math.exp(-0.6 * dt);
+    this.lookPitch = THREE.MathUtils.clamp(this.lookPitch + I.lookY * 0.003, free ? -1.45 : -0.6, free ? 1.45 : 1.0);
+    if (!free) this.lookYaw *= Math.exp(-0.6 * dt);
+    this.camZoom = THREE.MathUtils.clamp((this.camZoom ?? 1) * (I.zoom || 1), 0.35, 40);
 
     const fwd = new THREE.Vector3(Math.sin(this.yaw) * Math.cos(this.pitch), Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch));
     this.pos.addScaledVector(fwd, this.speed * dt);
@@ -526,6 +650,7 @@ export class EarthView {
       this.origin = { lat: this.info.lat, lon: this.info.lon };
       this.originM.x = (this.originM.x + this.pos.x) % 1e6;
       this.originM.z = (this.originM.z + this.pos.z) % 1e6;
+      if (this.flyPt) { this.flyPt.x -= this.pos.x; this.flyPt.z -= this.pos.z; } // the fly-by camera shifts with the world
       this.pos.x = 0; this.pos.z = 0;
       this.tileAcc = 99;
     }
@@ -544,19 +669,10 @@ export class EarthView {
     this.plasma.material.opacity = heat * (0.75 + Math.random() * 0.25);
     this.plasma.scale.setScalar(10 + heat * 16);
 
-    // chase camera. The smoothing runs on the offset from the craft, not on the absolute camera
-    // position: at entry speed (7.6 km/s) an absolute lerp trails the craft by over a kilometre,
-    // and a floating-origin recenter would make the camera fly 30 km to catch up.
-    const camYaw = this.yaw + this.lookYaw;
-    const back = new THREE.Vector3(-Math.sin(camYaw), 0, Math.cos(camYaw));
-    const k = this.craft.userData.parts ? 0.4 : 1; // the exosuit is person-sized: sit closer
-    const want = back.multiplyScalar(16 * k * Math.cos(this.lookPitch)).add(new THREE.Vector3(0, (4 + 16 * Math.sin(this.lookPitch)) * k, 0));
-    if (!this.camOff || this.camOff.distanceTo(want) > 200) this.camOff = want.clone();
-    else this.camOff.lerp(want, 1 - Math.exp(-6 * dt));
-    this.camera.position.copy(this.pos).add(this.camOff);
-    this.camera.lookAt(this.pos.clone().addScaledVector(fwd, 8 * k));
+    this.updateCamera(dt, fwd, suit);
+    const k = suit ? 0.4 : 1;
     const horizon = Math.sqrt(2 * R * Math.max(50, this.pos.y)) * 1.25 + 20000;
-    this.camera.near = (this.pos.y > 20000 ? 4 : 1) * k;
+    this.camera.near = this.view === 'cockpit' ? 0.05 : Math.min((this.pos.y > 20000 ? 4 : 1) * k, this.camera.position.distanceTo(this.pos) * 0.2);
     this.camera.far = horizon;
     this.camera.updateProjectionMatrix();
 
@@ -610,23 +726,106 @@ export class EarthView {
       lu.uSky.value.copy(skyCol);
     }
 
-    // cloud deck follows the camera at ~2.2 km (curvature is applied in its shader)
-    const cu = this.cloudDeck.material.uniforms;
-    this.cloudDeck.position.set(this.camera.position.x, 2200, this.camera.position.z);
+    // cloud layers follow the camera (curvature is applied in their shader); drawn far-to-near so
+    // the sheets layer correctly whether you are below, inside or above the deck
+    const cu = this.cloudU;
+    // fewer cumulus sheets on lighter quality settings (each is a full-screen noise pass)
+    const sheets = { ultra: 3, high: 2, low: 1 }[this.app.quality] ?? 3;
+    this.cloudLayers.forEach((c, i) => {
+      c.visible = i === 0 || i === 1 || (sheets === 3) || (sheets === 2 && i === 3);
+      c.position.set(this.camera.position.x, c.userData.h, this.camera.position.z);
+      c.renderOrder = 12 - Math.abs(c.userData.h - this.camera.position.y) / 1e5;
+    });
     cu.uCam.value.copy(this.camera.position);
     cu.uOrigin.value.set(this.origin.lat, this.origin.lon);
     cu.uOffset.value.set(this.originM.x, this.originM.z);
     cu.uSun.value.copy(L); cu.uDay.value = day; cu.uFog.value.copy(fog); cu.uFogK.value = fogK; cu.uTime.value = this.time;
     if ((this.tileAcc += dt) > 0.25) { this.tileAcc = 0; this.updateTiles(); }
-    // swap in imagery that has arrived
+    // imagery: the tile's own once it arrives; until then the matching corner of the nearest loaded
+    // parent (same satellite mosaic, just softer) rather than the 2k global map, which differs in
+    // colour and showed up as squares while tiles streamed in
     for (const m of this.meshes.values()) {
-      const t = m.userData.t;
-      if (t.tex && m.material.uniforms.uHasMap.value === 0) { m.material.uniforms.uMap.value = t.tex; m.material.uniforms.uHasMap.value = 1; }
+      const t = m.userData.t, u = m.material.uniforms;
+      if (t.tex && u.uMap.value === t.tex && u.uHasMap.value) continue;
+      const src = t.tex ? { t, k: 1, ox: 0, oy: 0 } : ancestor(t, 'tex');
+      u.uMap.value = src ? src.t.tex : null;
+      u.uHasMap.value = src ? 1 : 0;
+      if (src) u.uMapXf.value.set(src.ox, src.oy, src.k);
     }
 
     const agl = this.pos.y - (gh || 0);
     Object.assign(this.info, { alt: this.pos.y, agl, speed: this.speed, mach: this.speed / 340, autopilot: this.autopilot, canOrbit: this.pos.y > 80000 });
     this.updateNav();
+  }
+
+  // ---------------- camera views (VIEW button / C key)
+  cycleView() {
+    const i = EARTH_VIEWS.indexOf(this.view);
+    this.view = EARTH_VIEWS[(i + 1) % EARTH_VIEWS.length];
+    this.camOff = null;
+    this.flyPt = null;
+    this.lookYaw = 0; this.lookPitch = this.view === 'free' ? 0.25 : 0;
+    return this.view;
+  }
+
+  setFov(f) {
+    if (Math.abs(this.camera.fov - f) > 0.01) { this.camera.fov = f; this.camera.updateProjectionMatrix(); }
+  }
+
+  updateCamera(dt, fwd, suit) {
+    const cam = this.camera, k = suit ? 0.4 : 1, z = this.camZoom ?? 1;
+    const camYaw = this.yaw + this.lookYaw;
+    cam.up.set(0, 1, 0);
+    if (this.view !== 'flyby') this.setFov(62);
+    this.craft.visible = !(this.view === 'cockpit' && suit); // inside the helmet you don't see the suit
+    if (this.view === 'cockpit') {
+      // pilot's eye: just above the canopy (skiff) or behind the visor (suit); drag to look around
+      cam.position.copy(this.craft.localToWorld(new THREE.Vector3(0, suit ? 0.6 : 0.74, suit ? 0.35 : 1.45)));
+      const dir = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(-this.lookPitch, -this.lookYaw, 0, 'YXZ'))
+        .applyQuaternion(this.craft.quaternion);
+      cam.lookAt(cam.position.clone().add(dir));
+      return;
+    }
+    if (this.view === 'flyby') {
+      // a fixed camera beside the flight path: you streak past it, then it jumps ahead again
+      const lead = Math.max(60, this.speed * 1.5) * k;
+      const side = new THREE.Vector3(-fwd.z, 0, fwd.x).normalize();
+      const rel = this.flyPt ? this.flyPt.clone().sub(this.pos) : null;
+      if (!rel || rel.dot(fwd) < -lead * 0.8 || rel.length() > lead * 3) {
+        this.flyPt = this.pos.clone().addScaledVector(fwd, lead).addScaledVector(side, (18 + this.speed * 0.012) * k * z)
+          .add(new THREE.Vector3(0, (3 + this.speed * 0.004) * k, 0));
+        const gh = this.groundAt(this.flyPt);
+        if (gh !== null) this.flyPt.y = Math.max(this.flyPt.y, gh + 20);
+      }
+      cam.position.copy(this.flyPt);
+      cam.lookAt(this.pos);
+      // a tracking camera zooms in: keep the craft about the same size on screen however far it is
+      this.setFov(THREE.MathUtils.clamp(2 * Math.atan((14 * k) / cam.position.distanceTo(this.pos)) / D2R, 3, 62));
+      return;
+    }
+    if (this.view === 'overhead') {
+      // straight down on the craft, nose pointing up the screen
+      cam.position.copy(this.pos).add(new THREE.Vector3(0, 60 * k * z, 0)).addScaledVector(fwd, -2 * k);
+      cam.up.set(fwd.x, 0, fwd.z).normalize();
+      cam.lookAt(this.pos);
+      return;
+    }
+    // CHASE (eases back behind you) and FREE (orbit the craft anywhere, zoom with wheel / pinch).
+    // The smoothing runs on the offset from the craft, not on the absolute camera position: at
+    // entry speed (7.6 km/s) an absolute lerp trails by over a kilometre, and a floating-origin
+    // recenter would make the camera fly 30 km to catch up.
+    const back = new THREE.Vector3(-Math.sin(camYaw), 0, Math.cos(camYaw));
+    const d = 16 * k * z;
+    const want = this.view === 'free'
+      ? back.multiplyScalar(d * Math.cos(this.lookPitch)).add(new THREE.Vector3(0, d * Math.sin(this.lookPitch), 0))
+      : back.multiplyScalar(d * Math.cos(this.lookPitch)).add(new THREE.Vector3(0, (4 * z + 16 * z * Math.sin(this.lookPitch)) * k, 0));
+    if (!this.camOff || this.camOff.distanceTo(want) > 200 * z) this.camOff = want.clone();
+    else this.camOff.lerp(want, 1 - Math.exp(-(this.view === 'free' ? 12 : 6) * dt));
+    cam.position.copy(this.pos).add(this.camOff);
+    // keep the camera out of the ground
+    const gh = this.groundAt(cam.position);
+    if (gh !== null && cam.position.y < gh + 3) cam.position.y = gh + 3;
+    cam.lookAt(this.view === 'free' ? this.pos : this.pos.clone().addScaledVector(fwd, 8 * k));
   }
 
   // Autopilot: great-circle course, climb into the hypersonic corridor for long legs, descend on approach.

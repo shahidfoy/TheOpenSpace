@@ -31,6 +31,10 @@ const QUALITY = {
   low: { post: false, msaa: 0, maxPR: 1, bloomScale: 0.5, lens: false },
 };
 
+// hands-off controls for flight that keeps running behind the map
+const IDLE = { move: { x: 0, y: 0 }, lift: 0, lookX: 0, lookY: 0, mine: false, boost: false, zoom: 1 };
+const IDLE_INPUT = { sample: () => IDLE };
+
 async function boot() {
   initTelegram();
   const params = new URLSearchParams(location.search);
@@ -150,9 +154,13 @@ async function boot() {
   app.canLand = () => !state.aboard && app.localView.mode === 'base' && !!SURFACES[state.presence];
   // Eden: drop into Earth's atmosphere below the station's real ground track
   app.canDescend = () => !state.aboard && app.localView.mode === 'base' && state.presence === 'earth';
+  // Opening the MAP only pauses the view, not the flight: Earth flight (and its autopilot) keeps
+  // running underneath, and PILOT brings you back to wherever you were flying.
+  app.flight = 'local'; // 'local' (orbit / voyage), 'surface' or 'earth'
+  app.resumePilot = () => app.setMode(app.flight);
   app.setMode = (m) => {
-    if (m === 'surface' && !app.canLand()) return;
-    if (m === 'earth' && app.mode !== 'earth') {
+    if (m === 'surface' && app.flight !== 'surface' && !app.canLand()) return;
+    if (m === 'earth' && app.flight !== 'earth') {
       if (!app.canDescend()) return;
       if (app.localView.cargoTotal()) app.localView.unload();
       const sp = EarthView.subPoint(app.localView.orbit.r, S.simNow(state));
@@ -160,11 +168,12 @@ async function boot() {
       app.earthView.enter(sp.lat, sp.lon);
       app.hud.toast(`Atmospheric entry at ${Math.abs(sp.lat).toFixed(1)}°${sp.lat >= 0 ? 'N' : 'S'} ${Math.abs(sp.lon).toFixed(1)}°${sp.lon >= 0 ? 'E' : 'W'} · pick a destination`, 'good');
     }
-    if (app.mode === 'surface' && m !== 'surface' && app.surfaceView.cargoTotal()) app.surfaceView.unload();
-    if (m === 'surface' && app.mode !== 'surface') {
+    if (app.flight === 'surface' && m !== 'surface' && m !== 'map' && app.surfaceView.cargoTotal()) app.surfaceView.unload();
+    if (m === 'surface' && app.flight !== 'surface') {
       app.hud.flash();
       app.surfaceView.setBase(state.presence);
     }
+    if (m !== 'map') app.flight = m;
     app.mode = m;
     document.getElementById('labels').style.display = m === 'map' ? '' : 'none';
     if (m === 'map') app.mapView.focus(state.aboard && state.voyage ? 'fleet' : state.presence, 42);
@@ -267,8 +276,11 @@ async function boot() {
     if (saveAcc > 10) { saveAcc = 0; app.save(); }
 
     const view = app.mode === 'local' ? app.localView : app.mode === 'surface' ? app.surfaceView : app.mode === 'earth' ? app.earthView : app.mapView;
-    if (app.mode === 'map') view.update(dt, S.simNow(state));
-    else view.update(dt, app.input);
+    if (app.mode === 'map') {
+      view.update(dt, S.simNow(state));
+      // the atmospheric flight carries on while you look at the map (hands off the controls)
+      if (app.flight === 'earth') app.earthView.update(dt, IDLE_INPUT);
+    } else view.update(dt, app.input);
 
     const q = QUALITY[app.quality];
     if (q.post) {
