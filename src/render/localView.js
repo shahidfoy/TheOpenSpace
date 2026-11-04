@@ -905,12 +905,13 @@ export class LocalView {
         const m = this.project(tmp2.copy(c.dir).multiplyScalar(7000).add(this.camera.position), { label: BODY[c.id].name, km: c.km, kind });
         markers.push(m);
       }
-      // point at the middle of the formation (or the convoy's position if you're flying solo)
+      // point at the middle of the formation
       const mid = new THREE.Vector3();
       for (const e of this.escorts) mid.add(e.mesh.position);
       if (this.escorts.length) mid.divideScalar(this.escorts.length);
-      const conv = this.project(mid, { label: this.escorts.length ? `CONVOY · ${this.escorts.length + 1} SHIPS` : 'CONVOY', dist: this.craft.position.distanceTo(mid), kind: 'home' });
-      if (conv.dist > 60) markers.push(conv);
+      const conv = this.project(mid, { label: `CONVOY · ${this.escorts.length + 1} SHIPS`, dist: this.craft.position.distanceTo(mid), kind: 'home' });
+      // flying solo there's no formation to point at (the tether still keeps you on course)
+      if (this.escorts.length && conv.dist > 60) markers.push(conv);
     }
     this.info.markers = markers;
     // sun flare: on-screen position and whether a planet blocks it

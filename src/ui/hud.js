@@ -804,8 +804,22 @@ export class Hud {
     if (id !== here) {
       const cv = S.canVoyage(s, id, escorts);
       const picks = docked.map((x) => `<button class="esc ${this.escortSel.has(x.id) ? 'on' : ''}" data-act="escort" data-arg="${x.id}">${x.type === 'seed' ? 'SEED' : 'HAULER'} #${x.id}<small>${Math.round(SHIPS[x.type].speed * 100)}% · ${SHIPS[x.type].cargo ? `+${SHIPS[x.type].cargo} t` : 'founds base'}</small></button>`).join('');
+      // nothing docked here to bring along: say so, and where the ships are
+      let solo = '';
+      if (!docked.length) {
+        const where = s.ships.map((x) => {
+          const name = `${x.type === 'seed' ? 'Seed ship' : 'Hauler'} #${x.id}`;
+          if (x.status === 'transit') {
+            const tr = s.trips.find((r) => r.shipId === x.id);
+            return tr ? `${name} · en route to ${BODY[tr.to].name}, ${fmtDur(tr.arrive - t)}` : `${name} · in transit`;
+          }
+          if (x.status === 'docked') return `${name} · docked at ${BODY[x.at || 'earth'].base}`;
+          return null;
+        }).filter(Boolean);
+        solo = `<p class="note esc-none">No ships are docked at ${BODY[here].base}, so this would be a <b>solo</b> flight. Any ship docked here when you engage joins the convoy and flies in formation with you.${where.length ? `<br>Your ships: ${where.join(' · ')}.` : ' Build haulers or seed ships in <b>FLEET</b> to fly with a convoy.'}</p>`;
+      }
       actions += `<div class="plan"><div class="plan-h"><span>AUTOPILOT FLEET</span><b>${fmtDur(S.travelMs(s, here, id, t, kms))}</b></div>
-        <div class="escorts"><span class="esc lead">KESTREL SKIFF<small>you · ${SKIFF.cargo} t</small></span>${picks}</div>
+        <div class="escorts"><span class="esc lead">KESTREL SKIFF<small>you · ${SKIFF.cargo} t</small></span>${picks}</div>${solo}
         <div class="plan-f">${fmt(kms)} km/s convoy · hold ${S.fleetCap(s, escorts)} t · from ${BODY[here].name}</div>
         <button class="btn big" data-act="voyage" data-arg="${id}" ${cv.ok ? '' : 'disabled'}>${cv.ok ? `ENGAGE AUTOPILOT → ${b.name.toUpperCase()}` : cv.why}</button></div>`;
     } else actions += `<div class="note">${s.aboard ? 'Your fleet is bound here.' : 'You are here.'}</div>`;
