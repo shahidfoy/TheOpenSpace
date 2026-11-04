@@ -3,7 +3,8 @@ import { BODIES, C_KMS, AU_KM, FIELDS } from '../data/bodies.js';
 import { BODY, distKm, orbitTilt } from '../sim/orbits.js';
 import * as S from '../sim/state.js';
 import { backButton, haptic, notify } from '../telegram.js';
-import { PLACES, ATTRIBUTION, gc } from '../render/earthView.js';
+import { PLACES, ATTRIBUTION, gc, stormPlaces } from '../render/earthView.js';
+import { live as liveWx, compass } from '../render/liveWeather.js';
 import { FUTURE_CITIES } from '../render/futureEarth.js';
 import { TUTORIAL, isTouch } from './tutorial.js';
 import { cyber, placeOf, CYBER_LAYERS, SOURCE_STYLE, describe, placeName } from '../render/cyberView.js';
@@ -478,7 +479,7 @@ export class Hud {
     land.style.display = can || surf || desc ? '' : 'none';
     land.dataset.act = desc && !surf ? 'descend' : 'land';
     land.disabled = false;
-    if (desc && !surf) land.textContent = '⬇ DESCEND TO EARTH';
+    if (desc && !surf) { const g = this.app.localView.info.descent; land.textContent = g ? `⬇ DESCEND HERE · ${Math.abs(g.lat).toFixed(1)}°${g.lat >= 0 ? 'N' : 'S'} ${Math.abs(g.lon).toFixed(1)}°${g.lon >= 0 ? 'E' : 'W'}` : '⬇ DESCEND TO EARTH'; }
     else if (can || surf) land.textContent = surf ? '⬆ RETURN TO ORBIT' : `⬇ DEPLOY MECH · ${BODY[this.app.state.presence].name.toUpperCase()}`;
   }
 
@@ -490,7 +491,10 @@ export class Hud {
     const altTxt = info.alt >= 10000 ? `${(info.alt / 1000).toFixed(1)} km` : `${Math.round(info.alt).toLocaleString()} m`;
     this.$('spd').innerHTML = `<b>${Math.round(info.speed * 3.6).toLocaleString()}</b><small>KM/H · MACH ${info.mach.toFixed(1)}</small><span>ALT ${altTxt} · AGL ${Math.max(0, info.agl / 1000).toFixed(1)} km</span>`;
     const la = info.lat, lo = info.lon;
-    this.$('zone').textContent = `${Math.abs(la).toFixed(3)}°${la >= 0 ? 'N' : 'S'} ${Math.abs(lo).toFixed(3)}°${lo >= 0 ? 'E' : 'W'} · ${info.local}`;
+    // live weather where you are (Open-Meteo, a few minutes old at most)
+    const w = info.wx;
+    const wxTxt = w ? ` · ${w.text} ${Math.round(w.temp)}°C · wind ${Math.round(w.wind)} m/s ${compass(w.windFrom)}${w.vis && w.vis < 10000 ? ` · vis ${(w.vis / 1000).toFixed(1)} km` : ''}` : liveWx.error ? ' · weather offline' : '';
+    this.$('zone').textContent = `${Math.abs(la).toFixed(3)}°${la >= 0 ? 'N' : 'S'} ${Math.abs(lo).toFixed(3)}°${lo >= 0 ? 'E' : 'W'} · ${info.local}${wxTxt}`;
     const t = info.target;
     // text and buttons are separate boxes, each only rewritten when it changes (this runs every
     // frame; rebuilding a button between pointer-down and pointer-up swallows the click)
@@ -507,14 +511,14 @@ export class Hud {
 
   pEarthNav() {
     const e = this.app.earthView, { lat, lon } = e.info;
-    const rows = PLACES.map((p) => {
+    const rows = [...stormPlaces(), ...PLACES].map((p) => {
       const { d } = gc(lat, lon, p.lat, p.lon);
       // hypersonic leg at ~7 km/s plus ~12 min climbing out and descending
       const eta = d > 300e3 ? d / 7000 + 720 : d / 250;
       return { p, d, eta };
-    }).sort((a, b) => a.d - b.d).map(({ p, d, eta }) => `<div class="row"><span>${p.name}<small>${FUTURE_CITIES[p.id] ? `<em class="fut">${FUTURE_CITIES[p.id].title}</em> · ` : ''}${Math.abs(p.lat).toFixed(2)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(2)}°${p.lon >= 0 ? 'E' : 'W'}</small></span><span>${fmt(d / 1000)} km</span><b>${fmtDur(eta * 1000)}</b>
+    }).sort((a, b) => (b.p.storm ? 1 : 0) - (a.p.storm ? 1 : 0) || a.d - b.d).map(({ p, d, eta }) => `<div class="row"><span>${p.storm ? '🌀 ' : ''}${p.name}<small>${p.storm ? `<em class="storm">LIVE · ${p.storm.category} · ${p.storm.kmh} km/h · ${p.storm.src}</em> · ` : ''}${FUTURE_CITIES[p.id] ? `<em class="fut">${FUTURE_CITIES[p.id].title}</em> · ` : ''}${Math.abs(p.lat).toFixed(2)}°${p.lat >= 0 ? 'N' : 'S'} ${Math.abs(p.lon).toFixed(2)}°${p.lon >= 0 ? 'E' : 'W'}</small></span><span>${fmt(d / 1000)} km</span><b>${fmtDur(eta * 1000)}</b>
       <button class="btn sm" data-act="earthTarget" data-arg="${p.id}">SET</button></div>`).join('');
-    return { title: 'Destinations', kicker: 'Real places · real distances', html: `<p class="note">Set a target, then fly there yourself or tap AUTOPILOT. Long legs climb into the hypersonic corridor (~7 km/s at 60–90 km) and descend on approach, so Singapore → Mount Fuji (5,200 km) takes about 25 minutes in real time.</p><div class="table launch">${rows}</div>` };
+    return { title: 'Destinations', kicker: 'Real places · real distances', html: `<p class="note">Set a target, then fly there yourself or tap AUTOPILOT. Long legs climb into the hypersonic corridor (~7 km/s at 60–90 km) and descend on approach, so Singapore → Mount Fuji (5,200 km) takes about 25 minutes in real time. Live tropical cyclones are listed too: fly into the eye of a real storm.</p><div class="table launch">${rows}</div>` };
   }
 
   // ---------- live cyber threats ----------

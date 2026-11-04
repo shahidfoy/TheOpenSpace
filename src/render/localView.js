@@ -19,6 +19,7 @@ const BERTH_YAW = Math.atan2(32, 24); // nose pointing away from the station
 const BOARD_RANGE = 9;
 const TETHER = 460;
 export const LOCAL_VIEWS = ['chase', 'free', 'cockpit', 'flyby', 'wide'];
+const fmtLatLon = (la, lo) => `${Math.abs(la).toFixed(1)}°${la >= 0 ? 'N' : 'S'} ${Math.abs(lo).toFixed(1)}°${lo >= 0 ? 'E' : 'W'}`;
 const ROCK_TINT = { mars: 0x6a3a28, moon: 0x55524e, mercury: 0x4e4a46, ceres: 0x3f3b37, jupiter: 0x5a4636, belt: 0x403a34, trojan: 0x3a2e2a, nea: 0x4a443c, deep: 0x46403a };
 const v3 = () => new THREE.Vector3();
 const tmp = v3(), tmp2 = v3();
@@ -271,6 +272,21 @@ export class LocalView {
     this.berthYaw = BERTH_YAW;
     this.updateParked();
     this.updateInfoCaps();
+  }
+
+  // The real place directly under your craft on the planet drawn below you, and the compass
+  // heading you're facing over it: where a descent drops you, pointing the way you were flying.
+  groundBelow() {
+    if (this.mode !== 'base' || !this.planet) return null;
+    const pl = this.planet, inv = pl.quaternion.clone().invert();
+    // body-fixed frame: x = lon 0, y = north pole, -z = lon 90°E (same as the planet texture)
+    const u = tmp.copy(this.craft.position).sub(pl.position).normalize().applyQuaternion(inv);
+    const lat = Math.asin(THREE.MathUtils.clamp(u.y, -1, 1)), lon = Math.atan2(-u.z, u.x);
+    const f = new THREE.Vector3(0, 0, 1).applyQuaternion(this.craft.quaternion).applyQuaternion(inv);
+    const E = new THREE.Vector3(-Math.sin(lon), 0, -Math.cos(lon));
+    const N = new THREE.Vector3(-Math.sin(lat) * Math.cos(lon), Math.cos(lat), Math.sin(lat) * Math.sin(lon));
+    const heading = ((Math.atan2(f.dot(E), f.dot(N)) * 180) / Math.PI + 360) % 360;
+    return { lat: (lat * 180) / Math.PI, lon: (lon * 180) / Math.PI, heading };
   }
 
   updateOrbit(dt) {
@@ -808,6 +824,15 @@ export class LocalView {
     if (this.mode === 'base' && this.station) {
       const m = this.project(new THREE.Vector3(0, 0, 0), { label: BODY[this.baseId].base, dist: this.craft.position.length(), kind: 'home' });
       if (m.dist > 40) markers.push(m);
+      // Eden: the spot on Earth a descent would drop you onto (straight below you)
+      if (this.baseId === 'earth' && this.planet && !this.app.state.aboard) {
+        const R = this.planet.geometry.parameters.radius;
+        const p = tmp2.copy(this.craft.position).sub(this.planet.position).setLength(R).add(this.planet.position);
+        const g = this.groundBelow();
+        const km = this.craft.position.distanceTo(p) * (BODY.earth.radiusKm / R); // scene units → real km
+        markers.push(this.project(p, { label: `DESCENT POINT ${fmtLatLon(g.lat, g.lon)}`, km, kind: 'dest' }));
+        this.info.descent = g;
+      }
     }
     if (this.parked) {
       // always point at your ship while you're out on EVA, with a pulsing beacon once you're in reach

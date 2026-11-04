@@ -163,9 +163,10 @@ async function boot() {
     if (m === 'earth' && app.flight !== 'earth') {
       if (!app.canDescend()) return;
       if (app.localView.cargoTotal()) app.localView.unload();
-      const sp = EarthView.subPoint(app.localView.orbit.r, S.simNow(state));
+      // straight down from where you are: the ground under your craft, facing the way you face
+      const sp = app.localView.groundBelow() || { ...EarthView.subPoint(app.localView.orbit.r, S.simNow(state)), heading: 60 };
       app.hud.flash();
-      app.earthView.enter(sp.lat, sp.lon);
+      app.earthView.enter(sp.lat, sp.lon, 100000, sp.heading);
       app.hud.toast(`Atmospheric entry at ${Math.abs(sp.lat).toFixed(1)}°${sp.lat >= 0 ? 'N' : 'S'} ${Math.abs(sp.lon).toFixed(1)}°${sp.lon >= 0 ? 'E' : 'W'} · pick a destination`, 'good');
     }
     if (app.flight === 'surface' && m !== 'surface' && m !== 'map' && app.surfaceView.cargoTotal()) app.surfaceView.unload();
