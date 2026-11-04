@@ -313,7 +313,7 @@ export function startVoyage(s, to, escorts = []) {
   s.voyage = { from: s.presence, to, depart: t, arrive: t + travelMs(s, s.presence, to, t, kms), escorts: [...escorts], kms, cargo: {} };
   for (const id of escorts) s.ships.find((x) => x.id === id).status = 'fleet';
   s.aboard = true;
-  emit('toast', { text: `Autopilot engaged · ${BODY[to].name}`, kind: 'good' });
+  emit('toast', { text: `Autopilot engaged · ${BODY[to].name}${escorts.length ? ` · convoy of ${escorts.length + 1}` : ' · flying solo (no ships were docked to join you)'}`, kind: 'good' });
   emit('voyageStart');
   emit('stationChanged', s.presence);
   emit('changed');
