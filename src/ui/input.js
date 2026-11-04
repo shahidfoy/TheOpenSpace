@@ -49,9 +49,11 @@ export function createInput(app) {
   canvas.addEventListener('pointercancel', end);
 
   function bindJoystick(base, knob) {
-    const R = 46;
+    // travel = 37% of the stick's on-screen size (it shrinks on small phones)
+    let R = 46;
     const set = (e) => {
       const r = base.getBoundingClientRect();
+      R = r.width * 0.37;
       let dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
       const l = Math.hypot(dx, dy);
       if (l > R) { dx *= R / l; dy *= R / l; }

@@ -7,7 +7,7 @@ import { atmosphereMaterial, glowSprite } from './shaders.js';
 import { planetMaterial, planetTexture, ringMesh, bodyQuat, bodyFrame } from './planets.js';
 import { cloudShell, scatteringShell, EARTH_Q } from './earthSky.js';
 import { makeSky } from './sky.js';
-import { makeCraft, poseFrame, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, makeCanister, rockGeometry, FIELD_MATS, setThrust } from './models.js';
+import { makeCraft, poseFrame, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, makeCanister, rockGeometry, FIELD_MATS, setThrust, portraitPullback, updateShipFX } from './models.js';
 import { haptic } from '../telegram.js';
 
 const SUN_DIR = new THREE.Vector3(0.85, 0.5, 0.15).normalize();
@@ -96,7 +96,8 @@ export class LocalView {
   }
 
   updateCamera(dt, I, fwd, up, right) {
-    const s = this.craft, cam = this.camera, z = this.camZoom, f = this.isFrame;
+    // portrait phones see a narrow slice horizontally: sit further back so the craft doesn't fill it
+    const s = this.craft, cam = this.camera, z = this.camZoom * portraitPullback(cam.aspect), f = this.isFrame;
     s.visible = !(this.view === 'cockpit' && f);
     const ease = (target) => cam.up.lerp(target, 1 - Math.exp(-4 * dt)).normalize();
     if (this.view === 'cockpit') {
@@ -136,9 +137,11 @@ export class LocalView {
       cam.position.addScaledVector(this.vel, dt * 0.92).lerp(desired, 1 - Math.exp(-7 * dt));
       ease(up);
       cam.lookAt(tmp.copy(s.position).addScaledVector(fwd, f ? 3 : 8));
+      // afterburner rumble
+      if (I.boost && !f) cam.position.add(tmp.set(Math.random() - 0.5, Math.random() - 0.5, 0).multiplyScalar(0.12 * z).applyQuaternion(cam.quaternion));
     }
     // speed reads through a wider lens in chase: FOV opens with velocity and kicks on boost
-    const fov = this.view === 'chase' ? 62 + (f ? THREE.MathUtils.clamp((this.vel.length() - 15) / 90, 0, 1) * 12 + (I.boost ? 4 : 0) : 0) : this.view === 'cockpit' ? 72
+    const fov = this.view === 'chase' ? 62 + (f ? THREE.MathUtils.clamp((this.vel.length() - 15) / 90, 0, 1) * 12 + (I.boost ? 4 : 0) : THREE.MathUtils.clamp(this.vel.length() / 70, 0, 1) * 7 + (I.boost ? 5 : 0)) : this.view === 'cockpit' ? 72
       : this.view === 'flyby' ? THREE.MathUtils.clamp(2 * Math.atan((f ? 5 : 14) / cam.position.distanceTo(s.position)) * 180 / Math.PI, 4, 62) : 55;
     if (Math.abs(cam.fov - fov) > 0.05) {
       cam.fov = this.view === 'flyby' ? fov : cam.fov + (fov - cam.fov) * (1 - Math.exp(-4 * dt));
@@ -197,7 +200,7 @@ export class LocalView {
     this.setCraft(type);
     // EVA during a voyage: the ship stays exactly where you stopped it, nose along your heading
     if (type === 'frame' && this.mode === 'voyage') { this.berth.copy(from); this.berthYaw = fromYaw; }
-    this.yaw = this.berthYaw; this.pitch = 0; this.roll = 0;
+    this.yaw = this.berthYaw; this.pitch = 0; this.roll = 0; this.q = null;
     // board: take the ship off its berth; EVA: the ship parks there and you step out beside it
     this.craft.position.copy(this.berth);
     if (type === 'frame') this.craft.position.add(tmp.set(-4, 1.2, -1).applyAxisAngle(Y_UP, this.berthYaw));
@@ -223,7 +226,7 @@ export class LocalView {
   resetCraft(z = 24) {
     this.craft.position.set(0, -1, z);
     this.vel.set(0, 0, 0);
-    this.yaw = 0; this.pitch = 0;
+    this.yaw = 0; this.pitch = 0; this.roll = 0; this.q = null;
     this.camera.position.set(0, 3, z - 12);
   }
 
@@ -675,6 +678,43 @@ export class LocalView {
     return got;
   }
 
+  // Six degrees of freedom for the skiff: the drag (or arrows) asks for a pitch / yaw rate, the
+  // stick's left-right (A/D) for a roll rate. The ship turns toward the asked rate with a little
+  // inertia, and flight assist stops the rotation when you let go. No gimbal limits: loop, roll,
+  // fly upside down. Returns the ship's axes.
+  flySkiff(dt, I, lookX, lookY) {
+    if (!this.q) {
+      this.q = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.roll, 'YXZ'));
+      this.w = new THREE.Vector3(); // angular velocity, ship frame: x pitch (nose down +), y yaw (nose left +), z roll (right wing down +)
+      this.bankVis = 0;
+    }
+    const d = Math.max(dt, 1 / 240);
+    // a drag of N px this frame = a turn of N * 4 mrad; as a rate that's what the finger is doing now
+    const target = tmp2.set(
+      THREE.MathUtils.clamp((lookY * 0.0042) / d, -2.6, 2.6),
+      THREE.MathUtils.clamp((-lookX * 0.0042) / d, -2.6, 2.6),
+      I.move.x * 2.4,
+    );
+    const demand = this.rcs || (this.rcs = new THREE.Vector3());
+    demand.copy(target).sub(this.w); // what the attitude thrusters have to deliver (drives the RCS puffs)
+    // rate response: quick to start a turn, a touch slower to stop it (mass)
+    const k = 1 - Math.exp(-(target.lengthSq() > 1e-4 ? 9 : 5.5) * dt);
+    this.w.lerp(target, k);
+    const dq = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.w.x * dt, this.w.y * dt, this.w.z * dt, 'YXZ'));
+    this.q.multiply(dq).normalize();
+    // cosmetic: lean a little into a yaw turn, the way a winged ship looks right doing it
+    this.bankVis = THREE.MathUtils.lerp(this.bankVis, THREE.MathUtils.clamp(-this.w.y * 0.32, -0.45, 0.45), 1 - Math.exp(-4 * dt));
+    this.craft.quaternion.copy(this.q).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), this.bankVis));
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(this.q);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(this.q);
+    const right = new THREE.Vector3(-1, 0, 0).applyQuaternion(this.q);
+    // keep the Euler view of the heading current for the camera views and the berth
+    this.yaw = Math.atan2(fwd.x, fwd.z);
+    this.pitch = -Math.asin(THREE.MathUtils.clamp(fwd.y, -1, 1));
+    this.roll = 0;
+    return { fwd, up, right };
+  }
+
   update(dt, input) {
     this.time += dt;
     const I = input.sample(dt);
@@ -689,22 +729,33 @@ export class LocalView {
     }
     const lookX = orbitCam ? 0 : I.lookX, lookY = orbitCam ? 0 : I.lookY;
     this.camZoom = THREE.MathUtils.clamp(this.camZoom * (I.zoom || 1), 0.35, 30);
-    this.yaw -= lookX * 0.005;
     // The suit flies like Iron Man: hovering, A/D strafes; at speed A/D banks into a turn and the
     // heading swings round (the body roll comes from the pose springs, not the craft frame).
     const cruise = this.isFrame ? THREE.MathUtils.smoothstep(spd, 5, 20) : 0;
-    if (this.isFrame) this.yaw -= I.move.x * 1.6 * cruise * dt;
-    this.pitch = THREE.MathUtils.clamp(this.pitch + lookY * 0.004, -1.3, 1.3);
-    const roll = this.isFrame ? 0 : THREE.MathUtils.clamp(lookX * 0.03 - I.move.x * 0.35, -0.7, 0.7);
-    this.roll = THREE.MathUtils.lerp(this.roll, roll, 1 - Math.exp(-5 * dt));
-    s.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.roll, 'YXZ'));
-    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(s.quaternion);
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(s.quaternion);
-    const right = new THREE.Vector3(-1, 0, 0).applyQuaternion(s.quaternion);
+    let fwd, up, right;
+    if (this.isFrame) {
+      this.yaw -= lookX * 0.005;
+      this.yaw -= I.move.x * 1.6 * cruise * dt;
+      this.pitch = THREE.MathUtils.clamp(this.pitch + lookY * 0.004, -1.3, 1.3);
+      this.roll = THREE.MathUtils.lerp(this.roll, 0, 1 - Math.exp(-5 * dt));
+      s.quaternion.setFromEuler(new THREE.Euler(this.pitch, this.yaw, this.roll, 'YXZ'));
+      fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(s.quaternion);
+      up = new THREE.Vector3(0, 1, 0).applyQuaternion(s.quaternion);
+      right = new THREE.Vector3(-1, 0, 0).applyQuaternion(s.quaternion);
+    } else ({ fwd, up, right } = this.flySkiff(dt, I, lookX, lookY));
 
     const thrust = I.boost ? 70 : 30;
-    const acc = v3().addScaledVector(fwd, I.move.y).addScaledVector(right, I.move.x * (1 - cruise)).addScaledVector(up, I.lift);
+    // the skiff has no side thrusters worth the name: A/D roll it instead of strafing
+    const strafe = this.isFrame ? I.move.x * (1 - cruise) : 0;
+    const acc = v3().addScaledVector(fwd, I.move.y).addScaledVector(right, strafe).addScaledVector(up, I.lift);
     if (acc.lengthSq() > 1) acc.normalize();
+    if (!this.isFrame) {
+      // flight assist: sideways and vertical drift die off faster than forward motion, so the ship
+      // carves through a turn instead of skating
+      const along = fwd.dot(this.vel);
+      const side = tmp.copy(this.vel).addScaledVector(fwd, -along);
+      this.vel.addScaledVector(side, -(1 - Math.exp(-1.6 * dt)));
+    }
     if (this.isFrame) {
       // carve: momentum follows most of the heading change instead of sliding sideways
       this.vel.applyAxisAngle(Y_UP, (this.yaw - yaw0) * 0.8 * THREE.MathUtils.smoothstep(spd, 3, 12));
@@ -753,7 +804,12 @@ export class LocalView {
         vel: this.vel.clone().applyQuaternion(inv), acc: a.clone().applyQuaternion(inv),
         turn: -(this.yaw - yaw0) / Math.max(dt, 1e-3), input: I.move, lift: I.lift, boost: I.boost, aim: I.mine && !!this.targetRock,
       }, dt, this.time);
-    } else setThrust(s, 0.08 + thr * 0.7, this.time);
+    } else {
+      // main engines follow the throttle (boost lights the afterburner), RCS puffs follow the turn
+      setThrust(s, 0.08 + thr * 0.7 + (I.boost ? 0.35 : 0), this.time);
+      updateShipFX(s, this.time, this.rcs);
+    }
+    if (this.parked) updateShipFX(this.parked, this.time);
     s.updateMatrixWorld(true);
 
     this.updateMining(dt, I.mine, fwd);

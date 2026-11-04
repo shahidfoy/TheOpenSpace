@@ -105,12 +105,63 @@ export function setThrust(obj, thr, time) {
   }
 }
 
+// ---------------- skiff flight effects ----------------
+// Navigation lights (red port, green starboard, white tail strobe) and attitude-thruster (RCS)
+// puffs. Skiff frame: forward +Z, up +Y, its left +X. Each puff fires along `dir` and answers one
+// rotation axis of the demand vector (x pitch nose-down +, y yaw nose-left +, z roll right-wing-down +).
+const RCS = [
+  // pitch: nose-top + tail-bottom push the nose down; nose-bottom + tail-top lift it
+  [[0, 0.4, 3.3], [0, 1, 0], 'x', 1], [[0, -0.35, -3.6], [0, -1, 0], 'x', 1],
+  [[0, -0.3, 3.3], [0, -1, 0], 'x', -1], [[0, 0.55, -3.6], [0, 1, 0], 'x', -1],
+  // yaw: fire sideways at nose and tail in opposite directions
+  [[-0.42, 0, 3.1], [-1, 0, 0], 'y', 1], [[0.6, 0.15, -3.6], [1, 0, 0], 'y', 1],
+  [[0.42, 0, 3.1], [1, 0, 0], 'y', -1], [[-0.6, 0.15, -3.6], [-1, 0, 0], 'y', -1],
+  // roll: up at one wingtip, down at the other
+  [[-4.15, -0.1, -2.05], [0, 1, 0], 'z', 1], [[4.15, -0.55, -2.05], [0, -1, 0], 'z', 1],
+  [[4.15, -0.1, -2.05], [0, 1, 0], 'z', -1], [[-4.15, -0.55, -2.05], [0, -1, 0], 'z', -1],
+];
+function addShipFX(g) {
+  const nav = [
+    [0xff3b3b, [4.25, -0.32, -2.05]], [0x3bff7a, [-4.25, -0.32, -2.05]], [0xffffff, [0, 0.95, -3.95]],
+  ].map(([c, p]) => {
+    const s = glowSprite(c, 1.1, 2.2);
+    s.position.set(...p);
+    g.add(s);
+    return s;
+  });
+  const puffs = RCS.map(([p, dir, axis, sign]) => {
+    const s = glowSprite(0xe8f0ff, 1, 1.4);
+    s.position.set(...p).addScaledVector(new THREE.Vector3(...dir), 0.45);
+    s.material.opacity = 0;
+    g.add(s);
+    return { s, base: s.position.clone(), dir: new THREE.Vector3(...dir), axis, sign };
+  });
+  g.userData.fx = { nav, puffs };
+}
+// rcs: what the attitude thrusters are fighting for this frame (rad/s per axis, ship frame)
+export function updateShipFX(obj, time, rcs) {
+  const fx = obj?.userData.fx;
+  if (!fx) return;
+  // steady red / green, double-flash white strobe every 1.3 s
+  const ph = time % 1.3;
+  fx.nav[0].material.opacity = fx.nav[1].material.opacity = 0.85;
+  fx.nav[2].material.opacity = ph < 0.06 || (ph > 0.16 && ph < 0.22) ? 1 : 0;
+  for (const p of fx.puffs) {
+    const k = rcs ? THREE.MathUtils.clamp(p.sign * rcs[p.axis] * 0.7, 0, 1) : 0;
+    p.s.material.opacity = k > 0.04 ? k * (0.55 + Math.random() * 0.45) : 0;
+    const len = 0.5 + k * 1.6;
+    p.s.scale.setScalar(0.35 + k * 0.9);
+    p.s.position.copy(p.base).addScaledVector(p.dir, len * 0.5); // the gas jet streams out
+  }
+}
+
 // ---------------- player skiff ----------------
 export function makeSkiff() {
   const g = instance('skiff');
   if (!g) return skiffProc();
   const a = anchors(g);
   addPlumes(g, a, 0.36, 3.4);
+  addShipFX(g);
   g.userData.muzzle = a.nose;
   const l = new THREE.PointLight(0xffc890, 3, 12, 2);
   l.position.set(0, 0.6, 4.4);
@@ -542,3 +593,7 @@ export function makeStation(L, bodyId, docked = []) {
   }
   return g;
 }
+
+// Chase-camera distance factor for narrow (portrait) screens: 1 on landscape, ~1.6 on a phone held
+// upright, so the craft keeps roughly the same share of the screen width.
+export const portraitPullback = (aspect) => Math.pow(Math.max(1, 1 / Math.max(0.3, aspect)), 0.75);

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { makeSky } from './sky.js';
 import { glowSprite, NOISE } from './shaders.js';
 import { weather, WEATHER_CREDIT } from './weather.js';
-import { makeCraft, poseFrame, setThrust } from './models.js';
+import { makeCraft, poseFrame, setThrust, portraitPullback, updateShipFX } from './models.js';
 import { bodyQuat, planetTexture } from './planets.js';
 import { BODY, helioAU } from '../sim/orbits.js';
 import { simNow, emit } from '../sim/state.js';
@@ -823,8 +823,25 @@ export class EarthView {
     this.time += dt;
     const I = input.sample(dt);
     const alt = this.pos.y;
-    if (this.autopilot && this.target) this.fly(dt);
-    else {
+    const skiff = !this.craft.userData.parts, yaw0 = this.yaw;
+    this.bank = this.bank || 0;
+    if (this.autopilot && this.target) {
+      this.fly(dt);
+      // bank into the autopilot's own course corrections: the bank a real turn at this rate needs
+      const rate = (this.yaw - yaw0) / Math.max(dt, 1e-3);
+      this.bank = THREE.MathUtils.lerp(this.bank, THREE.MathUtils.clamp(Math.atan((rate * Math.max(this.speed, 60)) / 9.81), -1.1, 1.1), 1 - Math.exp(-2 * dt));
+    } else if (skiff) {
+      // aircraft handling: the stick rolls the skiff into a bank and the lift swings the nose round
+      // (coordinated turn, rate = g tan(bank) / v). Let go and it rolls back level. Hypersonic turns
+      // are wide arcs, with a little minimum authority so it never feels dead.
+      this.bank = THREE.MathUtils.lerp(this.bank, I.move.x * 1.25, 1 - Math.exp(-2.4 * dt));
+      let rate = (9.81 * Math.tan(this.bank)) / Math.max(this.speed, 60);
+      if (Math.abs(rate) < Math.abs(I.move.x) * 0.06) rate = I.move.x * 0.06;
+      this.yaw += THREE.MathUtils.clamp(rate, -0.9, 0.9) * dt;
+      this.pitch = THREE.MathUtils.clamp(this.pitch + I.move.y * 0.9 * dt * Math.cos(this.bank * 0.5), -1.2, 1.2);
+      const acc = I.boost ? 450 : I.lift > 0 ? 90 : 0;
+      this.speed += acc * dt - (I.mine ? 400 * dt : 0);
+    } else {
       const turn = THREE.MathUtils.lerp(0.9, 0.08, THREE.MathUtils.smoothstep(this.speed, 300, 6000));
       this.yaw += I.move.x * turn * dt;
       this.pitch = THREE.MathUtils.clamp(this.pitch + I.move.y * 0.9 * dt, -1.2, 1.2);
@@ -862,13 +879,13 @@ export class EarthView {
     // skiff + plasma sheath on fast descent through thick air
     this.craft.position.copy(this.pos);
     const suit = !!this.craft.userData.parts; // the suit banks its own body; the skiff rolls the hull
-    this.craft.quaternion.setFromEuler(new THREE.Euler(-this.pitch, Math.PI - this.yaw, suit ? 0 : -I.move.x * 0.5, 'YXZ'));
+    this.craft.quaternion.setFromEuler(new THREE.Euler(-this.pitch, Math.PI - this.yaw, suit ? 0 : this.bank, 'YXZ'));
     if (suit) {
       // atmospheric flight is always fast: cruise lean, banking on the turn rate
       poseFrame(this.craft, { vel: new THREE.Vector3(0, 0, 60), acc: new THREE.Vector3(), turn: (this.yaw - (this.prevYaw ?? this.yaw)) / Math.max(dt, 1e-3),
         input: { x: I.move.x, y: 1 }, lift: 0, boost: I.boost, aim: false }, dt, this.time);
       this.prevYaw = this.yaw;
-    } else setThrust(this.craft, 0.15 + (I.lift > 0 || I.boost ? 0.7 : 0.1), this.time);
+    } else { setThrust(this.craft, 0.15 + (I.lift > 0 || I.boost ? 0.7 : 0.1), this.time); updateShipFX(this.craft, this.time); }
     const heat = THREE.MathUtils.smoothstep(this.speed, 2500, 7000) * (1 - THREE.MathUtils.smoothstep(this.pos.y, 70000, 95000)) * THREE.MathUtils.smoothstep(this.pos.y, 15000, 35000);
     this.plasma.material.opacity = heat * (0.75 + Math.random() * 0.25);
     this.plasma.scale.setScalar(10 + heat * 16);
@@ -983,7 +1000,8 @@ export class EarthView {
   }
 
   updateCamera(dt, fwd, suit) {
-    const cam = this.camera, k = suit ? 0.4 : 1, z = this.camZoom ?? 1;
+    // portrait phones see a narrow slice horizontally: sit further back so the craft doesn't fill it
+    const cam = this.camera, k = suit ? 0.4 : 1, z = (this.camZoom ?? 1) * portraitPullback(cam.aspect);
     const camYaw = this.yaw + this.lookYaw;
     cam.up.set(0, 1, 0);
     if (this.view !== 'flyby') this.setFov(62);

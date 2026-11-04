@@ -99,7 +99,7 @@ const TEMPLATE = `
   <button class="craft-swap" id="craft-swap" data-act="craft"></button>
   <button class="cam-view" id="cam-view" data-act="camView"></button>
   <div class="earthnav" id="earthnav"></div>
-  <div class="attrib" id="attrib"></div>
+  <div class="attrib" id="attrib" data-act="attrib" title="Data credits (tap to expand)"></div>
 </div>
 <div class="controls" id="controls">
   <div class="joy" id="joy"><div class="knob" id="knob"></div></div>
@@ -211,6 +211,7 @@ export class Hud {
       case 'earthTarget': this.app.earthView.setTarget(arg); this.close(); return;
       case 'autopilot': this.app.earthView.setAutopilot(!this.app.earthView.autopilot); return;
       case 'quality': this.app.setQuality(arg); break;
+      case 'attrib': this.$('attrib').classList.toggle('open'); return;
       case 'camView': {
         const v = this.app.mode === 'earth' ? this.app.earthView : this.app.mode === 'local' ? this.app.localView : null;
         if (!v) return;
@@ -281,7 +282,8 @@ export class Hud {
     const el = this.$('cam-view'), m = this.app.mode;
     const v = m === 'earth' ? this.app.earthView : m === 'local' ? this.app.localView : null;
     el.hidden = !v;
-    if (v) setHtml(el, `<small>CAMERA</small>◎ ${VIEW_NAMES[v.view]}${isTouch() ? '' : ' <kbd>C</kbd>'}`);
+    if (v) setHtml(el, `<small>CAMERA</small>◎<span class="cv-name"> ${VIEW_NAMES[v.view]}</span>${isTouch() ? '' : ' <kbd>C</kbd>'}`);
+    if (v) el.setAttribute('aria-label', `Camera view: ${VIEW_NAMES[v.view]}`);
   }
 
   // Always visible while flying: it says whether you can get in or out right now, and if not, how
@@ -297,6 +299,8 @@ export class Hud {
       : (st.ok ? `<small>${voyage ? 'SHIP HOLDS FORMATION' : 'DOCKING RANGE'}</small>⬢ EXIT SHIP · EVA ${key}` : `<small>STATION · ${fmtDist(st.dist)}</small>EVA AT THE STATION`);
     setHtml(el, html);
     el.classList.toggle('ready', st.ok);
+    // in the ship, away from the station: nothing to do yet (phones hide it to save room)
+    el.classList.toggle('idle', !st.ok && !st.board);
     // say so once when the ship comes within reach
     if (st.board && st.ok && !this.swapReady) this.toast(`Your ship is in reach · tap BOARD SHIP${key ? ' or press B' : ''}`, 'good');
     this.swapReady = st.ok;
@@ -479,8 +483,8 @@ export class Hud {
     land.style.display = can || surf || desc ? '' : 'none';
     land.dataset.act = desc && !surf ? 'descend' : 'land';
     land.disabled = false;
-    if (desc && !surf) { const g = this.app.localView.info.descent; land.textContent = g ? `⬇ DESCEND HERE · ${Math.abs(g.lat).toFixed(1)}°${g.lat >= 0 ? 'N' : 'S'} ${Math.abs(g.lon).toFixed(1)}°${g.lon >= 0 ? 'E' : 'W'}` : '⬇ DESCEND TO EARTH'; }
-    else if (can || surf) land.textContent = surf ? '⬆ RETURN TO ORBIT' : `⬇ DEPLOY MECH · ${BODY[this.app.state.presence].name.toUpperCase()}`;
+    if (desc && !surf) { const g = this.app.localView.info.descent; setHtml(land, g ? `⬇ DESCEND HERE<small> · ${Math.abs(g.lat).toFixed(1)}°${g.lat >= 0 ? 'N' : 'S'} ${Math.abs(g.lon).toFixed(1)}°${g.lon >= 0 ? 'E' : 'W'}</small>` : '⬇ DESCEND TO EARTH'); }
+    else if (can || surf) setHtml(land, surf ? '⬆ RETURN TO ORBIT' : `⬇ DEPLOY MECH · ${BODY[this.app.state.presence].name.toUpperCase()}`);
   }
 
   // Atmospheric flight over Earth
@@ -506,7 +510,7 @@ export class Hud {
     land.style.display = '';
     land.dataset.act = info.canOrbit ? 'toOrbit' : '';
     land.disabled = !info.canOrbit;
-    land.textContent = info.canOrbit ? '⬆ RETURN TO ORBIT' : '▲ CLIMB ABOVE 80 KM TO REACH ORBIT';
+    setHtml(land, info.canOrbit ? '⬆ RETURN TO ORBIT' : '▲ CLIMB ABOVE 80 KM TO REACH ORBIT');
   }
 
   pEarthNav() {

@@ -454,3 +454,88 @@ b, strong { font-weight: 600; }
   .toasts { top: 120px; }
   .zone { top: 140px; }
 }
+
+/* ---------- phones: keep the flight view clear ---------- */
+@media (max-width: 899px) {
+  /* resources live in BASE and on the map; while flying they're noise */
+  .mode-pilot:not(.mode-map) .res-row { display: none; }
+  /* objective: one line (tap it for the full text) */
+  .mode-pilot .goal { display: flex; align-items: baseline; gap: 8px; max-width: 72%; padding: 4px 9px 5px; }
+  .mode-pilot .goal .g-x { display: none; }
+  .mode-pilot .goal .g-k { font-size: 8.5px; white-space: nowrap; }
+  .mode-pilot .goal .g-t { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .loc { padding: 4px 9px 4px 10px; }
+  .loc-n { font-size: 14px; }
+  /* orbit zone name and the controls hint: the tutorial covers both */
+  .mode-pilot:not(.mode-earth) .zone, .mode-pilot .hint { display: none; }
+  .mode-earth .zone { top: calc(var(--top) + 118px); font-size: 9px; letter-spacing: 0.1em; padding: 0 56px 0 12px; }
+  /* camera: a small round button under the wallet instead of a labelled chip */
+  .cam-view { left: auto; right: 10px; bottom: auto; top: calc(var(--top) + 96px); width: 38px; height: 38px; padding: 0; border-radius: 50%; clip-path: none; display: grid; place-items: center; font-size: 15px; }
+  .cam-view small, .cam-view .cv-name, .cam-view kbd { display: none; }
+  /* board / exit: compact, and only when it's useful (see Hud.syncCraft) */
+  .craft-swap { min-width: 0; padding: 7px 10px; font-size: 11px; }
+  .craft-swap.idle { display: none; }
+  .bracket .b-lab { width: 120px; font-size: 10px; }
+  .toasts { top: calc(var(--top) + 96px); }
+}
+@media (max-width: 899px) {
+  /* EXIT SHIP (left) and DESCEND (right) share a row: each gets at most half of it */
+  .mode-pilot .land { max-width: calc(50% - 18px); padding: 7px 10px; font-size: 10.5px; text-align: right; }
+  .mode-pilot .land small { display: block; font-size: 9px; font-weight: 400; letter-spacing: 0.06em; }
+  .mode-pilot .craft-swap { max-width: calc(50% - 18px); }
+}
+@media (max-width: 899px) {
+  /* "climb above 80 km" is only a hint: on phones show the button once it does something */
+  .mode-earth .land:disabled { display: none; }
+  /* data credits: one line, tap to read them all (attribution stays on screen) */
+  .attrib { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: auto; bottom: calc(var(--bot) + 64px); }
+  .attrib.open { white-space: normal; background: rgba(6,8,11,0.85); padding: 6px 8px; z-index: 5; }
+}
+@media (min-width: 900px) {
+  /* Earth flight: the Nav panel sits where the camera chip normally is; lift the chip above it */
+  .mode-earth .cam-view { bottom: 344px; }
+}
+/* ---------- phones: smaller, lighter controls (more of the view left clear) ---------- */
+@media (max-width: 899px) {
+  .top { padding: calc(var(--top) + 6px) 8px 0; gap: 4px; }
+  .loc-k { font-size: 8.5px; }
+  .loc-n { font-size: 13px; }
+  .loc-s { font-size: 9px; }
+  .pill { font-size: 12px; padding: 2px 7px; gap: 4px; }
+  .icon-btn { width: 28px; }
+  .icon-btn.help { right: 32px; font-size: 14px; }
+  .wallet:has(.help) { padding-right: 64px; }
+  .icon-btn svg { width: 15px; height: 15px; }
+  .cam-view { width: 34px; height: 34px; top: calc(var(--top) + 84px); font-size: 13px; }
+
+  .nav { left: 6px; right: 6px; bottom: calc(var(--bot) + 4px); padding: 2px; }
+  .nav button { padding: 4px 0 3px; font-size: 8px; gap: 1px; }
+  .nav svg { width: 18px; height: 18px; }
+  .sheet { bottom: calc(var(--bot) + 50px); }
+  .attrib { bottom: calc(var(--bot) + 52px); }
+
+  .controls .joy { left: 14px; bottom: calc(var(--bot) + 60px); width: 104px; height: 104px; }
+  .controls .knob { width: 40px; height: 40px; margin: -20px; }
+  .controls .btns { right: 10px; bottom: calc(var(--bot) + 60px); grid-template-columns: 48px 68px; grid-template-rows: 48px 48px; gap: 6px; }
+  .hold svg { width: 20px; height: 20px; }
+  .hold.boost { font-size: 8.5px; }
+  .hold.mine { font-size: 10.5px; }
+
+  .gauge { left: 10px; bottom: calc(var(--bot) + 176px); width: 50px; height: 50px; }
+  .g-txt b { font-size: 13px; }
+  .g-txt small { font-size: 8px; }
+  .g-cap { left: 56px; top: 4px; font-size: 8.5px; }
+  .dockline { left: 66px; bottom: calc(var(--bot) + 182px); font-size: 9.5px; }
+  .readout { right: 10px; bottom: calc(var(--bot) + 178px); }
+  .readout b { font-size: 20px; }
+  .readout small { font-size: 8px; }
+  .readout span { font-size: 9.5px; }
+  .fuel { bottom: calc(var(--bot) + 236px); }
+  .land, .craft-swap { bottom: calc(var(--bot) + 236px); }
+  .earthnav { bottom: calc(var(--bot) + 172px); left: 10px; right: 120px; }
+  .en-t { padding: 5px 8px; }
+  .en-t b { font-size: 12.5px; }
+  .en-t em { font-size: 9.5px; }
+  .mode-earth .land { bottom: calc(var(--bot) + 236px); }
+  .bracket { --sz: 48px; }
+}
