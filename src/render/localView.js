@@ -55,10 +55,15 @@ export class LocalView {
     this.camera = new THREE.PerspectiveCamera(62, 1, 0.1, 30000);
     this.sky = makeSky();
     this.scene.add(this.sky);
+
     this.sun = new THREE.DirectionalLight(0xfff1dd, 2.6);
     this.sun.position.copy(SUN_DIR).multiplyScalar(100);
     this.fill = new THREE.HemisphereLight(0x3a4a6a, 0x120818, 0.3);
-    this.scene.add(this.sun, this.fill);
+    // a soft light riding with the camera so your craft still reads in a planet's shadow (the
+    // night side of the Moon is black, and so was your hull against it). Its strength is set each
+    // frame for the craft's distance, so it never floods the scene and is lost in direct sunlight.
+    this.camFill = new THREE.PointLight(0xa9bddc, 1, 0, 1);
+    this.scene.add(this.sun, this.fill, this.camFill);
     this.sunDir = SUN_DIR.clone();
 
     this.setCraft(app.state.craft);
@@ -487,7 +492,11 @@ export class LocalView {
       for (const c of [this.celest.dest, this.celest.origin]) {
         const q = helioAU(BODY[c.id], t), b = BODY[c.id];
         const d = toScene(q[0] - P[0], q[1] - P[1], q[2] - P[2], v3());
-        const km = Math.max(1, d.length() * AU_KM);
+        // The voyage path runs centre to centre, so at departure and arrival you'd be "inside" the
+        // world and its surface would sweep through your ship: hold it at parking-orbit distance
+        // (1.15 radii) instead. Its drawn surface then stays >= ~900 m out on the 7 km sky shell,
+        // beyond the 460 m autopilot tether, so nothing you fly can reach it.
+        const km = Math.max(1, d.length() * AU_KM, (b.radiusKm || 0) * 1.15);
         d.normalize();
         // true angular size, drawn on a 7000 m sky shell
         const R = 7000 * Math.tan(Math.atan((b.radiusKm || 1) / km));
@@ -848,6 +857,9 @@ export class LocalView {
     if (dockDist < DOCK_RANGE && this.cargoTotal() > 0) this.unload();
 
     this.updateCamera(dt, I, fwd, up, right);
+    // camera fill: about 0.3 of irradiance at the craft whatever the zoom (decay 1: falls off as 1/d)
+    this.camFill.position.copy(this.camera.position);
+    this.camFill.intensity = 0.3 * Math.max(1, this.camera.position.distanceTo(s.position));
     this.sky.position.copy(this.camera.position);
     this.camera.updateMatrixWorld();
 
