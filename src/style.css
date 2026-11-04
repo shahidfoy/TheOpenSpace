@@ -224,6 +224,7 @@ b, strong { font-weight: 600; }
 .en-t em { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--dim); }
 .en-b { display: flex; gap: 6px; }
 .fut { font-style: normal; color: #ff6ad5; }
+.storm { font-style: normal; color: #ff8a8a; }
 .mode-earth .gauge, .mode-earth .dockline, .mode-earth .reticle { display: none; }
 .mode-earth .zone { display: block; }
 .attrib { display: none; position: absolute; left: 8px; right: 8px; bottom: calc(var(--bot) + 66px); font-size: 8.5px; color: rgba(233,237,241,0.4); text-align: center; }
@@ -239,6 +240,9 @@ b, strong { font-weight: 600; }
 .mk.ship i { border-color: var(--amber); background: rgba(255,179,71,0.35); }
 .mk.ship span { color: var(--amber); }
 .mk.edge.ship i { border-left-color: var(--amber); background: none; }
+.mk.storm i { border-color: #ff5a5a; background: rgba(255,90,90,0.3); border-radius: 50%; transform: none; }
+.mk.storm span { color: #ff8a8a; }
+.mk.edge.storm i { border-left-color: #ff5a5a; background: none; border-radius: 0; transform: rotate(var(--rot)); }
 .mode-surface .craft-swap { display: none; }
 .cam-view { position: absolute; left: 12px; bottom: calc(var(--bot) + 362px); padding: 7px 11px; text-align: left; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--ice); background: rgba(10,14,22,0.6); border: 1px solid var(--line-2); clip-path: var(--cut); }
 .cam-view small { display: block; font-size: 8.5px; color: var(--dim); letter-spacing: 0.16em; }

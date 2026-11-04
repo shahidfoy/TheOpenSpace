@@ -8,6 +8,7 @@ import { BODY, helioAU } from '../sim/orbits.js';
 import { simNow, emit } from '../sim/state.js';
 import { haptic } from '../telegram.js';
 import { FutureEarth, FUTURE_CITIES } from './futureEarth.js';
+import { live, pollLocal, pollStorms, sampleLocal, LIVE_WEATHER_CREDIT } from './liveWeather.js';
 
 // Atmospheric flight over the real Earth. Terrain heights stream from AWS Terrain Tiles
 // (Terrarium encoding: SRTM, GMTED, ETOPO1) and imagery from Sentinel-2 cloudless 2016 by EOX
@@ -18,11 +19,25 @@ import { FutureEarth, FUTURE_CITIES } from './futureEarth.js';
 const R = 6371000, D2R = Math.PI / 180;
 const IMAGERY = (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/${z}/${y}/${x}.jpg`;
 const TERRAIN = (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
-export const ATTRIBUTION = `Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0, modified Copernicus data) · Terrain: AWS Terrain Tiles (SRTM, GMTED, ETOPO1) · ${WEATHER_CREDIT}`;
+export const ATTRIBUTION = `Imagery: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0, modified Copernicus data) · Terrain: AWS Terrain Tiles (SRTM, GMTED, ETOPO1) · ${WEATHER_CREDIT} · ${LIVE_WEATHER_CREDIT}`;
 const SEG = 32; // quads per tile edge (+1 skirt ring)
 const K = 2; // tiles each side of the player per level (5 x 5)
 const RECENTER = 30000;
 export const EARTH_VIEWS = ['chase', 'free', 'cockpit', 'flyby', 'overhead'];
+const PRECIP_BOX = 160; // metres: the cube of rain / snow kept around the camera
+const BOLT_SEG = 26; // segments in a lightning bolt
+// soft round snowflake sprite
+let flakeTex;
+function flakeTexture() {
+  if (flakeTex) return flakeTex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 32;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.45, 'rgba(255,255,255,0.7)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, 32, 32);
+  return (flakeTex = new THREE.CanvasTexture(c));
+}
 const CLOUD_BASE = 1900; // cumulus base (m); the deck is ~760 m thick, its middle casts the ground shadows
 
 export const PLACES = [
@@ -43,6 +58,8 @@ export const PLACES = [
   { id: 'capetown', name: 'Cape Town, South Africa', lat: -33.9628, lon: 18.4098 },
   { id: 'sydney', name: 'Sydney, Australia', lat: -33.8568, lon: 151.2153 },
 ];
+// Active tropical cyclones (live) as destinations: fly into the eye of a real hurricane.
+export const stormPlaces = () => live.storms.map((s) => ({ id: `storm-${s.id}`, name: `${s.kind} ${s.name}`, lat: s.lat, lon: s.lon, storm: s }));
 
 // ---------------------------------------------------------------- geodesy
 const latOfRow = (y, n) => Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) / D2R;
@@ -168,7 +185,35 @@ float cloudA(float n, float cov, float lift){
   float th = 0.68 - 0.5 * cov + lift;
   return smoothstep(th, th + 0.06, n) * smoothstep(0.03, 0.18, cov);
 }
-vec2 cloudWind(float t){ return vec2(t * 12.0, t * 3.0); }
+// live weather (src/render/liveWeather.js): a 5 x 5 grid around you, R precip, G snow, B thunder,
+// A cloud cover; wind drift integrated on the CPU; up to four tropical cyclones in scene metres
+uniform vec2 uWindOff; uniform sampler2D uWx; uniform vec4 uWxBox; uniform float uWxOn;
+uniform vec4 uStorms[4]; uniform float uFlash;
+vec4 wxAt(float lat, float lon){
+  vec2 uv = vec2(((lon - uWxBox.y) / uWxBox.w + 0.5) / 5.0, ((lat - uWxBox.x) / uWxBox.z + 0.5) / 5.0);
+  // soft round fade toward the edge of the grid (~100 km from you): no square edges in the sky
+  return texture2D(uWx, clamp(uv, 0.0, 1.0)) * uWxOn * (1.0 - smoothstep(0.3, 0.5, length(uv - 0.5)));
+}
+float wxRain(vec4 wx){ return wx.r * 6.375; } // mm/h
+// cloud cover here: the satellite map, firmed up by the live model where it's raining or overcast,
+// and swirled into spiral rain bands around any cyclone (with its clear eye)
+float coverAt(vec2 p, float sat, vec4 wx){
+  float cov = mix(sat, max(sat, wx.a), uWxOn * 0.7);
+  cov = max(cov, smoothstep(0.1, 3.0, wxRain(wx)) * 0.95);
+  for (int i = 0; i < 4; i++) {
+    vec4 s = uStorms[i];
+    if (s.w <= 0.0) continue;
+    vec2 q = p - s.xy;
+    float r = length(q);
+    if (r > s.z) continue;
+    float th = atan(q.y, q.x);
+    float arm = 0.5 + 0.5 * sin(2.0 * th - 2.6 * log(r / 15000.0 + 1.0));
+    float band = 1.0 - smoothstep(s.z * 0.3, s.z, r);
+    float eye = smoothstep(12000.0, 32000.0, r);
+    cov = max(cov, band * mix(0.45, 1.0, arm) * s.w) * mix(1.0, eye, s.w);
+  }
+  return cov;
+}
 `;
 
 // ---------------------------------------------------------------- terrain material
@@ -211,10 +256,14 @@ void main(){
   if (L.y > 0.04 && uDay > 0.05 && vDist < 90000.0) {
     vec3 sp = vW + L * ((${CLOUD_BASE + 380}.0 - vW.y) / L.y);
     vec2 sg = vec2(fract(vGeo.y / 360.0 + 0.5), 0.5 + vGeo.x / 180.0);
-    float sc = texture2D(uClouds, sg).r;
-    float sh = cloudA(cloudN(sp.xz + uOffset + cloudWind(uTime)), sc, 0.02);
+    vec4 wx = wxAt(vGeo.x, vGeo.y);
+    float sc = coverAt(sp.xz, texture2D(uClouds, sg).r, wx);
+    float sh = cloudA(cloudN(sp.xz + uOffset - uWindOff), sc, 0.02);
+    // under rain clouds the whole landscape goes grey, not just the shadow patches
+    sh = max(sh, smoothstep(0.3, 6.0, wxRain(wx)) * 0.8);
     col *= 1.0 - 0.38 * sh * uDay * (1.0 - smoothstep(60000.0, 90000.0, vDist));
   }
+  col += albedo * uFlash * 0.9; // lightning lights up the ground
   // 2087: neon street grids light up the megacities (brightest at night)
   for (int i = 0; i < 4; i++) {
     vec4 c = uCities[i];
@@ -229,7 +278,8 @@ void main(){
     col += neon * k * (0.08 + 1.0 * (1.0 - uDay));
   }
   // seen from high up, today's real cloud cover lies over the distant ground
-  float cov = texture2D(uClouds, vec2(fract(vGeo.y / 360.0 + 0.5), 0.5 + vGeo.x / 180.0)).r;
+  // (with any live cyclone spiral, so a hurricane reads from high altitude too)
+  float cov = coverAt(vW.xz, texture2D(uClouds, vec2(fract(vGeo.y / 360.0 + 0.5), 0.5 + vGeo.x / 180.0)).r, vec4(0.0));
   float farC = smoothstep(90000.0, 160000.0, vDist);
   col = mix(col, vec3(0.88) * (max(uSun.y, 0.0) * 0.75 * uDay + 0.16 * uDay + 0.02), cov * farC * 0.92);
   float f = 1.0 - exp(-vDist * uFogK); // aerial perspective
@@ -259,10 +309,11 @@ ${CLOUD_LIB}
 void main(){
   float lat = uOrigin.x + (-vW.z / 6371000.0) * 57.29578;
   float lon = uOrigin.y + (vW.x / (6371000.0 * cos(uOrigin.x * 0.0174533))) * 57.29578;
-  float cov = texture2D(uClouds, vec2(fract(lon / 360.0 + 0.5), 0.5 + lat / 180.0)).r;
-  vec2 m = vW.xz + uOffset + cloudWind(uTime);
+  vec4 wx = wxAt(lat, lon);
+  float cov = coverAt(vW.xz, texture2D(uClouds, vec2(fract(lon / 360.0 + 0.5), 0.5 + lat / 180.0)).r, wx);
+  vec2 m = vW.xz + uOffset - uWindOff; // drifting with the real wind
   float n = cloudN(m);
-  float lift = uLayer * 0.055;
+  float lift = uLayer * 0.055 - wx.b * 0.05; // thunderstorms tower: the upper sheets fill in
   float a = cloudA(n, cov, lift);
   a *= 1.0 - smoothstep(110000.0, 160000.0, vDist);
   if (a < 0.01) discard;
@@ -275,6 +326,8 @@ void main(){
   // dense cores are brighter on top; seen from underneath, the bases sit in their own shade
   float below = step(uCam.y, vW.y);
   col *= mix(1.0, 0.62 + 0.18 * uLayer, below);
+  // rain-laden clouds are dark and heavy; lightning lights a storm up from inside
+  col *= 1.0 - 0.55 * smoothstep(0.3, 8.0, wxRain(wx)) * (1.0 - uLayer * 0.25);
   // silver lining: thin edges blaze when you look toward the Sun
   vec3 V = normalize(vW - uCam);
   float fwd = pow(max(dot(V, L), 0.0), 10.0);
@@ -282,6 +335,7 @@ void main(){
   // low sun warms the clouds, night darkens them
   col *= mix(vec3(1.0, 0.6, 0.38), vec3(1.0), smoothstep(0.0, 0.3, L.y));
   col *= (smoothstep(-0.05, 0.3, L.y) * 0.95 + 0.1) * uDay + 0.015; // sunlit cloud is the brightest thing in view
+  col += vec3(0.85, 0.88, 1.0) * uFlash * (0.4 + 0.6 * wx.b) * (0.6 + 0.6 * n);
   col = mix(col, uFog, clamp(1.0 - exp(-vDist * uFogK), 0.0, 1.0));
   gl_FragColor = vec4(col, a * (uLayer < 0.5 ? 0.85 : 0.92));
 }`;
@@ -367,10 +421,18 @@ export class EarthView {
     // cloud layers: base, middle and tops of the cumulus deck, plus high cirrus. They share one set
     // of uniforms (each layer adds its own uLayer); cloudOffset also drives the ground shadows.
     this.cloudOffset = new THREE.Vector2();
+    // live weather shared by clouds and terrain (see CLOUD_LIB)
+    this.windOff = new THREE.Vector2();
+    this.wxU = {
+      uWindOff: { value: this.windOff }, uWx: { value: live.tex }, uWxBox: { value: live.box }, uWxOn: { value: 0 },
+      uStorms: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uFlash: { value: 0 },
+    };
     this.cloudU = {
       uClouds: { value: weather.texture }, uCam: { value: new THREE.Vector3() }, uOrigin: { value: new THREE.Vector2() }, uOffset: { value: this.cloudOffset },
       uSun: { value: new THREE.Vector3(0, 1, 0) }, uDay: { value: 1 }, uFog: { value: new THREE.Color() }, uFogK: { value: 0 }, uTime: { value: 0 },
+      ...this.wxU,
     };
+    this.buildPrecip();
     const deckGeo = new THREE.PlaneGeometry(330000, 330000, 120, 120).rotateX(-Math.PI / 2);
     const layer = (h, frag, extra, order) => {
       const m = new THREE.Mesh(deckGeo, new THREE.ShaderMaterial({
@@ -406,12 +468,14 @@ export class EarthView {
     this.scene.add(this.craft);
   }
 
-  // Enter the atmosphere above a real point (from the station's ground track), 100 km up.
-  enter(lat, lon, alt = 100000) {
+  // Enter the atmosphere above a real point (the ground directly under you in orbit), 100 km up,
+  // heading the way you were facing.
+  enter(lat, lon, alt = 100000, heading = 60) {
     this.origin = { lat, lon };
     this.pos = new THREE.Vector3(0, alt, 0);
     this.originM = { x: 0, z: 0 };
-    this.yaw = 60 * D2R; this.pitch = -0.12; this.speed = 7600;
+    this.yaw = heading * D2R; this.pitch = -0.12; this.speed = 7600;
+    this.flyPt = null;
     this.lookYaw = 0; this.lookPitch = 0;
     this.camOff = null; // snap the chase camera in behind the craft
     this.autopilot = false;
@@ -423,8 +487,148 @@ export class EarthView {
   }
 
   setTarget(id) {
-    this.target = PLACES.find((p) => p.id === id) || null;
+    this.target = PLACES.find((p) => p.id === id) || stormPlaces().find((p) => p.id === id) || null;
     if (this.target) emit('toast', { text: `Nav target · ${this.target.name}`, kind: '' });
+  }
+
+  // ---------------- weather: rain / snow around the camera, lightning
+  buildPrecip() {
+    const n = 6000;
+    this.precipSeeds = Array.from({ length: n }, () => new THREE.Vector3((Math.random() - 0.5) * PRECIP_BOX, (Math.random() - 0.5) * PRECIP_BOX * 0.7, (Math.random() - 0.5) * PRECIP_BOX));
+    const rg = new THREE.BufferGeometry();
+    rg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 6), 3));
+    this.rain = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({ color: 0xb8c4d6, transparent: true, opacity: 0.4, depthWrite: false }));
+    const sg = new THREE.BufferGeometry();
+    sg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    this.snow = new THREE.Points(sg, new THREE.PointsMaterial({ color: 0xffffff, size: 0.35, map: flakeTexture(), alphaTest: 0.02, transparent: true, opacity: 0.95, depthWrite: false }));
+    // a lightning bolt: a jagged line from the cloud base to the ground, shown for a blink
+    const bg = new THREE.BufferGeometry();
+    bg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BOLT_SEG * 6 * 3), 3));
+    this.bolt = new THREE.LineSegments(bg, new THREE.LineBasicMaterial({ color: 0xe8eeff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+    // GL lines are one pixel wide: a tall glow along the channel makes the bolt read from far away
+    this.boltGlow = glowSprite(0xb8c6ff, 1, 1.6);
+    this.boltGlow.material.depthWrite = false;
+    for (const o of [this.rain, this.snow, this.bolt, this.boltGlow]) { o.frustumCulled = false; o.visible = false; o.renderOrder = 15; this.scene.add(o); }
+    this.flash = 0;
+    this.nextStrike = 4;
+  }
+
+  makeBolt(at) {
+    const p = this.bolt.geometry.attributes.position, pts = [];
+    // main channel down from the cloud base, with a couple of forks
+    let x = at.x, z = at.z, y = CLOUD_BASE + 200;
+    const ground = Math.max(0, this.groundAt(at) ?? 0);
+    const step = (y - ground) / BOLT_SEG;
+    for (let i = 0; i < BOLT_SEG; i++) {
+      const nx = x + (Math.random() - 0.5) * 140, nz = z + (Math.random() - 0.5) * 140, ny = y - step;
+      pts.push([x, y, z, nx, ny, nz]);
+      if (Math.random() < 0.08 && pts.length < BOLT_SEG * 3) {
+        let fx = nx, fy = ny, fz = nz;
+        for (let k = 0; k < 4; k++) { const a = [fx, fy, fz]; fx += (Math.random() - 0.5) * 220; fz += (Math.random() - 0.5) * 220; fy -= step * 0.7; pts.push([...a, fx, fy, fz]); }
+      }
+      x = nx; y = ny; z = nz;
+    }
+    pts.slice(0, BOLT_SEG * 6).forEach((s, i) => { p.setXYZ(i * 2, s[0], s[1], s[2]); p.setXYZ(i * 2 + 1, s[3], s[4], s[5]); });
+    this.bolt.geometry.setDrawRange(0, Math.min(pts.length, BOLT_SEG * 6) * 2);
+    const top = CLOUD_BASE + 200;
+    this.boltGlow.position.set(at.x, (top + ground) / 2, at.z);
+    this.boltGlow.scale.set(700, (top - ground) * 1.25, 1);
+    p.needsUpdate = true;
+  }
+
+  updateWeather(dt, fwd, day) {
+    // keep the live data fresh where you are
+    if ((this.wxAcc = (this.wxAcc ?? 99) + dt) > 2) {
+      this.wxAcc = 0;
+      pollLocal(this.info.lat, this.info.lon);
+      pollStorms();
+      this.wx = sampleLocal(this.info.lat, this.info.lon);
+      // cyclones within reach of the cloud deck, in scene metres
+      const tmpP = { x: 0, z: 0 };
+      const near = live.storms.map((s) => ({ s, d: gc(this.info.lat, this.info.lon, s.lat, s.lon).d })).sort((a, b) => a.d - b.d);
+      this.wxU.uStorms.value.forEach((v, i) => {
+        const n = near[i];
+        if (!n || n.d > 1.2e6) return v.set(0, 0, 1, 0);
+        project(this.origin, n.s.lat, n.s.lon, tmpP);
+        // radius of the cloud shield grows with strength (~250 km for a storm, ~450 km for a major hurricane)
+        v.set(tmpP.x, tmpP.z, THREE.MathUtils.clamp(150000 + n.s.kmh * 1300, 200000, 480000), THREE.MathUtils.clamp((n.s.kmh - 40) / 140, 0.35, 1));
+      });
+      // say so the first time you come within 1500 km of a cyclone
+      for (const n of near) {
+        if (n.d > 1.5e6 || (this.warned ||= new Set()).has(n.s.id)) continue;
+        this.warned.add(n.s.id);
+        emit('toast', { text: `⚠ ${n.s.kind} ${n.s.name} · ${n.s.kmh} km/h winds · ${Math.round(n.d / 1000)} km away (${n.s.src})`, kind: 'bad' });
+      }
+    }
+    this.wxU.uWxOn.value = live.grid ? 1 : 0;
+    const w = this.wx;
+    // the cloud deck drifts with the real wind (stronger aloft than at the surface)
+    const from = (w?.windFrom ?? 250) * D2R, spd = (w ? w.wind : 7) * 1.6;
+    const windX = -Math.sin(from) * spd, windZ = Math.cos(from) * spd; // blowing toward (scene x east, z south)
+    this.windOff.x += windX * dt; this.windOff.y += windZ * dt;
+
+    // rain / snow: only below and inside the cloud deck
+    const cam = this.camera.position;
+    const under = 1 - THREE.MathUtils.smoothstep(cam.y, CLOUD_BASE + 300, CLOUD_BASE + 1200);
+    const mmh = w ? w.mmh : 0;
+    const snowing = w?.snow;
+    // snow is reported as melted water: 0.5 mm/h is already a steady snowfall, so flakes are denser
+    const count = mmh > 0.02 ? Math.round(Math.min(this.precipSeeds.length, (snowing ? 600 + mmh * 6000 : 500 + mmh * 1100)) * under) : 0;
+    this.rain.visible = count > 0 && !snowing;
+    this.snow.visible = count > 0 && !!snowing;
+    if (count > 0) {
+      const vel = fwd.clone().multiplyScalar(this.speed);
+      // what a falling drop does relative to the camera: fall + wind - your own motion
+      const rel = new THREE.Vector3(windX / 1.6, snowing ? -1.2 : -9, windZ / 1.6).sub(vel);
+      const B = snowing ? 70 : PRECIP_BOX, H = B * 0.7; // flakes are small: keep them close
+      const wrap = (v, s) => v - s * Math.floor(v / s + 0.5);
+      if (snowing) {
+        const p = this.snow.geometry.attributes.position;
+        for (let i = 0; i < count; i++) {
+          const s = this.precipSeeds[i];
+          s.addScaledVector(rel, dt);
+          s.x += Math.sin(this.time * 1.3 + i) * 0.4 * dt; // flakes flutter
+          s.set(wrap(s.x, B), wrap(s.y, H), wrap(s.z, B));
+          p.setXYZ(i, cam.x + s.x, cam.y + s.y, cam.z + s.z);
+        }
+        p.needsUpdate = true;
+        this.snow.geometry.setDrawRange(0, count);
+        this.snow.material.color.setScalar(0.25 + 0.75 * day);
+      } else {
+        const p = this.rain.geometry.attributes.position;
+        // streak length = how far a drop moves across a ~1/40 s exposure
+        const len = THREE.MathUtils.clamp(rel.length() * 0.025, 0.5, 30), dir = rel.clone().normalize().multiplyScalar(len);
+        for (let i = 0; i < count; i++) {
+          const s = this.precipSeeds[i];
+          s.addScaledVector(rel, dt);
+          s.set(wrap(s.x, B), wrap(s.y, H), wrap(s.z, B));
+          const x = cam.x + s.x, y = cam.y + s.y, z = cam.z + s.z;
+          p.setXYZ(i * 2, x, y, z);
+          p.setXYZ(i * 2 + 1, x - dir.x, y - dir.y, z - dir.z);
+        }
+        p.needsUpdate = true;
+        this.rain.geometry.setDrawRange(0, count * 2);
+        this.rain.material.opacity = (0.15 + 0.3 * Math.min(1, mmh / 8)) * (0.3 + 0.7 * day);
+      }
+    }
+
+    // lightning: when the live data says thunderstorm here, strikes every few seconds nearby
+    this.flash *= Math.exp(-9 * dt);
+    if (w?.thunder && cam.y < 15000 && (this.nextStrike -= dt) <= 0) {
+      this.nextStrike = 2 + Math.random() * 9;
+      const a = Math.random() * Math.PI * 2, r = 1500 + Math.random() * 14000;
+      this.makeBolt(new THREE.Vector3(cam.x + Math.cos(a) * r, 0, cam.z + Math.sin(a) * r));
+      this.flash = 1 / (1 + r / 6000); // distant strikes light the sky less
+      this.boltLife = 0.18;
+      haptic('light');
+    }
+    this.boltLife = (this.boltLife || 0) - dt;
+    this.bolt.visible = this.boltGlow.visible = this.boltLife > 0;
+    this.boltGlow.material.opacity = Math.max(0, this.boltLife / 0.18) * 0.8;
+    this.bolt.material.opacity = Math.max(0, this.boltLife / 0.18) * (Math.random() > 0.3 ? 1 : 0.3); // flicker
+    const flicker = this.flash * (0.7 + Math.random() * 0.3);
+    this.wxU.uFlash.value = flicker;
+    return { under, mmh, flash: flicker };
   }
   setAutopilot(on) {
     this.autopilot = on && !!this.target;
@@ -437,7 +641,7 @@ export class EarthView {
       uCam: { value: new THREE.Vector3() }, uHole: { value: new THREE.Vector4(2, 2, 2, 2) }, uSun: { value: new THREE.Vector3(0, 1, 0) },
       uDay: { value: 1 }, uFog: { value: new THREE.Color() }, uFogK: { value: 0 }, uSky: { value: new THREE.Color() },
       uGlobal: { value: this.globalTex }, uLights: { value: this.lightsTex },
-      uCities: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTime: { value: 0 }, uClouds: { value: weather.texture }, uOffset: { value: this.cloudOffset },
+      uCities: { value: [0, 1, 2, 3].map(() => new THREE.Vector4()) }, uTime: { value: 0 }, uClouds: { value: weather.texture }, uOffset: { value: this.cloudOffset }, ...this.wxU,
     };
     return (this.levelMats[i] = u);
   }
@@ -688,13 +892,19 @@ export class EarthView {
     this.stars.userData.stars.uniforms.uGain.value = 1.3 * (1 - day * (1 - thin) * 0.97);
     this.sun.position.copy(L).multiplyScalar(1000).add(this.pos);
     this.sun.target.position.copy(this.pos);
-    this.sun.intensity = 3 * Math.max(0.02, day);
-    this.hemi.intensity = 0.15 + 0.45 * day;
+    // live weather: rain / snow / lightning around you; under a rain deck the light goes flat and grey
+    const wxNow = this.updateWeather(dt, fwd, day);
+    const gloom = wxNow.under * Math.min(1, (this.wx ? Math.max(this.wx.cloud / 100 - 0.4, 0) * 1.2 + wxNow.mmh / 6 : 0));
+    this.sun.intensity = 3 * Math.max(0.02, day) * (1 - 0.7 * gloom);
+    this.hemi.intensity = (0.15 + 0.45 * day) * (1 - 0.3 * gloom) + wxNow.flash * 2.5;
+    su.uDay.value = day * (1 - 0.45 * gloom); // a grey sky under a storm
     this.sunSprite.position.copy(L).multiplyScalar(8000).add(this.camera.position);
     this.sunSprite.visible = L.y > -0.05;
-    const skyCol = new THREE.Color().setRGB(0.42, 0.6, 0.92).lerp(new THREE.Color(0.05, 0.08, 0.2), thin);
-    const fog = new THREE.Color().setRGB(0.62, 0.74, 0.9).lerp(new THREE.Color(0.25, 0.42, 0.8), thin).multiplyScalar(Math.max(0.02, day));
-    const fogK = (1 / 160000) * Math.exp(-this.pos.y / 9000) + 1 / 4e6;
+    const skyCol = new THREE.Color().setRGB(0.42, 0.6, 0.92).lerp(new THREE.Color(0.05, 0.08, 0.2), thin).lerp(new THREE.Color(0.32, 0.35, 0.4), gloom * 0.8);
+    const fog = new THREE.Color().setRGB(0.62, 0.74, 0.9).lerp(new THREE.Color(0.25, 0.42, 0.8), thin).lerp(new THREE.Color(0.5, 0.53, 0.58), gloom).multiplyScalar(Math.max(0.02, day)).addScalar(wxNow.flash * 0.35);
+    let fogK = (1 / 160000) * Math.exp(-this.pos.y / 9000) + 1 / 4e6;
+    // reported visibility (rain, snow, fog, haze) closes the view in when you're down in it
+    if (this.wx?.vis > 0) fogK = Math.max(fogK, (2.3 / Math.max(300, this.wx.vis)) * wxNow.under);
     // the imagined 2087 layer: megacities, holograms, traffic, elevator, orbital ring
     const tmpP = { x: 0, z: 0 };
     this.future.update(dt, {
@@ -861,6 +1071,12 @@ export class EarthView {
       out.push({ x: (v.x * 0.5 + 0.5) * W, y: (-v.y * 0.5 + 0.5) * H, on: !behind && Math.abs(v.x) < 1 && Math.abs(v.y) < 1, behind, label: p.name, km: d / 1000, kind });
     };
     if (this.target) add(this.target, 'dest');
+    // live cyclones within 2500 km
+    for (const p of stormPlaces()) {
+      if (this.target?.id === p.id) continue;
+      if (gc(this.info.lat, this.info.lon, p.lat, p.lon).d < 2.5e6) add({ ...p, name: `🌀 ${p.name} · ${p.storm.kmh} km/h` }, 'storm');
+    }
+    this.info.wx = this.wx;
     for (const p of PLACES) {
       if (p === this.target) continue;
       if (gc(this.info.lat, this.info.lon, p.lat, p.lon).d < 400e3) add(p, 'home');

@@ -16,6 +16,7 @@ static_sites:
     catchall_document: index.html
 functions:
   # cyber-threat aggregator (functions/packages/threats/feed) → /api/threats/feed
+  # tropical cyclones for Earth weather (functions/packages/weather/storms) → /api/weather/storms
   - name: api
     github:
       repo: shahidfoy/TheOpenSpace

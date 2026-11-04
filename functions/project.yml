@@ -1,5 +1,6 @@
 # DigitalOcean Functions project, deployed as the "api" component of the App Platform app
-# (see .do/app.yaml). The function is served at /api/threats/feed on the game's own domain.
+# (see .do/app.yaml). Functions are served at /api/threats/feed and /api/weather/storms on the
+# game's own domain.
 #
 # Optional threat-feed keys reach the function through the environment block below. App Platform
 # checks every dollar-brace reference in this file (comments included) against the api
@@ -19,3 +20,12 @@ packages:
         limits:
           timeout: 45000
           memory: 512
+  # active tropical cyclones (GDACS + NOAA NHC) for Earth weather → /api/weather/storms
+  - name: weather
+    functions:
+      - name: storms
+        runtime: nodejs:18
+        web: true
+        limits:
+          timeout: 30000
+          memory: 256

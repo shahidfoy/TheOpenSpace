@@ -45,7 +45,7 @@ export const TUTORIAL = [
   },
   {
     kicker: 'EARTH 2087', title: 'Fly down to Earth',
-    body: 'At Eden tap <b>DESCEND TO EARTH</b>. Fly over real terrain and neon megacities, open <b>DESTINATIONS</b> to pick Singapore, Tokyo, Everest and more, and use <b>AUTOPILOT</b> for long trips. Climb above 80 km to return to orbit.',
+    body: 'At Eden tap <b>DESCEND HERE</b>: you drop onto the spot straight below you (the amber DESCENT POINT). Fly over real terrain and neon megacities through <b>live weather</b> (rain, snow, thunderstorms and real hurricanes), open <b>DESTINATIONS</b> to pick Singapore, Tokyo, Everest or an active storm, and use <b>AUTOPILOT</b> for long trips. Climb above 80 km to return to orbit.',
     mobile: [['t:Left stick', 'Turn and climb / dive'], ['t:▲ · BOOST', 'Throttle up · burn hard'], ['t:BRAKE', 'Slow down'], ['t:Drag', 'Look around']],
     desktop: [['k:[A] [D] · [W] [S]', 'Turn · climb / dive'], ['k:[R] · [Shift]', 'Throttle up · burn hard'], ['k:Hold [Space]', 'Brake'], ['k:Mouse drag', 'Look around']],
   },
