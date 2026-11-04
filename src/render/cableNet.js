@@ -1,8 +1,11 @@
 // The real submarine cable network (TeleGeography Submarine Cable Map, built by
-// scripts/build-cables.mjs) and a router that finds the shortest path between two places
-// over it: land backhaul to a landing station, then cable to cable to the far coast.
+// scripts/build-cables.mjs) plus the major terrestrial fiber corridors (src/data/landRoutes.js),
+// and a router that finds the shortest path between two places over them: overland backbone to
+// a landing station, cable to cable across the sea, backbone again on the far side.
 // It is a plausible physical path, not a traced one: real internet routes aren't public.
+import { LAND_ROUTES } from '../data/landRoutes.js';
 const D2R = Math.PI / 180;
+const BACKBONE_LINK_KM = 450; // a corridor city links to landing stations this close
 const LAND_COST = 1.6, HOP_COST = 400; // prefer cables, and few long-haul cables over many short hops
 const HUB_LINKS = 4; // a city connects to its nearest few landing stations
 
@@ -20,6 +23,16 @@ const km = (la1, lo1, la2, lo2) => {
 };
 
 function build(d) {
+  // terrestrial corridors become nodes and edges of the same graph, each a named pseudo-cable
+  // (no sea paths of its own; drawn separately as land fiber)
+  d = { ...d, nodes: [...d.nodes], cables: [...d.cables] };
+  const landRoutes = [];
+  for (const [name, pts] of LAND_ROUTES) {
+    const c = d.cables.length;
+    d.cables.push([name, '#ffb347', [], true]);
+    const idx = pts.map(([la, lo]) => { d.nodes.push(la, lo); return d.nodes.length / 2 - 1; });
+    landRoutes.push({ name, c, idx });
+  }
   const N = d.nodes.length / 2;
   const lat = (i) => d.nodes[i * 2], lon = (i) => d.nodes[i * 2 + 1];
   const adj = Array.from({ length: N }, () => []); // [to, cost, cable index or -1 for land]
@@ -27,8 +40,23 @@ function build(d) {
   d.cables.forEach(([, , paths], c) => { for (const p of paths) for (let i = 1; i < p.length; i++) link(p[i - 1], p[i], c, 1); });
   for (let i = 0; i < d.land.length; i += 2) link(d.land[i], d.land[i + 1], -1, LAND_COST, HOP_COST);
   const stationName = new Map(d.stations.map(([i, n]) => [i, n]));
-  const hubs = [...new Set(d.stations.map((s) => s[0]))];
-  return { ...d, N, lat, lon, adj, stationName, hubs };
+  const stationHubs = [...new Set(d.stations.map((s) => s[0]))];
+  // land fiber costs like sea fiber; a corridor city reaches nearby landing stations by backhaul,
+  // and cities shared by two corridors (same coordinates) are joined
+  const seen = new Map();
+  for (const r of landRoutes) {
+    for (let i = 1; i < r.idx.length; i++) link(r.idx[i - 1], r.idx[i], r.c, 1);
+    for (const n of r.idx) {
+      const k = `${lat(n)},${lon(n)}`;
+      if (seen.has(k)) link(seen.get(k), n, r.c, 1); else seen.set(k, n);
+      for (const h of stationHubs) {
+        const dk = km(lat(n), lon(n), lat(h), lon(h));
+        if (dk < BACKBONE_LINK_KM) link(n, h, -1, LAND_COST, HOP_COST * 0.5);
+      }
+    }
+  }
+  const hubs = [...stationHubs, ...landRoutes.flatMap((r) => r.idx)];
+  return { ...d, N, lat, lon, adj, stationName, hubs, landRoutes };
 }
 
 // nearest few landing stations to a point, with their land cost

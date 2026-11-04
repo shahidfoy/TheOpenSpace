@@ -526,6 +526,15 @@ export class Hud {
   }
 
   // ---------- live cyber threats ----------
+  // live satellites on the globe: total, with the biggest constellations named
+  satLegend() {
+    const sats = this.app.mapView.cyber?.sats;
+    if (!sats) return '';
+    if (!sats.total()) return `<span class="cy-k"><i class="sat"></i>${sats.error ? 'satellite feed offline' : 'loading live satellites…'}</span>`;
+    const c = sats.counts, top = ['Starlink', 'OneWeb', 'Geostationary', 'GPS'].filter((k) => c[k]).map((k) => `${k} ${fmt(c[k])}`).join(' · ');
+    return `<span class="cy-k"><i class="sat"></i>${sats.total().toLocaleString()} satellites live (CelesTrak) · ${top}</span>`;
+  }
+
   cyberLegend() {
     const d = cyber.data;
     if (!d) return cyber.error
@@ -543,7 +552,7 @@ export class Hud {
     for (const src of ['bruteforce', 'attackers', 'malware', 'abuseipdb']) if (cy.sourceOn(src)) for (const v of d[src] || []) if (v.country) orig[v.country] = (orig[v.country] || 0) + 1;
     const topOrig = Object.entries(orig).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([c, n]) => `${esc(COUNTRIES[c]?.[2] || c)} ${n}`).join(' · ');
     return legend(`LIVE · ${on.length} SOURCES · ${ago(d.updated)}`, ev[0] ? `<span class="cy-ev one">${tick(ev[0])}</span>` : `<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware · ${countries} countries</span>`,
-      `<div class="cy-ticker">${ev.map(tick).join('') || '<span class="cy-ev">Waiting for the next report…</span>'}</div><span class="cy-k"><i class="l"></i>${live} attacks reported in the last 10 min</span>${topOrig ? `<span class="cy-k">top attack origins (machines): ${topOrig}</span>` : ''}<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h)</span><span class="cy-k"><i class="o"></i>${d.ransomware.filter((v) => groupOrigin(v.group)).length} with a reported origin (cable routes)</span><span class="cy-k"><i class="c"></i>submarine cables (TeleGeography)</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button> <button class="btn sm ghost" data-open="cyber:sources">SOURCES</button>`);
+      `<div class="cy-ticker">${ev.map(tick).join('') || '<span class="cy-ev">Waiting for the next report…</span>'}</div><span class="cy-k"><i class="l"></i>${live} attacks reported in the last 10 min</span>${topOrig ? `<span class="cy-k">top attack origins (machines): ${topOrig}</span>` : ''}<span class="cy-k"><i class="m"></i>${d.ransomware.length} ransomware incidents (72 h) · victims known by country: outlined</span><span class="cy-k"><i class="o"></i>${d.ransomware.filter((v) => groupOrigin(v.group)).length} with a reported origin (cable routes)</span><span class="cy-k"><i class="c"></i>submarine cables (TeleGeography)</span><span class="cy-k"><i class="lc"></i>land fiber backbones (major corridors, representative)</span>${this.satLegend()}<span class="cy-k"><i class="ol"></i>outline = country known, exact source unknown</span><span class="cy-k"><i class="a"></i>${d.attackers.length} top attack sources</span><span class="cy-k"><i class="r"></i>${online} botnet servers online</span><span class="cy-k">${countries} countries · ${states} US states · tap a marker</span><button class="btn sm" data-open="cyber">INCIDENT LOG</button> <button class="btn sm ghost" data-open="cyber:sources">SOURCES</button>`);
   }
 
   // every feed, whether it's on, how fresh it is, and the API key that would switch it on

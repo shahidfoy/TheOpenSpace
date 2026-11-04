@@ -7,6 +7,8 @@ import { groupOrigin, ORIGIN_HUBS } from '../data/ransomwareGroups.js';
 import { loadCables, route, cableNet } from './cableNet.js';
 import { planetMaterial, bodyQuat } from './planets.js';
 import { atmosphereMaterial } from './shaders.js';
+import { SatelliteLayer, SAT_GROUPS } from './satellites.js';
+import { HUB_CITIES } from '../data/hubCities.js';
 
 // Live cyber-threat globe. Data comes from our own aggregator (/api/threats/feed, a DigitalOcean
 // Function that reads blocklist.de, ransomware.live, SANS ISC, abuse.ch, OpenPhish, CISA KEV, NVD
@@ -162,6 +164,36 @@ export const ccOfName = (n) => (n ? NAME_CC[n.toLowerCase()] || (n.length === 2 
 // Incidents are grouped by country, and inside the US by state ("US-TX"); "US" holds US incidents
 // whose state isn't known.
 export const keyOf = (cc, region) => (cc === 'US' && region && US_STATES[region] ? `US-${region}` : cc);
+// Country / US-state outlines (Natural Earth, built by scripts/build-borders.mjs). When a report
+// names only a country, the globe lights that country's outline rather than pinning a made-up
+// point at its centre.
+let borders = null, bordersLoading = null;
+export function loadBorders() {
+  return (bordersLoading ||= fetch(`${import.meta.env.BASE_URL}data/borders.json`).then((r) => r.json()).then((d) => (borders = d.borders)).catch(() => null));
+}
+function outlineGeo(key, lift) {
+  const rings = borders?.[key];
+  if (!rings) return null;
+  const pos = [], a = new THREE.Vector3(), b = new THREE.Vector3();
+  for (const r of rings) for (let i = 0; i < r.length; i += 2) {
+    const j = (i + 2) % r.length;
+    latLon(r[i], r[i + 1], GLOBE_R * lift, a);
+    latLon(r[j], r[j + 1], GLOBE_R * lift, b);
+    pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return g;
+}
+// Where traffic for a place lands: a US state's centre, else the country's main internet hub
+// city, else its centroid.
+export function hubOf(key) {
+  if (!key) return null;
+  if (!key.startsWith('US-') && HUB_CITIES[key]) return HUB_CITIES[key];
+  const p = placeOf(key);
+  return p ? [p[0], p[1]] : null;
+}
+
 export function placeOf(key) {
   if (!key) return null; // some posts carry no country at all
   if (key.startsWith('US-')) {
@@ -252,12 +284,12 @@ function glowTex() {
 }
 
 // View layers for the CYBER globe, and the presets the map bar offers.
-export const CYBER_LAYERS = ['earth', 'clouds', 'cables', 'routes', 'threats', 'labels'];
+export const CYBER_LAYERS = ['earth', 'clouds', 'cables', 'routes', 'threats', 'sats', 'labels'];
 export const CYBER_PRESETS = {
-  all: { earth: 1, clouds: 1, cables: 1, routes: 1, threats: 1, labels: 1 },
-  clear: { earth: 1, clouds: 0, cables: 1, routes: 1, threats: 1, labels: 1 },
-  cables: { earth: 0, clouds: 0, cables: 1, routes: 0, threats: 0, labels: 0 },
-  threats: { earth: 1, clouds: 0, cables: 0, routes: 1, threats: 1, labels: 1 },
+  all: { earth: 1, clouds: 1, cables: 1, routes: 1, threats: 1, sats: 1, labels: 1 },
+  clear: { earth: 1, clouds: 0, cables: 1, routes: 1, threats: 1, sats: 1, labels: 1 },
+  cables: { earth: 0, clouds: 0, cables: 1, routes: 0, threats: 0, sats: 0, labels: 0 },
+  threats: { earth: 1, clouds: 0, cables: 0, routes: 1, threats: 1, sats: 0, labels: 1 },
 };
 
 export class CyberGlobe {
@@ -295,6 +327,9 @@ export class CyberGlobe {
     // live reports: one point cloud per source, plus short "strike" flashes as reports arrive
     this.live = new THREE.Group();
     this.group.add(this.live);
+    // live satellite traffic (CelesTrak + SGP4), loaded the first time the globe is shown
+    this.sats = new SatelliteLayer(GLOBE_R);
+    this.group.add(this.sats.group);
     this.clouds = {};
     this.strikes = [];
     this.liveDirty = true;
@@ -324,6 +359,9 @@ export class CyberGlobe {
     u.uCloudK.value = L.clouds && L.earth ? 1 : 0;
     this.atmo.visible = !!L.earth;
     if (this.cables) this.cables.visible = !!L.cables;
+    if (this.landCables) this.landCables.visible = !!L.cables;
+    this.sats.group.visible = L.sats !== 0 && L.sats !== false;
+    for (const l of this.sats.labels) l.element.style.display = this.sats.group.visible ? '' : 'none';
     for (const o of this.markers.children) o.visible = !!L[o.userData.layer || 'threats'] && this.sourceOn(o.userData.src);
     for (const o of this.live.children) o.visible = !!L.threats && this.sourceOn(o.userData.src);
     this.setLabelsVisible(this.labelsShown);
@@ -348,6 +386,7 @@ export class CyberGlobe {
     let maxR = 1, maxA = 1;
     for (const cc in by) { maxR = Math.max(maxR, by[cc].ransomware.length); maxA = Math.max(maxA, by[cc].attackers.reduce((s, a) => s + a.attacks, 0)); }
     const recent = Date.now() - 6 * 3600 * 1000;
+    const outlines = [], botStack = {};
     for (const cc in by) {
       const c = by[cc], [lat, lon, name] = placeOf(cc);
       const base = latLon(lat, lon, GLOBE_R);
@@ -356,72 +395,52 @@ export class CyberGlobe {
       if (c.ransomware.length) {
         const k = c.ransomware.length, fresh = c.ransomware.some((v) => Date.parse(v.t) > recent);
         const h = 0.3 + Math.log2(k + 1) * 0.42;
-        const geo = new THREE.CylinderGeometry(0.035 + 0.012 * Math.log2(k + 1), 0.06 + 0.018 * Math.log2(k + 1), h, 10, 1, true);
-        geo.translate(0, h / 2, 0);
-        const m = new THREE.Mesh(geo, new THREE.ShaderMaterial({
-          uniforms: { uColor: { value: new THREE.Color(fresh ? 0xff2bd6 : 0xb04cff) }, uTime: { value: 0 }, uPhase: { value: rnd(lat + lon) * 6 } },
-          vertexShader: COLUMN_VERT, fragmentShader: COLUMN_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-        }));
-        m.position.copy(base);
-        m.quaternion.setFromUnitVectors(up, n);
-        m.userData.src = 'ransomware';
-        this.markers.add(m);
-        cols.push(m);
-        const g = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xff2bd6).multiplyScalar(1.6), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-        g.position.copy(base).addScaledVector(n, 0.05);
-        g.scale.setScalar(0.5 + 0.18 * Math.log2(k + 1));
-        g.userData.src = 'ransomware';
-        this.markers.add(g);
+        // leak sites name only the victim's country (or US state): light its outline, brighter
+        // for more incidents, instead of planting a point at its centre
+        outlines.push({ key: cc, color: fresh ? 0xff2bd6 : 0xb04cff, k: Math.min(1, 0.35 + 0.2 * Math.log2(k + 1)), src: 'ransomware', lift: 1.0025 });
         if (k >= Math.max(2, maxR * 0.15)) {
           const el = document.createElement('div');
           el.className = 'cyber-label';
           el.innerHTML = `<b>${cc === 'US' ? 'USA · state unknown' : name.replace(', USA', '')}</b><small>${k} ransomware</small>`;
           const l = new CSS2DObject(el);
-          l.position.copy(base).addScaledVector(n, h + 0.25);
+          l.position.copy(base).addScaledVector(n, 0.35);
           l.userData.src = 'ransomware';
           this.markers.add(l);
           this.labels.push(l);
         }
       }
-      // attack sources: amber pulsing rings, size by attacks seen
-      const att = c.attackers.reduce((s, a) => s + a.attacks, 0);
-      if (att) {
-        const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffb347).multiplyScalar(2.2), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
-        // at the attackers' real locations when known (e.g. a data-centre city), else the centroid
-        const geo = c.attackers.filter((a) => a.lat != null);
-        if (geo.length) {
-          const p = latLon(geo.reduce((s, a) => s + a.lat, 0) / geo.length, geo.reduce((s, a) => s + a.lon, 0) / geo.length, GLOBE_R);
-          ring.position.copy(p).addScaledVector(p.clone().normalize(), 0.03);
-          ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), p.clone().normalize());
-        } else {
-          ring.position.copy(base).addScaledVector(n, 0.03);
-          ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-        }
-        ring.userData = { pulse: true, s: 0.25 + 0.55 * Math.sqrt(att / maxA), phase: rnd(lon), src: 'attackers' };
-        this.markers.add(ring);
-        const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xffb347).multiplyScalar(1.4), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-        dot.position.copy(ring.position);
-        dot.scale.setScalar(0.35);
-        dot.userData.src = 'attackers';
-        this.markers.add(dot);
+      // attack sources: amber pulsing rings at the attackers' real cities (clustered to ~100 km),
+      // size by attacks seen. Attackers known only by country light its outline instead.
+      const located = {};
+      let unplaced = 0;
+      for (const a of c.attackers) {
+        if (a.lat == null) { unplaced += a.attacks; continue; }
+        const g = (located[`${Math.round(a.lat)},${Math.round(a.lon)}`] ||= { lat: 0, lon: 0, n: 0, att: 0 });
+        g.lat += a.lat; g.lon += a.lon; g.n++; g.att += a.attacks;
       }
-      // botnet command servers: red diamonds hovering above the country
-      c.botnets.forEach((b, i) => {
+      for (const g of Object.values(located)) this.attackRing(latLon(g.lat / g.n, g.lon / g.n, GLOBE_R), g.att, maxA, rnd(g.lon));
+      if (unplaced) outlines.push({ key: cc, color: 0xffb347, k: 0.6, src: 'attackers', lift: 1.0035 });
+      // botnet command servers: red diamonds over the server's own city (stacked when several
+      // share one); servers known only by country hover over its hub and light its outline
+      let unknownBot = false;
+      c.botnets.forEach((b) => {
         const d = new THREE.Mesh(new THREE.OctahedronGeometry(0.12), new THREE.MeshBasicMaterial({ color: new THREE.Color(b.status === 'online' ? 0xff2a3a : 0x803038).multiplyScalar(b.status === 'online' ? 2.5 : 1) }));
-        d.position.copy(base).addScaledVector(n, 0.35 + i * 0.28);
+        const at = b.lat != null ? [b.lat, b.lon] : hubOf(cc) || [lat, lon];
+        if (b.lat == null) unknownBot = true;
+        const sk = `${at[0].toFixed(1)},${at[1].toFixed(1)}`;
+        const stack = (botStack[sk] = (botStack[sk] || 0) + 1) - 1;
+        const bp = latLon(at[0], at[1], GLOBE_R);
+        d.position.copy(bp).addScaledVector(bp.clone().normalize(), 0.3 + stack * 0.24);
         d.userData = { spin: true, src: 'botnets' };
         this.markers.add(d);
       });
+      if (unknownBot) outlines.push({ key: cc, color: 0xff2a3a, k: 0.6, src: 'botnets', lift: 1.004 });
       // OTX campaigns: a slow blue square pulse on each targeted country, size by campaign count
-      if (c.otx.length) {
-        const sq = new THREE.Mesh(new THREE.RingGeometry(0.8, 0.9, 4), new THREE.MeshBasicMaterial({ color: new THREE.Color(0x7aa2ff).multiplyScalar(2.2), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
-        sq.position.copy(base).addScaledVector(n, 0.05);
-        sq.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
-        sq.userData = { pulse: true, s: 0.5 + 0.25 * Math.log2(c.otx.length + 1), phase: rnd(lat), src: 'otx' };
-        this.markers.add(sq);
-      }
+      // OTX campaigns name targeted countries: outline them in blue, brighter for more campaigns
+      if (c.otx.length) outlines.push({ key: cc, color: 0x7aa2ff, k: Math.min(1, 0.4 + 0.2 * Math.log2(c.otx.length + 1)), src: 'otx', lift: 1.0045 });
     }
     this.columns = cols;
+    this.drawOutlines(outlines);
     this.buildArcs(data);
     this.buildDdos(data.ddos || []);
   }
@@ -438,7 +457,7 @@ export class CyberGlobe {
       if (this.markers !== markers) return; // rebuilt meanwhile
       cyber.ddosRoutes = [];
       pairs.forEach((p, i) => {
-        const a = placeOf(p.from), b = placeOf(p.to);
+        const a = hubOf(p.from), b = hubOf(p.to);
         if (!a || !b) return;
         const r = route(ORIGIN_HUBS[p.from] || a, b);
         const path = r ? routePath(r) : liftedArc(a, b);
@@ -472,6 +491,7 @@ export class CyberGlobe {
   buildLive(data, by) {
     this.liveDirty = false;
     if (!data) return;
+    const liveKeys = {};
     for (const id in SOURCE_STYLE) {
       if (SOURCE_STYLE[id].globe !== 'points') continue;
       const items = (data[id] || []).filter((it) => cyber.arrived.has(it.id));
@@ -485,6 +505,8 @@ export class CyberGlobe {
       // brighter the newer; an hour-old report is a faint ember
       const pos = [], col = [], base = new THREE.Color(SOURCE_STYLE[id].css), v = new THREE.Vector3(), now = Date.now();
       for (const it of items) {
+        // a report placed only by country lights that country's outline, not a point at its centre
+        if (it.lat == null) { const k = keyOf(it.country, it.region); if (placeOf(k)) (liveKeys[id] ||= new Set()).add(k); continue; }
         const w = whereOf(it);
         if (!w) continue;
         latLon(w[0], w[1], GLOBE_R * 1.006, v);
@@ -498,6 +520,13 @@ export class CyberGlobe {
       cloud.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       cloud.geometry.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     }
+    // outlines for this round's unlocated reports, in each source's colour
+    for (const m of this.liveOutlines || []) { this.live.remove(m); m.geometry.dispose(); m.material.dispose(); }
+    this.liveOutlines = [];
+    if (borders) for (const id in liveKeys) for (const key of liveKeys[id]) {
+      const m = this.outlineMesh({ key, color: SOURCE_STYLE[id].css, k: 0.5, src: id, lift: 1.005 });
+      if (m) { this.live.add(m); this.liveOutlines.push(m); }
+    } else loadBorders().then(() => { this.liveDirty = true; });
     this.hits = [];
     for (const cc in by) {
       const p = placeOf(cc);
@@ -511,6 +540,20 @@ export class CyberGlobe {
   strike(ev) {
     const w = whereOf(ev.it), st = SOURCE_STYLE[ev.src];
     if (!w || !st?.globe || !this.sourceOn(ev.src) || !this.layers.threats) return;
+    // known only by country: flash the country's outline instead of a beam at its centre
+    if (ev.it.lat == null && borders) {
+      const m = this.outlineMesh({ key: keyOf(ev.it.country, ev.it.region), color: st.css, k: 1, src: ev.src, lift: 1.006 });
+      if (m) {
+        m.userData.glow = null;
+        const g = new THREE.Group();
+        g.add(m);
+        g.userData.src = ev.src;
+        this.live.add(g);
+        this.strikes.push({ g, outline: m, age: 0 });
+        while (this.strikes.length > 40) this.endStrike(this.strikes.shift());
+        return;
+      }
+    }
     const p = latLon(w[0], w[1], GLOBE_R), n = p.clone().normalize();
     const c = new THREE.Color(st.css);
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1, 32), new THREE.MeshBasicMaterial({ color: c.clone().multiplyScalar(2.6), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
@@ -535,6 +578,48 @@ export class CyberGlobe {
     s.g.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); });
   }
 
+  attackRing(p, att, maxA, phase) {
+    const n = p.clone().normalize();
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 40), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffb347).multiplyScalar(2.2), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
+    ring.position.copy(p).addScaledVector(n, 0.03);
+    ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    ring.userData = { pulse: true, s: 0.2 + 0.5 * Math.sqrt(att / maxA), phase, src: 'attackers' };
+    this.markers.add(ring);
+    const dot = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(0xffb347).multiplyScalar(1.4), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    dot.position.copy(ring.position);
+    dot.scale.setScalar(0.3);
+    dot.userData.src = 'attackers';
+    this.markers.add(dot);
+  }
+
+  // glowing country / state outlines (borders load once, in the background)
+  outlineMesh(o) {
+    const geo = outlineGeo(o.key, o.lift);
+    if (!geo) return null;
+    const m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: new THREE.Color(o.color).multiplyScalar(2.2), transparent: true, opacity: o.k, blending: THREE.AdditiveBlending, depthWrite: false }));
+    m.userData = { src: o.src, glow: { base: o.k, phase: (o.key.charCodeAt(0) + (o.key.charCodeAt(1) || 0)) * 0.37 } };
+    return m;
+  }
+  drawOutlines(list) {
+    const markers = this.markers;
+    loadBorders().then(() => {
+      if (this.markers !== markers) return; // rebuilt meanwhile
+      for (const o of list) {
+        const m = this.outlineMesh(o);
+        if (m) { this.markers.add(m); continue; }
+        // no outline for this place (a tiny island state): a soft glow at its centre instead
+        const pl = placeOf(o.key);
+        if (!pl) continue;
+        const g = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glow, color: new THREE.Color(o.color).multiplyScalar(1.4), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+        g.position.copy(latLon(pl[0], pl[1], GLOBE_R * 1.01));
+        g.scale.setScalar(0.4);
+        g.userData.src = o.src;
+        this.markers.add(g);
+      }
+      this.applyLayers();
+    });
+  }
+
   // Reported origin → victim arcs, aggregated per (origin country, victim country/state).
   buildArcs(data) {
     this.arcs = [];
@@ -546,7 +631,7 @@ export class CyberGlobe {
       (origins[o.cc] = origins[o.cc] || new Set()).add(v.group);
       if (!tp || tk === o.cc) continue;
       const key = `${o.cc}>${tk}`;
-      const p = (pairs[key] = pairs[key] || { cc: o.cc, to: tp, n: 0, groups: new Set() });
+      const p = (pairs[key] = pairs[key] || { cc: o.cc, to: [...(hubOf(tk) || tp), tp[2]], n: 0, groups: new Set() });
       p.n++;
       p.groups.add(v.group);
     }
@@ -583,7 +668,7 @@ export class CyberGlobe {
     });
     // reported bases: a red hexagon at the country's main internet hub + label naming the groups
     for (const cc in origins) {
-      const [la, lo] = ORIGIN_HUBS[cc] || COUNTRIES[cc], name = COUNTRIES[cc][2];
+      const [la, lo] = ORIGIN_HUBS[cc] || hubOf(cc), name = COUNTRIES[cc][2];
       const pos = latLon(la, lo, GLOBE_R), n = pos.clone().normalize();
       const ring = new THREE.Mesh(new THREE.RingGeometry(0.42, 0.5, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(0xff2a3a).multiplyScalar(2.4), transparent: true, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false }));
       ring.position.copy(pos).addScaledVector(n, 0.04);
@@ -600,6 +685,21 @@ export class CyberGlobe {
       this.labels.push(l);
     }
     this.arcStats = { pairs: list.length, attributed: list.reduce((x, p) => x + p.n, 0) };
+    this.applyLayers();
+  }
+
+  // name the crewed stations so they stand out in the swarm
+  labelSats() {
+    for (const s of this.sats.sats) {
+      if (SAT_GROUPS[s.g].id !== 'stations') continue;
+      const el = document.createElement('div');
+      el.className = 'cyber-label sat';
+      el.innerHTML = `<b>${/ISS/.test(s.name) ? 'ISS' : 'TIANGONG'}</b><small>crewed station · live</small>`;
+      const l = new CSS2DObject(el);
+      l.userData.sat = s;
+      this.sats.group.add(l);
+      this.sats.labels.push(l);
+    }
     this.applyLayers();
   }
 
@@ -629,11 +729,31 @@ export class CyberGlobe {
     this.cables = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false }));
     this.cables.visible = !!this.layers.cables;
     this.group.add(this.cables);
+    // terrestrial backbones (src/data/landRoutes.js): warm amber, so land and sea fiber read apart
+    const lp = [];
+    for (const r of net.landRoutes || []) for (let i = 1; i < r.idx.length; i++) {
+      latLon(net.lat(r.idx[i - 1]), net.lon(r.idx[i - 1]), 1, a);
+      latLon(net.lat(r.idx[i]), net.lon(r.idx[i]), 1, b);
+      const steps = Math.max(1, Math.ceil(a.angleTo(b) / 0.02));
+      prev.copy(a);
+      for (let k = 1; k <= steps; k++) {
+        q.copy(a).lerp(b, k / steps).normalize();
+        lp.push(prev.x * GLOBE_R * 1.0025, prev.y * GLOBE_R * 1.0025, prev.z * GLOBE_R * 1.0025, q.x * GLOBE_R * 1.0025, q.y * GLOBE_R * 1.0025, q.z * GLOBE_R * 1.0025);
+        prev.copy(q);
+      }
+    }
+    const lg = new THREE.BufferGeometry();
+    lg.setAttribute('position', new THREE.Float32BufferAttribute(lp, 3));
+    this.landCables = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: new THREE.Color(0xffb347).multiplyScalar(1.3), transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+    this.landCables.visible = !!this.layers.cables;
+    this.group.add(this.landCables);
   }
 
   // real day/night: the Sun's direction in Earth-fixed coordinates = globe local frame
   update(dt, t, camera) {
     this.time += dt;
+    if (!this.sats.loading) this.sats.load().then(() => this.labelSats()).catch(() => {});
+    this.sats.update(dt, t);
     // CSS labels don't get hidden by the globe: hide those on the far side
     const camDir = camera.position.clone().normalize();
     for (const l of this.labels) l.element.style.visibility = this.layers.labels && l.position.clone().normalize().dot(camDir) > 0.1 ? 'visible' : 'hidden';
@@ -658,6 +778,7 @@ export class CyberGlobe {
         m.scale.setScalar(m.userData.s * (0.3 + f * 1.4));
         m.material.opacity = 1 - f;
       } else if (m.userData.spin) m.rotation.y += dt * 1.5;
+      else if (m.userData.glow) m.material.opacity = m.userData.glow.base * (0.7 + 0.3 * Math.sin(this.time * 1.6 + m.userData.glow.phase));
       else if (m.material?.uniforms?.uTime) m.material.uniforms.uTime.value = this.time;
     }
     // live reports: release what's due, flash them in, and refresh the point clouds once a second
@@ -666,6 +787,7 @@ export class CyberGlobe {
     for (let i = this.strikes.length - 1; i >= 0; i--) {
       const s = this.strikes[i], f = (s.age += dt) / 2.5;
       if (f >= 1) { this.endStrike(s); this.strikes.splice(i, 1); continue; }
+      if (s.outline) { s.outline.material.opacity = (1 - f) * (0.65 + 0.35 * Math.cos(f * 40)); continue; }
       s.ring.scale.setScalar(0.1 + f * 0.9);
       s.ring.material.opacity = 1 - f;
       s.beam.scale.set(1, Math.min(1, f * 6) * (1 - f), 1);
