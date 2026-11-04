@@ -753,11 +753,33 @@ export class MapView {
     return { g, holder, line: path, el: lab.element };
   }
 
+  // Where a ship in transit is drawn: between where the MAP draws the two worlds (on the
+  // illustrative scale a moon sits on a display orbit around its planet, far from its true
+  // 0.0026 AU), and never inside either globe: at departure and arrival it waits just off the
+  // surface, on the side facing the other world.
+  transitPos(from, to, depart, arrive, t, out) {
+    const tt = Math.min(arrive, Math.max(depart, t));
+    const k = THREE.MathUtils.clamp((t - depart) / Math.max(1, arrive - depart), 0, 1);
+    const a = this.posFor(from, tt, this._ta || (this._ta = new THREE.Vector3()));
+    const b = this.posFor(to, tt, this._tb || (this._tb = new THREE.Vector3()));
+    out.copy(a).lerp(b, k);
+    const d = this._td || (this._td = new THREE.Vector3());
+    for (const [id, c, other] of [[from, a, b], [to, b, a]]) {
+      if (!this.items[id]) continue;
+      const r = this.radiusOf(id) * 1.4;
+      d.copy(out).sub(c);
+      if (d.length() >= r) continue;
+      if (d.lengthSq() < 1e-12) d.copy(other).sub(c);
+      out.copy(c).add(d.setLength(r));
+    }
+    return out;
+  }
+
   placeMarker(m, from, to, depart, arrive, t, text) {
-    this.auToMap(transitAU(from, to, depart, arrive, t), m.holder.position);
-    const dest = this.auToMap(transitAU(from, to, depart, arrive, arrive), tmpB);
+    this.transitPos(from, to, depart, arrive, t, m.holder.position);
+    const dest = this.transitPos(from, to, depart, arrive, arrive, tmpB);
     m.holder.lookAt(dest);
-    m.holder.scale.setScalar(this.mode() === 'true' ? this.dist * 0.02 : Math.max(1, this.dist * 0.02));
+    m.holder.scale.setScalar(this.dist * 0.02); // same size on screen however far you zoom
     const p = m.line.geometry.attributes.position;
     p.setXYZ(0, m.holder.position.x, m.holder.position.y, m.holder.position.z);
     p.setXYZ(1, dest.x, dest.y, dest.z);
@@ -831,10 +853,10 @@ export class MapView {
       const rp = f.route.geometry.attributes.position, fp = f.flown.geometry.attributes.position;
       for (let i = 0; i <= f.N; i++) {
         const u = i / f.N;
-        this.auToMap(transitAU(v.from, v.to, v.depart, v.arrive, v.depart + (v.arrive - v.depart) * u), tmpB);
+        this.transitPos(v.from, v.to, v.depart, v.arrive, v.depart + (v.arrive - v.depart) * u, tmpB);
         rp.setXYZ(i, tmpB.x, tmpB.y, tmpB.z);
         // flown part ends exactly at the convoy
-        if (u > k) this.auToMap(transitAU(v.from, v.to, v.depart, v.arrive, t), tmpB);
+        if (u > k) this.transitPos(v.from, v.to, v.depart, v.arrive, t, tmpB);
         fp.setXYZ(i, tmpB.x, tmpB.y, tmpB.z);
       }
       rp.needsUpdate = fp.needsUpdate = true;
