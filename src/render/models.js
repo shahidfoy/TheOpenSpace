@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { glowSprite } from './shaders.js';
 import { instance, instanceChild, anchors, part } from './assets.js';
 import { PBR, ROCK_NORMAL } from './materials.js';
+import { buildMechRig, applyPose } from './mech/mechRig.js';
+import { locoPose, newPose } from './mech/swordAnim.js';
 
 // Hero assets come from Blender GLBs (blender/build_models.py); the procedural
 // builders below are fallbacks with the same conventions (forward = +Z, up = +Y).
@@ -366,25 +368,16 @@ function droneProc() {
 }
 
 // ---------------- mech ----------------
-// The Blender mech is articulated: pelvis > thigh_* > shin_* > foot_*, pelvis > torso > head / arm_*.
+// Knight-frame mech (procedural, see mech/mechRig.js), posed in its idle guard stance with the blade lit.
+// userData.parts maps the old Blender part names onto rig joints so the shipyard idle animation still works.
 export function makeMech() {
-  const g = instance('mech');
-  if (!g) return mechProc();
-  g.userData.parts = Object.fromEntries(['pelvis', 'torso', 'head', 'arm_L', 'arm_R', 'thigh_L', 'thigh_R', 'shin_L', 'shin_R'].map((n) => [n, part(g, n)]));
-  return g;
-}
-
-function mechProc() {
-  const g = new THREE.Group();
-  g.add(box(1.6, 0.6, 1, MAT.hull, 0, 3, 0));
-  for (const s of [-1, 1]) {
-    g.add(box(0.55, 1.5, 0.7, MAT.hullLight, s * 0.6, 2.1, 0));
-    g.add(box(0.6, 1.6, 0.8, MAT.hull, s * 0.65, 0.9, 0.12));
-    g.add(box(0.9, 0.8, 1.1, MAT.accent, s * 1.55, 4.55, 0));
-  }
-  g.add(box(2.2, 1.6, 1.5, MAT.hullLight, 0, 4.1, 0));
-  g.add(box(1.0, 0.5, 0.4, MAT.glass, 0, 4.4, 0.78));
-  return g;
+  const rig = buildMechRig();
+  const pose = locoPose(newPose(), 0, 0, 0);
+  applyPose(rig, pose);
+  const J = rig.J;
+  rig.root.userData.parts = { torso: J.chest, head: J.head, arm_L: J.shL, arm_R: J.shR, pelvis: J.hips };
+  rig.root.userData.rig = rig;
+  return rig.root;
 }
 
 // ---------------- field objects: rocks, ice, orbital junk, canisters ----------------
