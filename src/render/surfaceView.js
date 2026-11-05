@@ -7,7 +7,8 @@ import { planetMaterial, ringMesh, bodyQuat } from './planets.js';
 import { distKm } from '../sim/orbits.js';
 import { simNow } from '../sim/state.js';
 import { makeSky } from './sky.js';
-import { makeMech, makeSeedShip, makeDrone, rockGeometry, MAT } from './models.js';
+import { makeSeedShip, makeDrone, rockGeometry, MAT } from './models.js';
+import { MechPilot } from './mech/mechPilot.js';
 import { ROCK_NORMAL } from './materials.js';
 import { haptic } from '../telegram.js';
 
@@ -93,29 +94,17 @@ export class SurfaceView {
     this.hemi = new THREE.HemisphereLight(0x8090b0, 0x201814, 0.25);
     this.scene.add(this.sun, this.sun.target, this.hemi);
 
-    this.mech = makeMech();
-    this.mech.traverse((o) => { if (o.isMesh) o.castShadow = true; });
-    this.parts = this.mech.userData.parts || {};
-    this.rest = {};
-    for (const k in this.parts) if (this.parts[k]) this.rest[k] = this.parts[k].position.clone();
-    this.jets = [-0.42, 0.42].map((x) => {
-      const s = glowSprite(0xff4be0, 2.4, 2.5);
-      s.position.set(x, 3.0, -1.05);
-      this.mech.add(s);
-      return s;
-    });
+    this.pilot = new MechPilot(this.scene);
+    this.mech = this.pilot.root;
     this.scene.add(this.mech);
 
     this.dust = glowSprite(0xffd2a0, 3, 1.2);
     this.dust.visible = false;
     this.scene.add(this.dust);
 
-    this.vel = new THREE.Vector3();
-    this.facing = 0;
+    this.camDist = 19;
     this.camYaw = Math.PI;
     this.camPitch = 0.28;
-    this.phase = 0;
-    this.fuel = 100;
     this.cargo = {};
     this.time = 0;
     this.info = { cargo: 0, cap: CAP, target: null, speed: 0, dock: 0, dockRange: PAD_R, fuel: 100, g: 1.62 };
@@ -177,9 +166,8 @@ export class SurfaceView {
       this.skyPlanet = m;
     } else this.skyPlanet = null;
 
-    this.mech.position.set(0, 0, PAD_R + 4);
-    this.vel.set(0, 0, 0);
-    this.facing = 0;
+    this.pilot.reset();
+    this.pilot.pos.set(0, 0, PAD_R + 4);
     this.camYaw = Math.PI;
     this.info.g = cfg.g;
     this.applyQuality();
@@ -314,7 +302,7 @@ export class SurfaceView {
         g.add(c);
       }
       g.add(glowSprite(RES[res].color, 7, 0.8));
-      const node = { group: g, res, hp: 0, maxHp: 14, alive: true, respawnAt: 0 };
+      const node = { group: g, pos: g.position, radius: 2.4, res, hp: 0, maxHp: 14, alive: true, respawnAt: 0, wobble: 0 };
       this.placeNode(node);
       this.content.add(g);
       this.nodes.push(node);
@@ -354,65 +342,47 @@ export class SurfaceView {
   update(dt, input) {
     this.time += dt;
     const I = input.sample(dt);
-    const m = this.mech, T = this.terrain, g = this.cfg.g;
+    const T = this.terrain, P = this.pilot, m = { position: P.pos };
 
-    // orbit camera from drag
+    // orbit camera from drag, zoom from wheel / pinch
     this.camYaw -= I.lookX * 0.006;
     this.camPitch = THREE.MathUtils.clamp(this.camPitch + I.lookY * 0.004, -0.15, 1.1);
+    this.camDist = THREE.MathUtils.clamp(this.camDist * I.zoom, 10, 45);
 
-    const fwd = new THREE.Vector3(-Math.sin(this.camYaw), 0, -Math.cos(this.camYaw));
-    const right = new THREE.Vector3(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw));
-    const wish = new THREE.Vector3().addScaledVector(fwd, I.move.y).addScaledVector(right, I.move.x);
-    if (wish.lengthSq() > 1) wish.normalize();
-    const ground = T.height(m.position.x, m.position.z);
-    const grounded = m.position.y <= ground + 0.05;
-    const drilling = I.mine && this.target && grounded;
-    const top = (I.boost ? 11 : 6) * (drilling ? 0.15 : 1);
-
-    // horizontal: snappy on the ground, sluggish in the air (low-g momentum)
-    const ctl = grounded ? 8 : 1.2;
-    this.vel.x = THREE.MathUtils.lerp(this.vel.x, wish.x * top, 1 - Math.exp(-ctl * dt));
-    this.vel.z = THREE.MathUtils.lerp(this.vel.z, wish.z * top, 1 - Math.exp(-ctl * dt));
-
-    // gravity + jetpack
-    const jet = I.lift > 0 && this.fuel > 0;
-    if (jet) {
-      this.vel.y += (g + 5.5) * dt;
-      this.fuel = Math.max(0, this.fuel - 28 * dt);
-    } else if (grounded) this.fuel = Math.min(100, this.fuel + 22 * dt);
-    this.vel.y -= g * dt;
-    this.vel.y = Math.min(this.vel.y, 14);
-    m.position.addScaledVector(this.vel, dt);
-
-    const h = T.height(m.position.x, m.position.z);
-    if (m.position.y < h) {
-      if (this.vel.y < -6) { haptic('heavy'); this.puff(m.position); }
-      m.position.y = h;
-      this.vel.y = Math.max(0, this.vel.y);
+    if (!this.ctx) {
+      this.ctx = {
+        height: (x, z) => this.terrain.height(x, z),
+        bound: BOUND,
+        targets: this.nodes,
+        onHit: (n, mv) => this.strikeNode(n, mv),
+        onSpend: () => {
+          if (this.time - (this.lowWarned || 0) > 3) { this.lowWarned = this.time; emit('toast', { text: 'Not enough thruster charge for an arc slash', kind: 'bad' }); }
+        },
+        puff: (p, s) => this.puff(p, s),
+        haptic,
+      };
     }
-    const r = Math.hypot(m.position.x, m.position.z);
-    if (r > BOUND) { m.position.x *= BOUND / r; m.position.z *= BOUND / r; }
+    this.ctx.g = this.cfg.g;
+    this.ctx.targets = this.nodes;
+    this.ctx.camYaw = this.camYaw;
+    P.update(dt, I, this.ctx);
 
-    // face movement direction (or the drill target)
-    const hs = Math.hypot(this.vel.x, this.vel.z);
-    let want = this.facing;
-    if (drilling) want = Math.atan2(this.target.group.position.x - m.position.x, this.target.group.position.z - m.position.z);
-    else if (hs > 0.6) want = Math.atan2(this.vel.x, this.vel.z);
-    let d = want - this.facing;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    this.facing += d * (1 - Math.exp(-8 * dt));
-    m.rotation.y = this.facing;
-
-    this.animate(dt, hs, grounded, drilling, jet);
-    for (const j of this.jets) {
-      j.visible = jet;
-      j.scale.setScalar(2 + Math.random() * 1.2);
+    this.updateTarget();
+    if (this.dustT > 0) {
+      this.dustT -= dt;
+      this.dust.material.opacity = Math.max(0, this.dustT / 0.6) * 0.8;
+      if (this.dustT <= 0) this.dust.visible = false;
     }
 
-    this.updateDrill(dt, drilling, grounded);
-
-    // nodes respawn, drones hover over the pad, beacon blinks
-    for (const n of this.nodes) if (!n.alive && this.time > n.respawnAt) this.placeNode(n);
+    // nodes respawn (and wobble when struck), drones hover over the pad, beacon blinks
+    for (const n of this.nodes) {
+      if (!n.alive && this.time > n.respawnAt) this.placeNode(n);
+      if (n.alive && n.wobble > 0) {
+        n.wobble = Math.max(0, n.wobble - dt * 3);
+        const k = 0.45 + 0.55 * (n.hp / n.maxHp);
+        n.group.scale.setScalar(k * (1 + Math.sin(this.time * 60) * 0.06 * n.wobble));
+      }
+    }
     this.padDrones.forEach((dr, i) => {
       const a = this.time * 0.4 + i * Math.PI;
       dr.position.set(Math.cos(a) * 9, 7 + Math.sin(this.time * 1.3 + i) * 0.8, Math.sin(a) * 9);
@@ -421,54 +391,32 @@ export class SurfaceView {
     this.beacon.visible = Math.sin(this.time * 3) > 0;
 
     const dock = Math.hypot(m.position.x, m.position.z);
-    if (dock < PAD_R && grounded && this.cargoTotal() > 0) this.unload();
+    if (dock < PAD_R && P.grounded && this.cargoTotal() > 0) this.unload();
 
-    // chase camera, kept above the ground
-    const cp = this.camPitch, dist = 17;
+    // chase camera, kept above the ground, with impact shake
+    const cp = this.camPitch, dist = this.camDist;
     const desired = new THREE.Vector3(
       m.position.x + Math.sin(this.camYaw) * Math.cos(cp) * dist,
-      m.position.y + 3.5 + Math.sin(cp) * dist,
+      m.position.y + 4.2 + Math.sin(cp) * dist,
       m.position.z + Math.cos(this.camYaw) * Math.cos(cp) * dist,
     );
     desired.y = Math.max(desired.y, T.height(desired.x, desired.z) + 1.2);
     this.camera.position.lerp(desired, 1 - Math.exp(-10 * dt));
-    this.camera.lookAt(m.position.x, m.position.y + 3.6, m.position.z);
+    this.camera.lookAt(m.position.x, m.position.y + 4.4, m.position.z);
+    if (P.shake > 0) {
+      const k = P.shake * P.shake * 0.6;
+      this.camera.position.x += (Math.random() - 0.5) * k;
+      this.camera.position.y += (Math.random() - 0.5) * k;
+    }
     this.sky.position.copy(this.camera.position);
 
     this.sun.position.copy(m.position).addScaledVector(SUN_DIR, 120);
     this.sun.target.position.copy(m.position);
 
     Object.assign(this.info, {
-      cargo: this.cargoTotal(), speed: hs, dock, fuel: this.fuel,
-      alt: m.position.y - h, target: this.target ? { res: this.target.res, dist: this.targetDist, hp: this.target.hp / this.target.maxHp } : null,
+      cargo: this.cargoTotal(), speed: P.speed, dock, fuel: P.fuel,
+      alt: P.alt, target: this.target ? { res: this.target.res, dist: this.targetDist, hp: this.target.hp / this.target.maxHp } : null,
     });
-  }
-
-  animate(dt, speed, grounded, drilling, jet) {
-    const p = this.parts;
-    if (!p.thigh_L) return;
-    const stride = grounded ? THREE.MathUtils.clamp(speed / 6, 0, 1.4) : 0;
-    this.phase += dt * (1.6 + speed * 0.75);
-    const s = Math.sin(this.phase), c = Math.cos(this.phase);
-    const k = 1 - Math.exp(-12 * dt);
-    const set = (o, v) => { o.rotation.x += (v - o.rotation.x) * k; };
-    if (grounded) {
-      set(p.thigh_L, -s * 0.55 * stride);
-      set(p.thigh_R, s * 0.55 * stride);
-      set(p.shin_L, (0.15 + Math.max(0, c) * 0.7) * stride);
-      set(p.shin_R, (0.15 + Math.max(0, -c) * 0.7) * stride);
-    } else {
-      // tuck legs while flying
-      set(p.thigh_L, -0.5); set(p.thigh_R, -0.3);
-      set(p.shin_L, 0.9); set(p.shin_R, 0.7);
-    }
-    set(p.arm_R, grounded ? s * 0.35 * stride : -0.3);
-    set(p.arm_L, drilling ? -1.35 : grounded ? -s * 0.35 * stride : -0.3);
-    set(p.torso, drilling ? 0.12 : 0.06 * stride);
-    const bob = grounded ? Math.abs(s) * 0.18 * stride : 0;
-    p.pelvis.position.y = this.rest.pelvis.y + bob - (drilling ? 0.15 : 0);
-    p.head.rotation.y = Math.sin(this.time * 0.7) * 0.15;
-    if (grounded && stride > 0.3 && Math.abs(s) < 0.08) this.puff(this.mech.position, 0.6);
   }
 
   puff(pos, scale = 1) {
@@ -478,46 +426,45 @@ export class SurfaceView {
     this.dustT = 0.6;
   }
 
-  updateDrill(dt, drilling, grounded) {
-    const m = this.mech;
-    const f = new THREE.Vector3(Math.sin(this.facing), 0, Math.cos(this.facing));
-    let best = null, bd = 9;
+  // nearest live deposit in front of the mech (HUD bracket)
+  updateTarget() {
+    const P = this.pilot, m = { position: P.pos };
+    const f = P.forward(new THREE.Vector3());
+    let best = null, bd = 22;
     for (const n of this.nodes) {
       if (!n.alive) continue;
       const v = n.group.position.clone().sub(m.position);
       v.y = 0;
       const d = v.length();
-      if (d < bd && (d < 4 || v.normalize().dot(f) > 0.2)) { bd = d; best = n; }
+      if (d < bd && (d < 8 || v.normalize().dot(f) > 0.3)) { bd = d; best = n; }
     }
-    this.target = grounded ? best : null;
+    this.target = best;
     this.targetDist = bd;
+  }
 
-    if (this.dustT > 0) {
-      this.dustT -= dt;
-      this.dust.material.opacity = Math.max(0, this.dustT / 0.6);
-      if (this.dustT <= 0) this.dust.visible = false;
-    }
-    if (!drilling || !this.target) { this.drillT = 0; return; }
-    const n = this.target;
-    this.dust.visible = true;
-    this.dust.position.copy(n.group.position).y += 1.4;
-    this.dust.scale.setScalar(3 + Math.random() * 3);
-    this.dust.material.opacity = 0.8;
-    this.dustT = 0.15;
-    this.drillT = (this.drillT || 0) + dt;
-    if (this.drillT < 0.32) return;
-    this.drillT = 0;
+  // a sword strike on a deposit: every 4 damage cuts a tonne of ore loose into the hopper
+  strikeNode(n, mv) {
+    const color = RES[n.res].color;
+    n.wobble = 1;
     if (this.cargoTotal() >= CAP) {
       if (this.time - (this.fullWarned || 0) > 4) {
         this.fullWarned = this.time;
         emit('toast', { text: 'Mech hopper full — walk back to the landing pad', kind: 'bad' });
       }
-      return;
+      return color;
     }
-    this.cargo[n.res] = (this.cargo[n.res] || 0) + 1;
-    n.hp--;
-    haptic('light');
-    n.group.scale.setScalar(0.45 + 0.55 * (n.hp / n.maxHp));
-    if (n.hp <= 0) { n.alive = false; n.group.visible = false; n.respawnAt = this.time + 60; }
+    const units = Math.min(n.hp, CAP - this.cargoTotal(), Math.max(1, Math.round(mv.dmg / 4)));
+    this.cargo[n.res] = (this.cargo[n.res] || 0) + units;
+    n.hp -= units;
+    if (n.hp <= 0) {
+      n.alive = false;
+      n.group.visible = false;
+      n.respawnAt = this.time + 60;
+      this.pilot.fx.sparksAt(n.group.position.clone().setY(n.group.position.y + 1.5), 60, { color, speed: 22, life: 0.9, floor: n.group.position.y });
+      this.pilot.fx.ring(n.group.position.clone().setY(n.group.position.y + 0.4), 7, { color, life: 0.5 });
+      this.puff(n.group.position, 1.4);
+      haptic('heavy');
+    }
+    return color;
   }
 }

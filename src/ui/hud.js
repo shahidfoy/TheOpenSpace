@@ -105,7 +105,8 @@ const TEMPLATE = `
   <div class="joy" id="joy"><div class="knob" id="knob"></div></div>
   <div class="btns">
     <button class="hold up" data-hold="up"><svg viewBox="0 0 24 24"><path d="M5 15l7-7 7 7" fill="none"/></svg></button>
-    <button class="hold" data-hold="down" hidden></button>
+    <button class="hold heavy" data-hold="down" hidden>HEAVY</button>
+    <button class="hold arc" data-hold="arc" hidden>ARC</button>
     <button class="hold boost" data-hold="boost">BOOST</button>
     <button class="hold mine" data-hold="mine"><span>MINE</span></button>
   </div>
@@ -319,13 +320,13 @@ export class Hud {
     const earth = this.app.mode === 'earth';
     this.root.classList.toggle('mode-earth', earth);
     const surf = this.app.mode === 'surface';
-    this.root.querySelector('.hold.mine span').textContent = earth ? 'BRAKE' : surf ? 'DRILL' : voyage ? 'SALVAGE' : 'MINE';
+    this.root.querySelector('.hold.mine span').textContent = earth ? 'BRAKE' : surf ? 'SLASH' : voyage ? 'SALVAGE' : 'MINE';
     this.root.querySelector('.hold.boost').textContent = surf ? 'SPRINT' : 'BOOST';
     this.$('attrib').textContent = earth ? ATTRIBUTION : '';
     this.$('hint').textContent = earth
       ? 'Stick: turn and climb · ▲ throttle · BOOST burn · BRAKE · drag to look'
       : surf
-      ? 'Stick to walk · drag to look · ▲ jetpack · hold DRILL at glowing deposits'
+      ? 'Stick to run · ▲ jump, again to double jump, hold to fly up · SPRINT in the air = rocket boost · SLASH deposits'
       : voyage ? 'Fleet on autopilot · fly around your convoy · real space is empty between worlds'
         : 'Drag to steer · stick to fly · hold MINE on salvage and rock';
     const v = this.app.mapView?.view || 'system';
@@ -863,7 +864,7 @@ export class Hud {
     const dev = this.app.dev ? `<h3>Dev time warp</h3><div class="costs">${[1, 60, 600, 3600].map((k) => `<button class="btn sm" data-act="scale" data-arg="${k}">×${k}</button>`).join('')}</div>` : '';
     return {
       title: 'Settings', kicker: 'System',
-      html: `<h3>Craft</h3><p class="note">Now flying the <b>${CRAFTS[c] || CRAFTS.frame}</b>. On EVA, fly the exosuit to your ship (follow the amber YOUR SHIP marker) and tap BOARD SHIP or press B when it lights up. In the ${CRAFTS.skiff}, tap EXIT SHIP (B) to step out: at a station within docking range, and anywhere during a fleet voyage, where the ship holds formation until you return. Both share the same hold and drive. On the surface you always walk in the loader mech.</p>
+      html: `<h3>Craft</h3><p class="note">Now flying the <b>${CRAFTS[c] || CRAFTS.frame}</b>. On EVA, fly the exosuit to your ship (follow the amber YOUR SHIP marker) and tap BOARD SHIP or press B when it lights up. In the ${CRAFTS.skiff}, tap EXIT SHIP (B) to step out: at a station within docking range, and anywhere during a fleet voyage, where the ship holds formation until you return. Both share the same hold and drive. On the surface you always pilot the knight-frame mech.</p>
         <h3>Graphics</h3><div class="seg wide">${['ultra', 'high', 'low'].map((k) => `<button class="${q === k ? 'on' : ''}" data-act="quality" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
         <p class="note">ULTRA: 4x MSAA, high-DPI, lens effects, sharp shadows. HIGH: bloom and lens effects. LOW: no post-processing, for older phones. Resolution adapts automatically to hold a smooth frame rate${this.app.fps ? ` (now ${this.app.fps.toFixed(0)} fps)` : ''}.</p>${dev}
         <h3>How to play</h3><button class="btn big ghost" data-act="help">OPEN THE TUTORIAL</button>

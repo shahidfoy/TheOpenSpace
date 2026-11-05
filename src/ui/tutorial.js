@@ -38,10 +38,10 @@ export const TUTORIAL = [
     desktop: [['k:Drag', 'Pan the map'], ['k:Mouse wheel', 'Zoom'], ['k:Right-drag', 'Orbit the camera'], ['k:Click a world', 'Open it: autopilot, send ships, uplink']],
   },
   {
-    kicker: 'SURFACE', title: 'Walk in the mech',
-    body: 'At a base on a solid world (Moon, Mars, Mercury, Ceres, Europa, Titan, Pluto) tap <b>DEPLOY MECH</b>. Gravity is the real value for that world. Drill glowing deposits and walk back onto the landing pad to unload.',
-    mobile: [['t:Left stick', 'Walk'], ['t:Drag', 'Turn the camera'], ['t:▲', 'Jetpack'], ['t:SPRINT · hold DRILL', 'Run · drill a deposit']],
-    desktop: [['k:[W] [A] [S] [D]', 'Walk'], ['k:Mouse drag', 'Turn the camera'], ['k:[R]', 'Jetpack'], ['k:[Shift] · hold [Space]', 'Run · drill a deposit']],
+    kicker: 'SURFACE', title: 'Pilot the knight-frame mech',
+    body: 'At a base on a solid world (Moon, Mars, Mercury, Ceres, Europa, Titan, Pluto) tap <b>DEPLOY MECH</b>. Gravity is the real value for that world. Run, double jump, fly on the thrusters and cut glowing deposits apart with the laser sword: every strike knocks ore into the hopper. Walk back onto the landing pad to unload.',
+    mobile: [['t:Left stick · SPRINT', 'Run · sprint'], ['t:Drag', 'Turn the camera'], ['t:▲ · SPRINT in the air', 'Jump · double jump · hold to fly up · rocket boost along the stick'], ['t:SLASH · HEAVY · ARC', 'Sword combo · heavy (plunge in the air) · spin slash']],
+    desktop: [['k:[W] [A] [S] [D] · [Shift]', 'Run · sprint'], ['k:Mouse drag', 'Turn the camera'], ['k:[Space] · [Shift] in the air', 'Jump · double jump · hold to fly up · rocket boost along the stick'], ['k:Click / [J] · right-click / [K] · [Q]', 'Sword combo · heavy (plunge in the air) · spin slash']],
   },
   {
     kicker: 'EARTH 2087', title: 'Fly down to Earth',
