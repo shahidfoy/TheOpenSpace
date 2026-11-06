@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { JOINTS } from './swordAnim.js';
 import { glowSprite } from '../shaders.js';
 import { instance } from '../assets.js';
@@ -12,6 +13,12 @@ import { plumeMaterial } from '../models.js';
 // armour, twin back binders with thrusters and a laser blade in the right hand.
 //
 // Joint convention (Euler 'YXZ'): x < 0 swings a limb forward, x > 0 bends knees back, z > 0 lifts the LEFT arm (+X).
+//
+// Performance: the Blender model arrives as ~130 primitives hung on 17 joint nodes. At load each mech is merged
+// into ONE rigidly skinned mesh per material (every vertex weighted 1.0 to its joint), so a mech costs ~16 draw
+// calls instead of ~130 (twice that with shadows) while the joints stay plain Object3Ds the animation drives.
+// Arena enemies use the lighter mech_lo.glb (no panel grooves, ~43k tris vs 150k) with their own paint scheme
+// and per-instance materials, so each one can flash / glow on its own (hit flash, attack telegraph).
 
 export const S = 3.1;
 const HIP_Y = 1.06;
@@ -42,9 +49,9 @@ function rimMat({ color, rough = 0.5, metal = 0.2, rim = 0xdfe8ff, rimPow = 3.2,
 const glow = (hex, k = 3) => new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(k), toneMapped: false });
 
 let MATS = null;
-function mats() {
-  if (MATS) return MATS;
-  MATS = {
+function mats(fresh = false) {
+  if (MATS && !fresh) return MATS;
+  const M = {
     armor: rimMat({ color: 0xa9b8b1, rough: 0.46, metal: 0.35, rimStr: 0.2 }),
     armor2: rimMat({ color: 0x737f7d, rough: 0.5, metal: 0.4, rimStr: 0.16 }),
     frame: rimMat({ color: 0x23272b, rough: 0.55, metal: 0.6, rimStr: 0.12 }),
@@ -53,7 +60,8 @@ function mats() {
     eye: glow(0x5effc0, 1.8),
     vent: glow(0x58e6ff, 1.4),
   };
-  return MATS;
+  if (!fresh) MATS = M;
+  return M;
 }
 
 // Chamfered, tapered box as a convex hull: w/h/d full size; tx/tz scale the top face, bx/bz the bottom face,
@@ -78,7 +86,7 @@ function hull(w, h, d, { tx = 1, tz = 1, bx = 1, bz = 1, sz = 0, c = 0.012 } = {
 
 // Laser sword: dark hilt, gold guard, emitter and a broad tapered energy blade (white core inside a cyan sheath).
 // Local +Z runs along the blade, +Y is the edge direction (blade "up"), matching the hand socket.
-function makeLaserSword(M) {
+function makeLaserSword(M, bladeHex = 0x38d4ff) {
   const g = new THREE.Group();
   const add = (geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); g.add(m); return m; };
   const grip = new THREE.CylinderGeometry(0.022, 0.024, 0.2, 8); grip.rotateX(Math.PI / 2);
@@ -108,11 +116,11 @@ function makeLaserSword(M) {
     g.add(m);
     return m;
   };
-  const core = blade(0.05, 0.008, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xeaffff).multiplyScalar(3.2), toneMapped: false, side: THREE.DoubleSide }));
-  const sheathMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0x38d4ff).multiplyScalar(2.2), toneMapped: false, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+  const core = blade(0.05, 0.008, new THREE.MeshBasicMaterial({ color: new THREE.Color(0xeaffff).lerp(new THREE.Color(bladeHex), bladeHex === 0x38d4ff ? 0 : 0.45).multiplyScalar(3.2), toneMapped: false, side: THREE.DoubleSide }));
+  const sheathMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(bladeHex).multiplyScalar(2.2), toneMapped: false, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
   const sheath = blade(0.075, 0.022, sheathMat);
   sheath.scale.set(1, 1, 1.03);
-  const light = new THREE.PointLight(0x6fe4ff, 0, 16, 2);
+  const light = new THREE.PointLight(new THREE.Color(bladeHex).lerp(new THREE.Color(0xffffff), 0.3), 0, 16, 2);
   light.position.set(0, 0, 0.75);
   g.add(light);
   g.userData = { base: new THREE.Vector3(0, 0, 0.26), tip: new THREE.Vector3(0, 0.01, 0.2 + L), length: L + 0.2, core, sheath, light, sheathMat };
@@ -122,48 +130,68 @@ function makeLaserSword(M) {
 // ---------- the rig ----------
 // ---------- thrusters: additive plume cone + nozzle glow on an anchor whose local -Y is the exhaust ----------
 const THRUST_SIZE = { back: 1.5, wing: 1.2, sh: 0.7, calf: 0.85, foot: 1.0 };
-function makeThruster(anchor, group, k = THRUST_SIZE[group] ?? 1) {
+function makeThruster(anchor, group, k = THRUST_SIZE[group] ?? 1, color = 0x6fb8ff) {
   const len = 0.32 * k, rad = 0.045 * k;
   const geo = new THREE.ConeGeometry(rad, len, 18, 1, true);
   geo.translate(0, len / 2, 0);                      // wide end (uv.y = 0) on the nozzle
-  const plume = new THREE.Mesh(geo, plumeMaterial(0x6fb8ff));
+  const plume = new THREE.Mesh(geo, plumeMaterial(color));
   plume.rotation.x = Math.PI;                        // stretch along local -Y (the exhaust)
   plume.renderOrder = 2;
   plume.frustumCulled = false;
   plume.visible = false;
-  const glowS = glowSprite(0x8fd4ff, 0.1 * k, 0.9);
+  const glowS = glowSprite(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.25), 0.1 * k, 0.9);
   glowS.visible = false;
   anchor.add(plume, glowS);
   return { anchor, group, plume, glow: glowS, k, thr: 0 };
 }
 
+// ---------- paint schemes ----------
+// player: white / blue / red car paint (clear-coated physical). Enemies: cheaper standard materials, dark armour
+// with hot glows, like hostile frames; their glows double as the attack-telegraph colour.
+export const SCHEMES = {
+  player: { white: 0xe4e8ec, grey: 0x5b626b, blue: 0x153d9a, red: 0xb3161a, glow: 0x58e8ff, eye: 0x5cffc4, nozzle: 0x3f7fd0, plume: 0x6fb8ff, blade: 0x38d4ff, tag: ['07', 'KF-07', 'KNIGHT FRAME', 'LUNAR OPS'] },
+  lancer: { white: 0x2e3238, grey: 0x16181c, blue: 0x0d0e11, red: 0xd0181f, glow: 0xff3a1c, eye: 0xff2a14, nozzle: 0xd0401c, plume: 0xff7a3a, blade: 0xff3b2a, tag: ['13', 'RX-13', 'RAIDER FRAME', 'HOSTILE'] },
+  gunner: { white: 0x4a4f45, grey: 0x1c1f1b, blue: 0x2a2d24, red: 0xe07a12, glow: 0xff9a1f, eye: 0xffb030, nozzle: 0xd07a1c, plume: 0xffa84a, blade: 0xffa030, tag: ['21', 'GX-21', 'LANCE GUNNER', 'HOSTILE'] },
+  brute: { white: 0x9e1218, grey: 0x1a1214, blue: 0x120c0d, red: 0x1c1c20, glow: 0xffd23a, eye: 0xffe14a, nozzle: 0xffb020, plume: 0xffc05a, blade: 0xffcc33, tag: ['66', 'BX-66', 'BRUTE FRAME', 'HOSTILE'] },
+};
+
 // GLB materials (named mech_* in blender/build_mech.py) -> physical car paint, chrome, carbon, HDR glows
-let GLB_MATS = null;
-function glbMats() {
-  if (GLB_MATS) return GLB_MATS;
-  const paint = (color, o = {}) => new THREE.MeshPhysicalMaterial({
-    color, metalness: 0.15, roughness: 0.34, clearcoat: 1, clearcoatRoughness: 0.06,
-    normalMap: PBR.pearl.normalMap, normalScale: new THREE.Vector2(0.12, 0.12), envMapIntensity: 2.2, ...o,
-  });
-  GLB_MATS = {
-    mech_white: paint(0xe4e8ec, { iridescence: 0.15, iridescenceThicknessRange: [200, 480] }),
-    mech_grey: paint(0x5b626b, { metalness: 0.45, roughness: 0.38 }),
-    mech_blue: paint(0x153d9a, { metalness: 0.55, roughness: 0.3 }),
-    mech_red: paint(0xb3161a, { metalness: 0.3 }),
-    mech_gold: new THREE.MeshPhysicalMaterial({ color: 0xe0a94a, metalness: 1, roughness: 0.22, clearcoat: 0.6, envMapIntensity: 2.4 }),
-    mech_chrome: PBR.chrome,
-    mech_carbon: PBR.carbon,
-    mech_frame: new THREE.MeshStandardMaterial({ color: 0x2b2f35, metalness: 0.85, roughness: 0.42, envMapIntensity: 1.6 }),
-    mech_glow: new THREE.MeshBasicMaterial({ color: new THREE.Color(0x58e8ff).multiplyScalar(3.2), toneMapped: false }),
-    mech_eye: new THREE.MeshBasicMaterial({ color: new THREE.Color(0x5cffc4).multiplyScalar(4), toneMapped: false }),
-    mech_nozzle: new THREE.MeshBasicMaterial({ color: new THREE.Color(0x3f7fd0).multiplyScalar(0.7), toneMapped: false }),
+const GLB_MATS = {};
+function glbMats(scheme = 'player', fresh = false) {
+  if (GLB_MATS[scheme] && !fresh) return GLB_MATS[scheme];
+  const P = SCHEMES[scheme] || SCHEMES.player;
+  const enemy = scheme !== 'player';
+  const paint = (color, o = {}) => enemy
+    ? new THREE.MeshStandardMaterial({ color, metalness: 0.45, roughness: 0.38, envMapIntensity: 1.8, ...o })
+    : new THREE.MeshPhysicalMaterial({
+      color, metalness: 0.15, roughness: 0.34, clearcoat: 1, clearcoatRoughness: 0.06,
+      normalMap: PBR.pearl.normalMap, normalScale: new THREE.Vector2(0.12, 0.12), envMapIntensity: 2.2, ...o,
+    });
+  const hot = (hex, k) => new THREE.MeshBasicMaterial({ color: new THREE.Color(hex).multiplyScalar(k), toneMapped: false });
+  const M = {
+    mech_white: enemy ? paint(P.white, { roughness: 0.3 }) : paint(P.white, { iridescence: 0.15, iridescenceThicknessRange: [200, 480] }),
+    mech_grey: paint(P.grey, { metalness: 0.5, roughness: 0.4 }),
+    mech_blue: paint(P.blue, { metalness: 0.55, roughness: 0.3 }),
+    mech_red: paint(P.red, { metalness: 0.3 }),
+    mech_gold: enemy ? new THREE.MeshStandardMaterial({ color: 0x3a3a40, metalness: 1, roughness: 0.3, envMapIntensity: 2 })
+      : new THREE.MeshPhysicalMaterial({ color: 0xe0a94a, metalness: 1, roughness: 0.22, clearcoat: 0.6, envMapIntensity: 2.4 }),
+    mech_chrome: enemy ? new THREE.MeshStandardMaterial({ color: 0x9aa0a8, metalness: 1, roughness: 0.18, envMapIntensity: 2.2 }) : PBR.chrome,
+    mech_carbon: enemy ? new THREE.MeshStandardMaterial({ color: 0x0b0c0f, metalness: 0.4, roughness: 0.45 }) : PBR.carbon,
+    mech_frame: new THREE.MeshStandardMaterial({ color: enemy ? 0x15171b : 0x2b2f35, metalness: 0.85, roughness: 0.42, envMapIntensity: 1.6 }),
+    mech_glow: hot(P.glow, 3.2),
+    mech_eye: hot(P.eye, 4),
+    mech_nozzle: hot(P.nozzle, 0.7),
     mech_seam: new THREE.MeshStandardMaterial({ color: 0x0b0c0e, metalness: 0.3, roughness: 0.7 }),
-    mech_decal_num: decalMat(drawNumber),
-    mech_decal_text: decalMat(drawText),
+    mech_decal_num: decalMat((g, w, h) => drawNumber(g, w, h, P.tag, P.red)),
+    mech_decal_text: decalMat((g, w, h) => drawText(g, w, h, P.tag)),
     mech_decal_warn: decalMat(drawStripes),
     mech_decal_caution: decalMat(drawCaution),
   };
-  return GLB_MATS;
+  // what an attack telegraph / hit flash lights up: every lit, untextured material gets an emissive term.
+  // The player's chrome / carbon come from the shared PBR library, so they are left out of the flash.
+  M._lit = Object.entries(M).filter(([k, m]) => m.emissive && !m.map && (enemy || (k !== 'mech_chrome' && k !== 'mech_carbon'))).map(([, m]) => m);
+  if (!fresh) GLB_MATS[scheme] = M;
+  return M;
 }
 
 // ---------- decals: markings drawn to canvas, printed on the armour (clear-coated, alpha-tested) ----------
@@ -181,24 +209,27 @@ function decalMat(draw, w = 512, h = 256) {
 }
 const INK = '#1d2026', MONO = '600 {s}px "JetBrains Mono", "Consolas", monospace', SANS = '800 {s}px "Arial Black", "Helvetica Neue", sans-serif';
 const font = (f, s) => f.replace('{s}', s);
-function drawNumber(g, w, h) {
-  g.fillStyle = INK;
+const hexStr = (n) => '#' + n.toString(16).padStart(6, '0');
+function drawNumber(g, w, h, tag, red) {
+  const light = tag[0] !== '07';             // enemy frames are dark: light ink
+  const ink = light ? '#e8e8ea' : INK;
+  g.fillStyle = ink;
   g.font = font(SANS, 170);
   g.textBaseline = 'alphabetic';
-  g.fillText('07', 18, 190);
-  g.fillStyle = '#b3161a';
+  g.fillText(tag[0], 18, 190);
+  g.fillStyle = light ? '#e8e8ea' : hexStr(red);
   g.fillRect(268, 60, 14, 130);
-  g.fillStyle = INK;
+  g.fillStyle = ink;
   g.font = font(MONO, 40);
-  g.fillText('KF-07', 300, 100);
+  g.fillText(tag[1], 300, 100);
   g.font = font(MONO, 26);
-  g.fillText('KNIGHT FRAME', 300, 140);
-  g.fillText('LUNAR OPS', 300, 175);
+  g.fillText(tag[2], 300, 140);
+  g.fillText(tag[3], 300, 175);
 }
-function drawText(g, w, h) {
-  g.fillStyle = INK;
+function drawText(g, w, h, tag) {
+  g.fillStyle = tag[0] !== '07' ? '#d8d8dc' : INK;
   g.font = font(MONO, 64);
-  g.fillText('KF-07 · TYPE K', 20, 120);
+  g.fillText(`${tag[1]} · TYPE K`, 20, 120);
   g.fillRect(20, 150, w - 40, 8);
   g.font = font(MONO, 38);
   g.fillText('HIGH TORQUE · DO NOT STEP', 20, 215);
@@ -219,8 +250,77 @@ function drawCaution(g, w, h) {
   g.font = font(MONO, 34); g.fillText('THRUSTER EXHAUST', 205, 175);
 }
 
-function buildFromGlb(model) {
-  const MM = glbMats();
+// Merge every mesh under the model into one rigidly skinned mesh per material. Joints become the skeleton's
+// bones as they are (Skeleton only reads matrixWorld); anchors and sockets stay attached to their joints.
+// The merged geometry only depends on the source model, so it is built once per model and shared by every
+// instance (each instance gets its own Skeleton over its own joints).
+const _mi = new THREE.Matrix4(), _mm = new THREE.Matrix4();
+const MERGED = new Map();
+function skinMerge(model, J, M, key) {
+  model.updateMatrixWorld(true);
+  const bones = JOINTS.map((j) => J[j]);
+  const cached = MERGED.get(key);
+  if (cached) {
+    const meshes = [];
+    model.traverse((o) => { if (o.isMesh) meshes.push(o); });
+    for (const mesh of meshes) mesh.parent.remove(mesh);
+    const skeleton = new THREE.Skeleton(bones);
+    return cached.map(({ name, geo, mat }) => makeSkin(model, skeleton, geo, M[name] || mat));
+  }
+  const boneIdx = new Map(bones.map((b, i) => [b, i]));
+  _mi.copy(model.matrixWorld).invert();
+  const buckets = new Map();
+  const meshes = [];
+  model.traverse((o) => { if (o.isMesh) meshes.push(o); });
+  for (const mesh of meshes) {
+    let p = mesh;
+    while (p && !boneIdx.has(p)) p = p.parent;
+    const bi = p ? boneIdx.get(p) : 0;
+    const mat = mesh.material;
+    const name = (mat.name || '').replace(/\.\d+$/, '');
+    const g = mesh.geometry.clone();
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'uv') g.deleteAttribute(k);
+    const n = g.attributes.position.count;
+    if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(n * 2), 2));
+    if (!g.attributes.normal) g.computeVertexNormals();
+    g.applyMatrix4(_mm.multiplyMatrices(_mi, mesh.matrixWorld));
+    const si = new Uint16Array(n * 4), sw = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) { si[i * 4] = bi; sw[i * 4] = 1; }
+    g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(si, 4));
+    g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
+    if (!buckets.has(name)) buckets.set(name, { mat: M[name] || mat, geos: [] });
+    buckets.get(name).geos.push(g);
+    mesh.parent.remove(mesh);
+  }
+  const skeleton = new THREE.Skeleton(bones);
+  const out = [], cache = [];
+  for (const [name, { mat, geos }] of buckets) {
+    const list = geos.every((g) => g.index) ? geos : geos.map((g) => (g.index ? g.toNonIndexed() : g));
+    const geo = mergeGeometries(list, false);
+    if (!geo) continue;
+    for (const g of geos) g.dispose();
+    cache.push({ name, geo, mat });
+    out.push(makeSkin(model, skeleton, geo, mat));
+  }
+  MERGED.set(key, cache);
+  return out;
+}
+function makeSkin(model, skeleton, geo, mat) {
+  const sm = new THREE.SkinnedMesh(geo, mat);
+  sm.name = 'skin_' + (mat.name || 'mat');
+  // fixed bounds (rig units, before the body scale): skips the per-vertex skinned bounds pass
+  sm.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.95, 0), 1.75);
+  sm.boundingBox = new THREE.Box3(new THREE.Vector3(-1.2, -0.3, -1.2), new THREE.Vector3(1.2, 2.4, 1.2));
+  sm.castShadow = !mat.transparent;
+  sm.receiveShadow = !mat.transparent;
+  model.add(sm);
+  sm.updateMatrixWorld(true);
+  sm.bind(skeleton, sm.matrixWorld);
+  return sm;
+}
+
+function buildFromGlb(model, scheme, fresh, key) {
+  const MM = glbMats(scheme, fresh);
   const root = new THREE.Group();
   const body = new THREE.Group();
   body.scale.setScalar(S);
@@ -233,29 +333,27 @@ function buildFromGlb(model) {
     o.rotation.order = 'YXZ';
     J[j] = o;
   }
-  model.traverse((o) => {
-    if (!o.isMesh) return;
-    const swap = (m) => MM[m.name.replace(/\.\d+$/, '')] || m;
-    o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
-    o.castShadow = true;
-    o.receiveShadow = true;
-  });
+  const skins = skinMerge(model, J, MM, key);
+  const P = SCHEMES[scheme] || SCHEMES.player;
   const socket = model.getObjectByName('anchor_socket_R') || J.haR;
-  const sword = makeLaserSword(mats());
+  const sword = makeLaserSword(mats(), P.blade);
   socket.add(sword);
   const thrusters = [];
   model.traverse((o) => {
     const m = /^anchor_jet_(\w+?)_[LR]$/.exec(o.name);
-    if (m) thrusters.push(makeThruster(o, m[1]));
+    if (m) thrusters.push(makeThruster(o, m[1], undefined, P.plume));
   });
-  return { root, body, J, sword, thrusters, scale: S, lengths: { UA: UA * S, FA: FA * S }, mats: Object.values(MM), glb: true };
+  return { root, body, J, sword, thrusters, scale: S, lengths: { UA: UA * S, FA: FA * S }, mats: Object.values(MM), lit: MM._lit, skins, glb: true };
 }
 
-export function buildMechRig() {
-  const g = instance('mech');
-  const fromGlb = g && buildFromGlb(g);
+// opts: { scheme: 'player' | 'lancer' | 'gunner' | 'brute', lod: use the lighter mech_lo.glb when it loaded }
+export function buildMechRig({ scheme = 'player', lod = false } = {}) {
+  const fresh = scheme !== 'player';
+  const lo = lod && instance('mech_lo');
+  const g = lo || instance('mech');
+  const fromGlb = g && buildFromGlb(g, scheme, fresh, lo ? 'mech_lo' : 'mech');
   if (fromGlb) return fromGlb;
-  const M = mats();
+  const M = mats(fresh);
   const root = new THREE.Group();          // at the feet, yaw = facing
   const body = new THREE.Group();
   body.scale.setScalar(S);
@@ -390,7 +488,7 @@ export function buildMechRig() {
   const socket = new THREE.Object3D();
   socket.position.set(0, -0.065, 0.02);
   J.haR.add(socket);
-  const sword = makeLaserSword(M);
+  const sword = makeLaserSword(M, scheme === 'player' ? 0x38d4ff : 0xff3b2a);
   socket.add(sword);
 
   // the fallback frame only has the two binder nozzles (exhaust straight down)
@@ -401,6 +499,7 @@ export function buildMechRig() {
     root, body, J, sword, thrusters, scale: S,
     lengths: { UA: UA * S, FA: FA * S },
     mats: Object.values(M),
+    lit: [M.armor, M.armor2, M.frame, M.red, M.gold],
   };
 }
 
@@ -414,6 +513,10 @@ export function applyPose(rig, pose) {
 }
 
 // Two-bone IK for one arm (from Noir's rig.js). target / pole / bladeDir / bladeUp are WORLD space; w blends with FK.
+// Allocation-free: it runs for every mech every frame.
+const _hand = new THREE.Vector3(), _zKeep = new THREE.Vector3();
+const _qSh = new THREE.Quaternion(), _qEl = new THREE.Quaternion(), _qHa = new THREE.Quaternion(), _qP = new THREE.Quaternion();
+const _lSh = new THREE.Quaternion(), _lEl = new THREE.Quaternion(), _lHa = new THREE.Quaternion();
 export function solveArm(rig, side, target, pole, bladeDir, bladeUp, w = 1) {
   if (w <= 0.001) return;
   const sh = rig.J['sh' + side], el = rig.J['el' + side], ha = rig.J['ha' + side];
@@ -431,29 +534,29 @@ export function solveArm(rig, side, target, pole, bladeDir, bladeUp, w = 1) {
   if (perp.lengthSq() < 1e-6) perp.set(0, -1, 0);
   perp.normalize();
   const elbow = _elbow.copy(Sp).addScaledVector(dir, a * cosA).addScaledVector(perp, a * sinA);
-  const hand = new THREE.Vector3().copy(Sp).addScaledVector(dir, d);
+  const hand = _hand.copy(Sp).addScaledVector(dir, d);
 
   _y.subVectors(Sp, elbow).normalize();
   _z.copy(perp).negate(); _z.addScaledVector(_y, -_z.dot(_y)).normalize();
   _x.crossVectors(_y, _z);
-  const qShW = new THREE.Quaternion().setFromRotationMatrix(_m.makeBasis(_x, _y, _z));
-  const zKeep = _z.clone();
+  _qSh.setFromRotationMatrix(_m.makeBasis(_x, _y, _z));
+  _zKeep.copy(_z);
   _y.subVectors(elbow, hand).normalize();
-  _z.copy(zKeep).addScaledVector(_y, -zKeep.dot(_y)).normalize();
+  _z.copy(_zKeep).addScaledVector(_y, -_zKeep.dot(_y)).normalize();
   _x.crossVectors(_y, _z);
-  const qElW = new THREE.Quaternion().setFromRotationMatrix(_m.makeBasis(_x, _y, _z));
+  _qEl.setFromRotationMatrix(_m.makeBasis(_x, _y, _z));
   _z.copy(bladeDir).normalize();
   _y.copy(bladeUp).addScaledVector(_z, -bladeUp.dot(_z));
   if (_y.lengthSq() < 1e-6) _y.set(0, 1, 0).addScaledVector(_z, -_z.y);
   _y.normalize();
   _x.crossVectors(_y, _z);
-  const qHaW = new THREE.Quaternion().setFromRotationMatrix(_m.makeBasis(_x, _y, _z));
+  _qHa.setFromRotationMatrix(_m.makeBasis(_x, _y, _z));
 
-  const qParent = sh.parent.getWorldQuaternion(_q);
-  const shL = qParent.clone().invert().multiply(qShW);
-  const elL = qShW.clone().invert().multiply(qElW);
-  const haL = qElW.clone().invert().multiply(qHaW);
-  if (w >= 0.999) { sh.quaternion.copy(shL); el.quaternion.copy(elL); ha.quaternion.copy(haL); }
-  else { sh.quaternion.slerp(shL, w); el.quaternion.slerp(elL, w); ha.quaternion.slerp(haL, w); }
+  sh.parent.getWorldQuaternion(_qP);
+  _lSh.copy(_qP).invert().multiply(_qSh);
+  _lEl.copy(_qSh).invert().multiply(_qEl);
+  _lHa.copy(_qEl).invert().multiply(_qHa);
+  if (w >= 0.999) { sh.quaternion.copy(_lSh); el.quaternion.copy(_lEl); ha.quaternion.copy(_lHa); }
+  else { sh.quaternion.slerp(_lSh, w); el.quaternion.slerp(_lEl, w); ha.quaternion.slerp(_lHa, w); }
   sh.updateWorldMatrix(false, true);
 }

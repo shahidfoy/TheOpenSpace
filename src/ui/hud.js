@@ -11,6 +11,7 @@ import { cyber, placeOf, CYBER_LAYERS, SOURCE_STYLE, describe, placeName } from 
 import { US_STATES } from '../data/usStates.js';
 import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
+import { ArenaHud } from './arenaHud.js';
 import { CRAFTS } from '../render/models.js';
 
 const VIEW_NAMES = { chase: 'CHASE', free: 'FREE LOOK', cockpit: 'COCKPIT', flyby: 'FLY-BY', overhead: 'OVERHEAD', wide: 'WIDE' };
@@ -107,6 +108,9 @@ const TEMPLATE = `
     <button class="hold up" data-hold="up"><svg viewBox="0 0 24 24"><path d="M5 15l7-7 7 7" fill="none"/></svg></button>
     <button class="hold heavy" data-hold="down" hidden>HEAVY</button>
     <button class="hold arc" data-hold="arc" hidden>ARC</button>
+    <button class="hold guard" data-hold="guard" hidden>GUARD</button>
+    <button class="hold dodge" data-hold="dodge" hidden>DODGE</button>
+    <button class="hold launch" data-hold="launch" hidden>LAUNCH</button>
     <button class="hold boost" data-hold="boost">BOOST</button>
     <button class="hold mine" data-hold="mine"><span>MINE</span></button>
   </div>
@@ -144,6 +148,8 @@ export class Hud {
 
     app.input.bindJoystick(this.$('joy'), this.$('knob'));
     root.querySelectorAll('[data-hold]').forEach((el) => app.input.bindHold(el, el.dataset.hold));
+    this.arenaHud = new ArenaHud(root);
+    this.keyboard = matchMedia('(hover: hover) and (pointer: fine)').matches;
 
     root.addEventListener('click', (e) => {
       const t = e.target.closest('[data-open],[data-mode],[data-close],[data-act]');
@@ -207,6 +213,7 @@ export class Hud {
       case 'mapInfo': this.mapInfoOpen = !this.mapInfoOpen; this.$('mapbar').classList.toggle('open', this.mapInfoOpen); return;
       case 'mapLines': this.app.mapView.toggleLines(arg); this.syncNav(); return;
       case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
+      case 'arena': { const sv = this.app.surfaceView; if (sv.arena.info.inside && sv.pilot.alive) sv.arena.start(); return; }
       case 'descend': this.app.setMode('earth'); return;
       case 'toOrbit': this.app.hud.flash(); this.app.setMode('local'); this.toast('Back in orbit · Eden', 'good'); return;
       case 'earthTarget': this.app.earthView.setTarget(arg); this.close(); return;
@@ -326,7 +333,7 @@ export class Hud {
     this.$('hint').textContent = earth
       ? 'Stick: turn and climb · ▲ throttle · BOOST burn · BRAKE · drag to look'
       : surf
-      ? 'Stick to run · ▲ jump, again to double jump, hold to fly up · SPRINT in the air = rocket boost · SLASH deposits'
+      ? 'Stick to run · ▲ jump / double jump / hold to fly · SPRINT in the air = rocket boost · SLASH deposits · on the Moon, walk onto the arena grid to fight'
       : voyage ? 'Fleet on autopilot · fly around your convoy · real space is empty between worlds'
         : 'Drag to steer · stick to fly · hold MINE on salvage and rock';
     const v = this.app.mapView?.view || 'system';
@@ -392,6 +399,8 @@ export class Hud {
     this.syncView();
     if (this.app.mode === 'earth') this.updateEarth();
     else if (this.app.mode !== 'map') this.updatePilot();
+    if (this.app.mode === 'surface') this.arenaHud.update(this.app.surfaceView, this.keyboard);
+    else this.arenaHud.hide();
     if (s.won && !this.winShown) this.showWin();
   }
 

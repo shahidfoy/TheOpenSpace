@@ -1,15 +1,16 @@
 // Touch: left virtual joystick moves, drag anywhere else on the canvas to steer, hold buttons.
 // Desktop: WASD move, mouse-drag / arrows steer, R/F up/down (jetpack on foot), Shift boost/sprint, Space mine.
 // Surface mech: Space jump (again in the air = double jump, hold = fly up; Shift in the air = rocket boost), click / J slash, right-click / K heavy, Q arc slash.
+// Arena: F hold guard (press just before a hit to parry), E dodge, L / middle-click launcher, Tab switch lock-on, Enter start a battle.
 export function createInput(app) {
   const keys = {};
   const joy = { x: 0, y: 0, id: null };
   const held = { up: false, down: false, boost: false, mine: false };
   const look = { x: 0, y: 0 };
   let zoom = 1; // camera distance factor gathered from the wheel / pinch since the last sample
-  const out = { move: { x: 0, y: 0 }, lift: 0, lookX: 0, lookY: 0, mine: false, boost: false, zoom: 1, jump: false, slashHold: false, attack: 0, heavy: 0, spin: 0 };
-  const taps = { attack: 0, heavy: 0, spin: 0 }; // edge-triggered presses since the last sample
-  let prevDown = false, prevArc = false;
+  const out = { move: { x: 0, y: 0 }, lift: 0, lookX: 0, lookY: 0, mine: false, boost: false, zoom: 1, jump: false, slashHold: false, attack: 0, heavy: 0, spin: 0, guard: false, dodge: 0, launch: 0, lockSwitch: 0, arena: 0 };
+  const taps = { attack: 0, heavy: 0, spin: 0, dodge: 0, launch: 0, lock: 0, arena: 0 }; // edge-triggered presses since the last sample
+  let prevDown = false, prevArc = false, prevDodge = false, prevLaunch = false;
 
   addEventListener('keydown', (e) => {
     if (e.target.closest?.('input,textarea')) return;
@@ -17,7 +18,12 @@ export function createInput(app) {
       if (e.code === 'KeyJ') taps.attack++;
       else if (e.code === 'KeyK') taps.heavy++;
       else if (e.code === 'KeyQ') taps.spin++;
+      else if (e.code === 'KeyE') taps.dodge++;
+      else if (e.code === 'KeyL') taps.launch++;
+      else if (e.code === 'Tab' && app.mode === 'surface') taps.lock++;
+      else if (e.code === 'Enter' && app.mode === 'surface') taps.arena++;
     }
+    if (e.code === 'Tab' && app.mode === 'surface') e.preventDefault();
     keys[e.code] = true;
     if (e.code === 'Space' && app.mode !== 'map') e.preventDefault();
   });
@@ -58,11 +64,14 @@ export function createInput(app) {
     const p = drags.get(e.pointerId);
     if (p && e.pointerType === 'mouse' && app.mode === 'surface' && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) < 6 && performance.now() - p.t0 < 350) {
       if (p.button === 2) taps.heavy++;
+      else if (p.button === 1) taps.launch++;
       else if (p.button === 0) taps.attack++;
     }
     end(e);
   });
   canvas.addEventListener('contextmenu', (e) => { if (app.mode === 'surface') e.preventDefault(); });
+  canvas.addEventListener('auxclick', (e) => { if (app.mode === 'surface' && e.button === 1) e.preventDefault(); });
+  canvas.addEventListener('mousedown', (e) => { if (app.mode === 'surface' && e.button === 1) e.preventDefault(); });   // no autoscroll
   canvas.addEventListener('pointercancel', end);
 
   function bindJoystick(base, knob) {
@@ -115,9 +124,16 @@ export function createInput(app) {
     out.attack = taps.attack;
     out.heavy = taps.heavy + (held.down && !prevDown ? 1 : 0);
     out.spin = taps.spin + (held.arc && !prevArc ? 1 : 0);
+    out.guard = !!held.guard || !!keys.KeyF;
+    out.dodge = taps.dodge + (held.dodge && !prevDodge ? 1 : 0);
+    out.launch = taps.launch + (held.launch && !prevLaunch ? 1 : 0);
+    out.lockSwitch = taps.lock;
+    out.arena = taps.arena;
     prevDown = held.down;
     prevArc = held.arc;
-    taps.attack = taps.heavy = taps.spin = 0;
+    prevDodge = held.dodge;
+    prevLaunch = held.launch;
+    taps.attack = taps.heavy = taps.spin = taps.dodge = taps.launch = taps.lock = taps.arena = 0;
     return out;
   }
 

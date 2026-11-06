@@ -4,7 +4,7 @@ import { upgrade } from './materials.js';
 
 // Hero models built by blender/build_models.py (Draco-compressed). Any that fail to
 // load fall back to procedural meshes.
-const NAMES = ['frame', 'skiff', 'hauler', 'seed', 'drone', 'mech', 'station', 'junk'];
+const NAMES = ['frame', 'skiff', 'hauler', 'seed', 'drone', 'mech', 'mech_lo', 'station', 'junk'];
 const ASSETS = {};
 
 export async function loadAssets(timeoutMs = 15000, onProgress) {
