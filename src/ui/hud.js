@@ -45,7 +45,7 @@ const fmtKm = (km) => (km < 1e6 ? `${fmt(km)} km` : `${(km / 1e6).toFixed(1)}M k
 const fmtDist = (m) => (m < 1000 ? `${m.toFixed(0)} m` : `${(m / 1000).toFixed(1)} km`);
 const resIcon = (r) => (r === 'credits' ? '<b class="ic cr">₡</b>' : r === 'rp' ? '<b class="ic rp">◆</b>' : `<b class="ic" style="--c:${RES[r].color}">${RES[r].short}</b>`);
 const kindName = { star: 'Star', planet: 'Planet', moon: 'Moon', dwarf: 'Dwarf planet' };
-const TARGET_KIND = { junk: 'DERELICT HARDWARE', rocks: 'ASTEROID', ice: 'ICE BODY', canister: 'PAYLOAD CANISTER' };
+const TARGET_KIND = { junk: 'DERELICT HARDWARE', rocks: 'ASTEROID', ice: 'ICE BODY' };
 const ago = (t) => {
   const m = Math.max(0, (Date.now() - Date.parse(t)) / 60000);
   return m < 1 ? `${Math.round(m * 60)} s ago` : m < 60 ? `${Math.round(m)} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
@@ -461,7 +461,7 @@ export class Hud {
       br.style.display = 'block';
       br.style.transform = `translate(${tgt.x}px, ${tgt.y}px)`;
       br.style.setProperty('--sz', `${tgt.size}px`);
-      this.$('b-lab').innerHTML = `<span style="color:${RES[tgt.res].color}">${RES[tgt.res].name.toUpperCase()}</span><em>${TARGET_KIND[tgt.kind] || ''} · ${tgt.dist.toFixed(0)} m</em><div class="bar"><i style="width:${pct(tgt.hp)}"></i></div>`;
+      this.$('b-lab').innerHTML = `<span style="color:${RES[tgt.res].color}">${RES[tgt.res].name.toUpperCase()}</span><em>${tgt.item || TARGET_KIND[tgt.kind] || ''} · ${tgt.dist.toFixed(0)} m</em><div class="bar"><i style="width:${pct(tgt.hp)}"></i></div>`;
     } else if (tgt && surf) {
       br.style.display = 'block';
       br.style.transform = `translate(${innerWidth / 2}px, ${innerHeight * 0.46}px)`;

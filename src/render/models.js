@@ -380,7 +380,7 @@ export function makeMech() {
   return rig.root;
 }
 
-// ---------------- field objects: rocks, ice, orbital junk, canisters ----------------
+// ---------------- field objects: rocks, ice, orbital junk (Earth only) ----------------
 export function rockGeometry(seed, detail = 4) {
   const g = new THREE.IcosahedronGeometry(1, detail);
   const p = g.attributes.position, v = new THREE.Vector3();
@@ -412,17 +412,6 @@ export const FIELD_MATS = {
 const JUNK = ['junk_sat', 'junk_stage', 'junk_panel', 'junk_bus', 'junk_tank'];
 export function makeJunk(i) {
   return instanceChild('junk', JUNK[i % JUNK.length]) || makeDebris();
-}
-
-export function makeCanister() {
-  const g = new THREE.Group();
-  g.add(cylY(0.8, 0.8, 2.6, 16, MAT.hullLight, 0, 0, 0));
-  for (const y of [-1.0, 1.0]) g.add(cylY(0.84, 0.84, 0.25, 16, MAT.accent, 0, y, 0));
-  g.add(cylY(0.3, 0.3, 0.4, 10, MAT.hullDark, 0, 1.5, 0));
-  const b = mesh(new THREE.SphereGeometry(0.12, 8, 6), MAT.amber, 0, 1.75, 0);
-  g.add(b);
-  g.userData.blink = b;
-  return g;
 }
 
 export function makeDebris() {

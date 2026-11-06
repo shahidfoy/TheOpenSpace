@@ -7,7 +7,7 @@ import { atmosphereMaterial, glowSprite } from './shaders.js';
 import { planetMaterial, planetTexture, ringMesh, bodyQuat, bodyFrame } from './planets.js';
 import { cloudShell, scatteringShell, EARTH_Q } from './earthSky.js';
 import { makeSky } from './sky.js';
-import { makeCraft, poseFrame, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, makeCanister, rockGeometry, FIELD_MATS, setThrust, portraitPullback, updateShipFX } from './models.js';
+import { makeCraft, poseFrame, makeStation, makeDrone, makeHauler, makeSeedShip, makeJunk, rockGeometry, FIELD_MATS, setThrust, portraitPullback, updateShipFX } from './models.js';
 import { haptic } from '../telegram.js';
 
 const SUN_DIR = new THREE.Vector3(0.85, 0.5, 0.15).normalize();
@@ -20,7 +20,7 @@ const BOARD_RANGE = 9;
 const TETHER = 460;
 export const LOCAL_VIEWS = ['chase', 'free', 'cockpit', 'flyby', 'wide'];
 const fmtLatLon = (la, lo) => `${Math.abs(la).toFixed(1)}°${la >= 0 ? 'N' : 'S'} ${Math.abs(lo).toFixed(1)}°${lo >= 0 ? 'E' : 'W'}`;
-const ROCK_TINT = { mars: 0x6a3a28, moon: 0x55524e, mercury: 0x4e4a46, ceres: 0x3f3b37, jupiter: 0x5a4636, belt: 0x403a34, trojan: 0x3a2e2a, nea: 0x4a443c, deep: 0x46403a };
+const ROCK_TINT = { mars: 0x6a3a28, moon: 0x6b6862, venus: 0x5a4e44, mercury: 0x4e4a46, ceres: 0x3f3b37, jupiter: 0x5a4636, belt: 0x403a34, trojan: 0x3a2e2a, nea: 0x4a443c, deep: 0x46403a };
 const v3 = () => new THREE.Vector3();
 const tmp = v3(), tmp2 = v3();
 const Y_UP = new THREE.Vector3(0, 1, 0);
@@ -444,7 +444,6 @@ export class LocalView {
     const s = this.app.state;
     for (const id in TRANSIT_FIELDS) {
       const tf = TRANSIT_FIELDS[id];
-      if (tf.own && !s.bases[id]) continue;
       const q = helioAU(BODY[id], simNow(s));
       const d = Math.hypot(P[0] - q[0], P[1] - q[1], P[2] - q[2]) * AU_KM;
       if (d < tf.reach) return { ...FIELDS[id], ...(tf.name ? { name: tf.name } : {}), id, density: 34 };
@@ -564,9 +563,6 @@ export class LocalView {
       const sc = 0.9 + Math.random() * 0.8;
       m.scale.setScalar(sc);
       radius = new THREE.Box3().setFromObject(m).getBoundingSphere(new THREE.Sphere()).radius * 0.75;
-    } else if (zone.kind === 'canister') {
-      m = makeCanister();
-      radius = 1.6;
     } else {
       const sc = (zone.kind === 'ice' ? 0.8 : 1.2) + Math.random() * (zone.kind === 'ice' ? 2.4 : 3.6);
       m = new THREE.Mesh(ROCK_GEOS[i % ROCK_GEOS.length], mat);
@@ -579,7 +575,7 @@ export class LocalView {
       }
     }
     m.rotation.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
-    const rock = { mesh: m, res, scale: m.scale.clone(), radius, alive: true, respawnAt: 0, spin: new THREE.Vector3().randomDirection().multiplyScalar(zone.kind === 'junk' ? 0.12 : 0.2), spread, kind: zone.kind };
+    const rock = { mesh: m, res, scale: m.scale.clone(), radius, alive: true, respawnAt: 0, spin: new THREE.Vector3().randomDirection().multiplyScalar(zone.kind === 'junk' ? 0.12 : 0.2), spread, kind: zone.kind, item: zone.item };
     if (at) m.position.copy(at);
     else this.placeRock(rock);
     if (fade) m.scale.multiplyScalar(0.01), (rock.grow = 0);
@@ -834,7 +830,6 @@ export class LocalView {
       }
       if (r.alive) {
         r.mesh.rotation.x += r.spin.x * dt; r.mesh.rotation.y += r.spin.y * dt;
-        if (r.mesh.userData.blink) r.mesh.userData.blink.visible = Math.sin(this.time * 4 + r.spin.x * 50) > 0.3;
       } else if (this.time > r.respawnAt) this.placeRock(r);
     }
 
@@ -950,7 +945,7 @@ export class LocalView {
       if (dist < best && d.normalize().dot(fwd) > 0.72) { best = dist; target = r; }
     }
     this.targetRock = target;
-    this.info.target = target ? { res: target.res, dist: best, hp: target.hp / target.maxHp, kind: target.kind } : null;
+    this.info.target = target ? { res: target.res, dist: best, hp: target.hp / target.maxHp, kind: target.kind, item: target.item } : null;
     const active = mining && target;
     this.beam.visible = this.spark.visible = !!active;
     if (!active) return;
