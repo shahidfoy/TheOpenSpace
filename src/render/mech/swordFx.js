@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 
 // Sword VFX for the surface mech, condensed from the Noir arena's fx.js: slash crescents swept along the move's
-// arc, a ribbon trail sampled from the blade, stretched HDR sparks and ground shock rings. Everything is pooled.
+// arc, ribbon trails sampled from each blade, stretched HDR sparks, ground shock rings and laser beams.
+// One SwordFx serves every mech in the scene (player and arena enemies); everything is pooled.
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _m = new THREE.Matrix4();
 const _d = new THREE.Object3D();
@@ -12,13 +13,15 @@ export class SwordFx {
     this.initCrescents();
     this.initSparks();
     this.initRings();
+    this.trails = [];
     this.trail = this.makeTrail(0x5fdcff);
+    this.visible = true;
   }
 
   initCrescents() {
     this.cres = [];
     const geo = new THREE.RingGeometry(0, 1, 96, 1);
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 16; i++) {
       const mat = new THREE.ShaderMaterial({
         transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, toneMapped: false,
         uniforms: { a0: { value: 0 }, head: { value: 0 }, sgn: { value: 1 }, tail: { value: 2 }, inner: { value: 0.4 }, alpha: { value: 1 }, color: { value: new THREE.Color() } },
@@ -63,7 +66,7 @@ export class SwordFx {
   }
 
   initSparks() {
-    const N = this.NS = 300;
+    const N = this.NS = 520;
     const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     const geo = new THREE.BoxGeometry(1, 1, 1); geo.translate(0, 0, -0.5);
     this.sparks = new THREE.InstancedMesh(geo, mat, N);
@@ -91,7 +94,7 @@ export class SwordFx {
   initRings() {
     this.rings = [];
     const geo = new THREE.RingGeometry(0.85, 1, 64); geo.rotateX(-Math.PI / 2);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide });
       const m = new THREE.Mesh(geo, mat); m.visible = false; this.scene.add(m);
       this.rings.push({ m, life: 0, max: 0.4, r: 3 });
@@ -122,21 +125,23 @@ export class SwordFx {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.frustumCulled = false;
     this.scene.add(mesh);
-    const tr = { mesh, n, base: [], tip: [], fade: 0 };
+    const tr = { mesh, n, base: [], tip: [], fade: 0, on: true };
     for (let i = 0; i < n; i++) { tr.base.push(new THREE.Vector3()); tr.tip.push(new THREE.Vector3()); }
+    this.trails.push(tr);
     return tr;
   }
-  pushTrail(base, tip, on) {
-    const tr = this.trail;
+  pushTrail(base, tip, on, tr = this.trail) {
     tr.base.unshift(tr.base.pop().copy(base));
     tr.tip.unshift(tr.tip.pop().copy(tip));
     if (on) tr.fade = 1;
   }
 
   setVisible(v) {
+    this.visible = v;
     for (const c of this.cres) if (!v) c.m.visible = false;
+    for (const r of this.rings) if (!v) r.m.visible = false;
     this.sparks.visible = v;
-    this.trail.mesh.visible = v && this.trail.fade > 0.01;
+    for (const tr of this.trails) tr.mesh.visible = v && tr.on && tr.fade > 0.01;
   }
 
   update(dt) {
@@ -177,18 +182,62 @@ export class SwordFx {
       r.m.material.opacity = Math.max(0, 1 - k);
       if (r.life <= 0) r.m.visible = false;
     }
-    const tr = this.trail;
-    tr.fade = Math.max(0, tr.fade - dt * 5);
-    const pos = tr.mesh.geometry.attributes.position, al = tr.mesh.geometry.attributes.alpha;
-    let broken = false;
-    for (let i = 0; i < tr.n; i++) {
-      pos.setXYZ(i * 2, tr.base[i].x, tr.base[i].y, tr.base[i].z);
-      pos.setXYZ(i * 2 + 1, tr.tip[i].x, tr.tip[i].y, tr.tip[i].z);
-      if (i > 0 && tr.tip[i].distanceToSquared(tr.tip[i - 1]) > 30) broken = true;   // cut where the blade jumped
-      const a = broken ? 0 : (1 - i / (tr.n - 1)) * tr.fade;
-      al.setX(i * 2, a * 0.05); al.setX(i * 2 + 1, a * 0.6);
+    for (const tr of this.trails) {
+      const was = tr.fade > 0.01;
+      tr.fade = Math.max(0, tr.fade - dt * 5);
+      tr.mesh.visible = this.visible && tr.on && tr.fade > 0.01;
+      if (!was && !tr.mesh.visible) continue;     // idle trails cost nothing
+      const pos = tr.mesh.geometry.attributes.position, al = tr.mesh.geometry.attributes.alpha;
+      let broken = false;
+      for (let i = 0; i < tr.n; i++) {
+        pos.setXYZ(i * 2, tr.base[i].x, tr.base[i].y, tr.base[i].z);
+        pos.setXYZ(i * 2 + 1, tr.tip[i].x, tr.tip[i].y, tr.tip[i].z);
+        if (i > 0 && tr.tip[i].distanceToSquared(tr.tip[i - 1]) > 30) broken = true;   // cut where the blade jumped
+        const a = broken ? 0 : (1 - i / (tr.n - 1)) * tr.fade;
+        al.setX(i * 2, a * 0.05); al.setX(i * 2 + 1, a * 0.6);
+      }
+      pos.needsUpdate = true; al.needsUpdate = true;
     }
-    pos.needsUpdate = true; al.needsUpdate = true;
-    tr.mesh.visible = tr.fade > 0.01;
   }
+}
+
+// Laser beam / aim line: an open cylinder stretched between two points, brightest where it faces the camera.
+// telegraph = thin flickering aim line; fire = thick hot core. The owner drives it every frame.
+const BEAM_GEO = new THREE.CylinderGeometry(1, 1, 1, 10, 1, true).translate(0, 0.5, 0);
+const _up = new THREE.Vector3(0, 1, 0), _bd = new THREE.Vector3();
+export class Beam {
+  constructor(scene, color = 0xff3020) {
+    this.mat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, side: THREE.DoubleSide,
+      uniforms: { color: { value: new THREE.Color(color) }, alpha: { value: 1 }, core: { value: 0 }, uTime: { value: 0 } },
+      vertexShader: `varying vec3 vN; varying vec3 vV; varying float vY;
+        void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); vN = normalize(normalMatrix * normal); vV = -mv.xyz; vY = position.y; gl_Position = projectionMatrix * mv; }`,
+      fragmentShader: `uniform vec3 color; uniform float alpha, core, uTime; varying vec3 vN; varying vec3 vV; varying float vY;
+        void main(){
+          float f = abs(dot(normalize(vN), normalize(vV)));
+          float body = pow(f, 2.5);
+          float hot = pow(f, 10.0) * core;
+          float pulse = 0.85 + 0.15 * sin(vY * 60.0 - uTime * 40.0);
+          float a = (body * 0.8 + hot * 2.0) * alpha * pulse;
+          gl_FragColor = vec4(mix(color, vec3(1.0), hot * 0.6) * a * 2.5, a);
+        }`,
+    });
+    this.mesh = new THREE.Mesh(BEAM_GEO, this.mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.visible = false;
+    this.mesh.renderOrder = 3;
+    scene.add(this.mesh);
+  }
+  set(from, to, width, alpha = 1, core = 0, t = 0) {
+    _bd.subVectors(to, from);
+    const len = _bd.length();
+    this.mesh.position.copy(from);
+    this.mesh.quaternion.setFromUnitVectors(_up, _bd.divideScalar(len || 1));
+    this.mesh.scale.set(width, len, width);
+    this.mat.uniforms.alpha.value = alpha;
+    this.mat.uniforms.core.value = core;
+    this.mat.uniforms.uTime.value = t;
+    this.mesh.visible = alpha > 0.01;
+  }
+  hide() { this.mesh.visible = false; }
 }

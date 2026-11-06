@@ -11,6 +11,7 @@ import { cyber, placeOf, CYBER_LAYERS, SOURCE_STYLE, describe, placeName } from 
 import { US_STATES } from '../data/usStates.js';
 import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
+import { ArenaHud } from './arenaHud.js';
 import { CRAFTS } from '../render/models.js';
 
 const VIEW_NAMES = { chase: 'CHASE', free: 'FREE LOOK', cockpit: 'COCKPIT', flyby: 'FLY-BY', overhead: 'OVERHEAD', wide: 'WIDE' };
@@ -44,7 +45,7 @@ const fmtKm = (km) => (km < 1e6 ? `${fmt(km)} km` : `${(km / 1e6).toFixed(1)}M k
 const fmtDist = (m) => (m < 1000 ? `${m.toFixed(0)} m` : `${(m / 1000).toFixed(1)} km`);
 const resIcon = (r) => (r === 'credits' ? '<b class="ic cr">₡</b>' : r === 'rp' ? '<b class="ic rp">◆</b>' : `<b class="ic" style="--c:${RES[r].color}">${RES[r].short}</b>`);
 const kindName = { star: 'Star', planet: 'Planet', moon: 'Moon', dwarf: 'Dwarf planet' };
-const TARGET_KIND = { junk: 'DERELICT HARDWARE', rocks: 'ASTEROID', ice: 'ICE BODY', canister: 'PAYLOAD CANISTER' };
+const TARGET_KIND = { junk: 'DERELICT HARDWARE', rocks: 'ASTEROID', ice: 'ICE BODY' };
 const ago = (t) => {
   const m = Math.max(0, (Date.now() - Date.parse(t)) / 60000);
   return m < 1 ? `${Math.round(m * 60)} s ago` : m < 60 ? `${Math.round(m)} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
@@ -107,6 +108,9 @@ const TEMPLATE = `
     <button class="hold up" data-hold="up"><svg viewBox="0 0 24 24"><path d="M5 15l7-7 7 7" fill="none"/></svg></button>
     <button class="hold heavy" data-hold="down" hidden>HEAVY</button>
     <button class="hold arc" data-hold="arc" hidden>ARC</button>
+    <button class="hold guard" data-hold="guard" hidden>GUARD</button>
+    <button class="hold dodge" data-hold="dodge" hidden>DODGE</button>
+    <button class="hold launch" data-hold="launch" hidden>LAUNCH</button>
     <button class="hold boost" data-hold="boost">BOOST</button>
     <button class="hold mine" data-hold="mine"><span>MINE</span></button>
   </div>
@@ -144,6 +148,8 @@ export class Hud {
 
     app.input.bindJoystick(this.$('joy'), this.$('knob'));
     root.querySelectorAll('[data-hold]').forEach((el) => app.input.bindHold(el, el.dataset.hold));
+    this.arenaHud = new ArenaHud(root);
+    this.keyboard = matchMedia('(hover: hover) and (pointer: fine)').matches;
 
     root.addEventListener('click', (e) => {
       const t = e.target.closest('[data-open],[data-mode],[data-close],[data-act]');
@@ -207,6 +213,7 @@ export class Hud {
       case 'mapInfo': this.mapInfoOpen = !this.mapInfoOpen; this.$('mapbar').classList.toggle('open', this.mapInfoOpen); return;
       case 'mapLines': this.app.mapView.toggleLines(arg); this.syncNav(); return;
       case 'land': this.app.setMode(this.app.mode === 'surface' ? 'local' : 'surface'); return;
+      case 'arena': { const sv = this.app.surfaceView; if (sv.arena.info.inside && sv.pilot.alive) sv.arena.start(); return; }
       case 'descend': this.app.setMode('earth'); return;
       case 'toOrbit': this.app.hud.flash(); this.app.setMode('local'); this.toast('Back in orbit · Eden', 'good'); return;
       case 'earthTarget': this.app.earthView.setTarget(arg); this.close(); return;
@@ -326,7 +333,7 @@ export class Hud {
     this.$('hint').textContent = earth
       ? 'Stick: turn and climb · ▲ throttle · BOOST burn · BRAKE · drag to look'
       : surf
-      ? 'Stick to run · ▲ jump, again to double jump, hold to fly up · SPRINT in the air = rocket boost · SLASH deposits'
+      ? 'Stick to run · ▲ jump / double jump / hold to fly · SPRINT in the air = rocket boost · SLASH deposits · on the Moon, walk onto the arena grid to fight'
       : voyage ? 'Fleet on autopilot · fly around your convoy · real space is empty between worlds'
         : 'Drag to steer · stick to fly · hold MINE on salvage and rock';
     const v = this.app.mapView?.view || 'system';
@@ -392,6 +399,8 @@ export class Hud {
     this.syncView();
     if (this.app.mode === 'earth') this.updateEarth();
     else if (this.app.mode !== 'map') this.updatePilot();
+    if (this.app.mode === 'surface') this.arenaHud.update(this.app.surfaceView, this.keyboard);
+    else this.arenaHud.hide();
     if (s.won && !this.winShown) this.showWin();
   }
 
@@ -452,7 +461,7 @@ export class Hud {
       br.style.display = 'block';
       br.style.transform = `translate(${tgt.x}px, ${tgt.y}px)`;
       br.style.setProperty('--sz', `${tgt.size}px`);
-      this.$('b-lab').innerHTML = `<span style="color:${RES[tgt.res].color}">${RES[tgt.res].name.toUpperCase()}</span><em>${TARGET_KIND[tgt.kind] || ''} · ${tgt.dist.toFixed(0)} m</em><div class="bar"><i style="width:${pct(tgt.hp)}"></i></div>`;
+      this.$('b-lab').innerHTML = `<span style="color:${RES[tgt.res].color}">${RES[tgt.res].name.toUpperCase()}</span><em>${tgt.item || TARGET_KIND[tgt.kind] || ''} · ${tgt.dist.toFixed(0)} m</em><div class="bar"><i style="width:${pct(tgt.hp)}"></i></div>`;
     } else if (tgt && surf) {
       br.style.display = 'block';
       br.style.transform = `translate(${innerWidth / 2}px, ${innerHeight * 0.46}px)`;

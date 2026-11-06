@@ -547,3 +547,71 @@ b, strong { font-weight: 600; }
   .mode-earth .land { bottom: calc(var(--bot) + 236px); }
   .bracket { --sz: 48px; }
 }
+
+/* ---------- surface: arena touch buttons (guard / dodge / launch in a third column) ---------- */
+.mode-surface .controls .btns { grid-template-columns: 52px 58px 84px; }
+.mode-surface .hold.guard, .mode-surface .hold.dodge, .mode-surface .hold.launch { display: grid; grid-column: 1; font-size: 9px; color: var(--ice); }
+.mode-surface .hold.guard { grid-row: 1; border-color: rgba(255,211,106,0.55); color: #ffd36a; }
+.mode-surface .hold.dodge { grid-row: 2; }
+.mode-surface .hold.launch { grid-row: 3; }
+.mode-surface .hold.up, .mode-surface .hold.boost, .mode-surface .hold.heavy { grid-column: 2; }
+.mode-surface .hold.mine { grid-column: 3; }
+.mode-surface .hold.arc { grid-column: 3; }
+@media (max-width: 899px) {
+  .mode-surface .controls .btns { grid-template-columns: 44px 48px 68px; }
+}
+
+/* ---------- arena overlay ---------- */
+.arena-hud { position: absolute; inset: 0; pointer-events: none; font-family: var(--mono); }
+.ah-panel { position: absolute; left: 12px; top: calc(var(--top) + 64px); width: 230px; padding: 8px 10px 9px; background: linear-gradient(90deg, rgba(6,8,11,0.78), rgba(6,8,11,0.2)); border-left: 2px solid #fff; clip-path: var(--cut); opacity: 0; transform: translateX(-12px); transition: opacity 0.25s, transform 0.25s; }
+.arena-hud.on .ah-panel { opacity: 1; transform: none; }
+.ah-hp { display: flex; gap: 3px; height: 11px; }
+.ah-hp i { flex: 1; background: #f4f6f8; transform: skewX(-24deg); box-shadow: 0 0 6px rgba(255,255,255,0.45); transition: background 0.15s; }
+.ah-hp i.low { background: #ff4a3a; box-shadow: 0 0 8px rgba(255,74,58,0.7); }
+.ah-hp i.off { background: rgba(255,255,255,0.1); box-shadow: none; }
+.ah-jet { margin-top: 5px; height: 4px; background: rgba(255,255,255,0.08); transform: skewX(-24deg); }
+.ah-jet i { display: block; height: 100%; background: linear-gradient(90deg, #e8d21c, #fff36a); box-shadow: 0 0 6px rgba(232,210,28,0.6); }
+.ah-stats { display: flex; gap: 10px; margin-top: 6px; font-size: 10px; letter-spacing: 0.08em; color: var(--dim); }
+.ah-stats b { color: #fff; font-weight: 400; }
+.ah-combo { position: absolute; right: 18px; top: 30%; text-align: right; opacity: 0; transition: opacity 0.2s; --rk: #fff; }
+.ah-combo b { display: block; font-family: var(--ui); font-weight: 700; font-size: 44px; line-height: 1; color: #fff; text-shadow: 0 0 18px rgba(255,255,255,0.35); }
+.ah-combo span { font-size: 10px; letter-spacing: 0.3em; color: var(--dim); }
+.ah-combo em { display: block; font-style: normal; font-family: var(--ui); font-weight: 700; font-size: 30px; color: var(--rk); text-shadow: 0 0 16px var(--rk); margin-top: 2px; }
+.ah-banner { position: absolute; left: 0; right: 0; top: 26%; text-align: center; opacity: 0; transition: opacity 0.1s; }
+.ah-banner b { display: block; font-family: var(--ui); font-weight: 700; font-size: clamp(28px, 6vw, 52px); letter-spacing: 0.18em; color: #fff; text-shadow: 0 0 24px rgba(255,120,80,0.6), 0 2px 0 rgba(0,0,0,0.6); }
+.ah-banner small { display: block; margin-top: 4px; font-size: 11px; letter-spacing: 0.2em; color: #ffcfb8; }
+.ah-banner.bad b { color: #ff5a4a; }
+.ah-vig { position: absolute; inset: 0; opacity: 0; background: radial-gradient(ellipse at center, rgba(255,0,0,0) 55%, rgba(255,30,20,0.55) 100%); }
+.ah-tags { position: absolute; inset: 0; overflow: hidden; }
+.ah-tag { position: absolute; left: 0; top: 0; width: 18px; height: 18px; margin: -9px 0 0 -9px; will-change: transform; }
+.ah-tag > i { position: absolute; width: 6px; height: 6px; border: 2px solid #fff; }
+.ah-tag > i:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; }
+.ah-tag > i:nth-child(2) { right: 0; top: 0; border-left: 0; border-bottom: 0; }
+.ah-tag > i:nth-child(3) { left: 0; bottom: 0; border-right: 0; border-top: 0; }
+.ah-tag > i:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; }
+.ah-tbar { position: absolute; left: -8px; right: -8px; top: -9px; height: 3px; background: rgba(255,255,255,0.15); }
+.ah-tbar u { display: block; height: 100%; background: #fff; }
+.ah-tag s { display: none; position: absolute; left: 50%; top: -30px; transform: translateX(-50%); text-decoration: none; font-family: var(--ui); font-weight: 700; font-size: 18px; color: #ff8a1a; text-shadow: 0 0 10px currentColor; }
+.ah-tag.lock { width: 30px; height: 30px; margin: -15px 0 0 -15px; }
+.ah-tag.lock > i { width: 9px; height: 9px; border-color: #fff; filter: drop-shadow(0 0 4px rgba(255,255,255,0.8)); }
+.ah-tag.warn > i { border-color: #ff8a1a; }
+.ah-tag.red > i { border-color: #ff2a1a; }
+.ah-tag.warn s, .ah-tag.red s { display: block; animation: ah-blink 0.18s infinite alternate; }
+.ah-tag.red s { color: #ff2a1a; }
+.ah-tag.edge .ah-tbar { display: none; }
+@keyframes ah-blink { to { opacity: 0.35; } }
+.ah-beacon { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 6px; transform-origin: 0 0; font-size: 10px; letter-spacing: 0.12em; color: var(--ice); white-space: nowrap; margin: -8px 0 0 -8px; }
+.ah-beacon i { width: 12px; height: 12px; border: 2px solid var(--ice); transform: rotate(45deg); box-shadow: 0 0 8px rgba(127,212,255,0.7); }
+.ah-beacon span { background: rgba(6,8,11,0.6); padding: 2px 6px; }
+#ui .ah-start { position: absolute; left: 50%; bottom: calc(var(--bot) + 200px); transform: translateX(-50%); display: grid; gap: 2px; padding: 12px 22px; font-family: var(--ui); font-weight: 700; font-size: 14px; letter-spacing: 0.14em; color: #10131a; background: linear-gradient(90deg, #ff7a3a, #ffb347); clip-path: var(--cut); box-shadow: 0 0 24px rgba(255,122,58,0.5); pointer-events: auto; animation: ah-pulse 1.4s ease-in-out infinite; }
+.ah-start small { font-size: 9px; opacity: 0.7; margin-left: 6px; }
+.ah-start em { font-style: normal; font-family: var(--mono); font-weight: 400; font-size: 9.5px; letter-spacing: 0.08em; opacity: 0.8; }
+@keyframes ah-pulse { 50% { filter: brightness(1.15); } }
+.ah-keys { position: absolute; left: 50%; bottom: calc(var(--bot) + 76px); transform: translateX(-50%); font-size: 10px; letter-spacing: 0.08em; color: var(--dim); white-space: nowrap; background: rgba(6,8,11,0.5); padding: 3px 8px; }
+#ui:has(.arena-hud.on) .goal, #ui:has(.arena-hud.on) .res-row { display: none; }
+@media (max-width: 899px) {
+  .ah-panel { width: 190px; top: calc(var(--top) + 54px); }
+  #ui .ah-start { bottom: calc(var(--bot) + 270px); font-size: 12px; padding: 10px 16px; }
+  .ah-combo b { font-size: 34px; }
+  .ah-combo em { font-size: 24px; }
+}

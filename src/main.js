@@ -169,7 +169,10 @@ async function boot() {
       app.earthView.enter(sp.lat, sp.lon, 100000, sp.heading);
       app.hud.toast(`Atmospheric entry at ${Math.abs(sp.lat).toFixed(1)}°${sp.lat >= 0 ? 'N' : 'S'} ${Math.abs(sp.lon).toFixed(1)}°${sp.lon >= 0 ? 'E' : 'W'} · pick a destination`, 'good');
     }
-    if (app.flight === 'surface' && m !== 'surface' && m !== 'map' && app.surfaceView.cargoTotal()) app.surfaceView.unload();
+    if (app.flight === 'surface' && m !== 'surface' && m !== 'map') {
+      if (app.surfaceView.cargoTotal()) app.surfaceView.unload();
+      app.surfaceView.leave();
+    }
     if (m === 'surface' && app.flight !== 'surface') {
       app.hud.flash();
       app.surfaceView.setBase(state.presence);

@@ -117,32 +117,33 @@ export const BODIES = [
 ];
 
 // What you can physically collect in orbit at each world (third-person salvage/mining).
-// kind: junk = dead satellites & rocket stages, rocks = asteroids/ejecta, ice = icy
-// ring particles and moonlets, canister = payloads lofted by surface mass drivers.
+// kind: junk = dead satellites & rocket stages, rocks = asteroids/ejecta, ice = icy ring particles
+// and moonlets. Only Earth orbit holds human-made objects: everywhere else it is natural matter
+// (impact ejecta, asteroids, ice). item = what the targeting bracket calls one piece of it.
 export const FIELDS = {
   sun: { kind: 'none', name: 'Corona · no solid matter survives here', res: {} },
-  mercury: { kind: 'rocks', name: 'Impact ejecta', res: { ore: 4, metal: 1, exotics: 0.05 } },
-  venus: { kind: 'canister', name: 'Cloud-harvest lift canisters', res: { silicon: 3, ore: 1 } },
-  earth: { kind: 'junk', name: 'LEO debris belt · dead satellites & spent stages', res: { metal: 3, silicon: 2, ore: 0.6 } },
-  moon: { kind: 'canister', name: 'Mass-driver catch zone', res: { ore: 3, silicon: 3, ice: 0.6, he3: 0.25 } },
-  mars: { kind: 'rocks', name: 'Phobos debris arc', res: { ore: 4, silicon: 2, ice: 1 } },
-  ceres: { kind: 'rocks', name: 'Main-belt asteroids', res: { ore: 4, metal: 2, ice: 2, exotics: 0.15 } },
-  jupiter: { kind: 'rocks', name: 'Ring dust & inner moonlets', res: { ore: 2, ice: 1 } },
-  europa: { kind: 'ice', name: 'Cryovolcanic plume ice', res: { ice: 5, he3: 0.1 } },
-  saturn: { kind: 'ice', name: 'Ring particles · 99.9% water ice', res: { ice: 6, ore: 0.3 } },
-  titan: { kind: 'ice', name: 'Hyperion-family ice', res: { ice: 4, he3: 0.15 } },
-  uranus: { kind: 'ice', name: 'Ice-giant moonlets', res: { ice: 4, exotics: 0.08 } },
-  neptune: { kind: 'ice', name: 'Triton ejecta', res: { ice: 3, exotics: 0.15, he3: 0.1 } },
-  pluto: { kind: 'ice', name: 'Kuiper belt objects', res: { ice: 4, exotics: 0.25 } },
+  mercury: { kind: 'rocks', name: 'Impact ejecta', item: 'IMPACT EJECTA', res: { ore: 4, metal: 1, exotics: 0.05 } },
+  // Venus has no moons or rings; its only companions are co-orbital asteroids like Zoozve (2002 VE68)
+  venus: { kind: 'rocks', name: 'Co-orbital asteroids · Zoozve family', item: 'CO-ORBITAL ASTEROID', res: { silicon: 3, ore: 2, metal: 0.5 } },
+  earth: { kind: 'junk', name: 'LEO debris belt · dead satellites & spent stages', item: 'DERELICT HARDWARE', res: { metal: 3, silicon: 2, ore: 0.6 } },
+  // rock blasted off the Moon by impacts: anorthosite highland crust and regolith breccia, solar-wind He-3 in the fines
+  moon: { kind: 'rocks', name: 'Lunar impact ejecta · anorthosite & regolith breccia', item: 'LUNAR EJECTA', res: { ore: 3, silicon: 3, ice: 0.3, he3: 0.25 } },
+  mars: { kind: 'rocks', name: 'Phobos debris arc', item: 'PHOBOS FRAGMENT', res: { ore: 4, silicon: 2, ice: 1 } },
+  ceres: { kind: 'rocks', name: 'Main-belt asteroids', item: 'ASTEROID', res: { ore: 4, metal: 2, ice: 2, exotics: 0.15 } },
+  jupiter: { kind: 'rocks', name: 'Ring dust & inner moonlets', item: 'RING MOONLET', res: { ore: 2, ice: 1 } },
+  europa: { kind: 'ice', name: 'Cryovolcanic plume ice', item: 'PLUME ICE', res: { ice: 5, he3: 0.1 } },
+  saturn: { kind: 'ice', name: 'Ring particles · 99.9% water ice', item: 'RING PARTICLE', res: { ice: 6, ore: 0.3 } },
+  titan: { kind: 'ice', name: 'Hyperion-family ice', item: 'ICY MOONLET', res: { ice: 4, he3: 0.15 } },
+  uranus: { kind: 'ice', name: 'Ice-giant moonlets', item: 'ICY MOONLET', res: { ice: 4, exotics: 0.08 } },
+  neptune: { kind: 'ice', name: 'Triton ejecta', item: 'TRITON EJECTA', res: { ice: 3, exotics: 0.15, he3: 0.1 } },
+  pluto: { kind: 'ice', name: 'Kuiper belt objects', item: 'KUIPER OBJECT', res: { ice: 4, exotics: 0.25 } },
 };
 
 // Where a cruising fleet really passes through enough matter to collect anything: only close to
-// a few worlds. reach = distance from the body's centre (km). Your own canister traffic only
-// exists once you have a base there.
+// a few worlds. reach = distance from the body's centre (km). Nothing natural near the Moon or
+// Venus is dense enough to collect at cruise, so flying past them is empty space.
 export const TRANSIT_FIELDS = {
   earth: { reach: 42000, name: 'Earth orbital debris · LEO to the GEO graveyard' }, // ~10,000 t of junk
-  moon: { reach: 60000, own: true },
-  venus: { reach: 60000, own: true },
   saturn: { reach: 140000, name: 'Saturn\'s rings · 99.9% water ice' }, // out to the F ring
 };
 

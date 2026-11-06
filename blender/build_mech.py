@@ -1,6 +1,7 @@
 """Knight-frame mech for the surface view: hard-surface armour, articulated on the rig's joints.
 
 Run:  blender --background --factory-startup --python blender/build_mech.py -- public/models [preview_dir]
+      blender --background --factory-startup --python blender/build_mech.py -- public/models --lod   (-> mech_lo.glb)
 
 Every part is modelled in THREE.js rig space (x = character left, y = up, z = forward, ~1.8 units tall;
 the game scales it by 3.1) and converted to Blender space on the way in (x, -z, y), so the glTF export
@@ -21,6 +22,9 @@ import sys
 from mathutils import Vector, Matrix, Euler
 
 argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
+# --lod: lighter build for crowds (arena enemies): no panel grooves, single-segment bevels, half-res curves
+LOD = '--lod' in argv
+argv = [a for a in argv if a != '--lod']
 OUT = os.path.abspath(argv[0] if argv else 'public/models')
 PREVIEW = os.path.abspath(argv[1]) if len(argv) > 1 and argv[1] != '-' else None
 os.makedirs(OUT, exist_ok=True)
@@ -116,6 +120,8 @@ def fbox(w, h, d, tx=1.0, tz=1.0, bx=1.0, bz=1.0, sz=0.0, bsz=0.0, c=0.008, cx=N
 
 def lathe(rings, seg=20):
     """Lathe around +Y. rings = [(y, rx, rz), ...] bottom to top; elliptical sections, capped."""
+    if LOD:
+        seg = max(8, seg // 2)
     bm = bmesh.new()
     loops = []
     for (y, rx, rz) in rings:
@@ -140,6 +146,8 @@ def cyl(r, h, seg=20, axis='y', r2=None):
 
 
 def sphere(r, seg=20, rings=12, scale=(1, 1, 1)):
+    if LOD:
+        seg, rings = max(8, seg // 2), max(6, rings // 2)
     bm = bmesh.new()
     bmesh.ops.create_uvsphere(bm, u_segments=seg, v_segments=rings, radius=r)
     bmesh.ops.scale(bm, vec=Vector(scale), verts=bm.verts)
@@ -199,6 +207,8 @@ class Part:
     def add(self, bm, matname, pos=(0, 0, 0), rot=(0, 0, 0), bevel=0.0025, seg=2, panel=0.0, smooth=True, angle=30):
         """bm in the piece's own frame (rig units); pos/rot place it relative to this joint.
         panel > 0 cuts groove lines into faces larger than that area."""
+        if LOD:
+            panel, seg = 0.0, 1
         seams = groove(bm, panel) if panel else []
         for f in seams:
             f.material_index = 1
@@ -609,9 +619,10 @@ def preview():
 
 build()
 root = finalize()
-path = os.path.join(OUT, 'mech.glb')
+path = os.path.join(OUT, 'mech_lo.glb' if LOD else 'mech.glb')
 bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_yup=True, export_apply=True,
                           export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=7)
 print(f'EXPORTED {path} ({os.path.getsize(path) // 1024} KB)')
-preview()
+if not LOD:
+    preview()
 print('DONE')
