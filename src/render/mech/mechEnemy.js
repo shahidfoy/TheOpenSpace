@@ -5,6 +5,21 @@ import {
   locoPose, airPose, crouchPose, dashPose, flinchPose, tumblePose, downPose, getupPose, attackPose, evalMove, arcBasis, MOVES, ease,
 } from './swordAnim.js';
 import { Beam } from './swordFx.js';
+import { SkinnedMechBody, clipSegment } from './mechSkin.js';
+import { HOSTILE } from './livery.js';
+import { skinned } from '../assets.js';
+
+// skinned frames: each enemy move plays one swing of a clip, scrubbed so the clip's windup fills the move's
+// (long, readable) telegraph and its fastest motion lands in the move's hit window
+const ENEMY_SEG = { e1: ['combo1', 0], e2: ['sw_inward', 'max'], eL: ['gs_slash', 'max'], eH: ['combo_down', 'max'], eA: ['aerial', 'max'], eS: ['circle', 'max'] };
+let SEGS = null;
+function segments(meta) {
+  if (SEGS) return SEGS;
+  SEGS = {};
+  for (const [id, [clip, which]] of Object.entries(ENEMY_SEG)) if (meta.clips[clip]) SEGS[id] = clipSegment(meta, clip, which);
+  SEGS.gun = meta.clips.thrust ? clipSegment(meta, 'thrust', 'max') : null;
+  return SEGS;
+}
 
 // Hostile frames for the lunar arena. They share the player's body, poses and sword arcs (MechBody + swordAnim),
 // driven by a small state machine:
@@ -44,8 +59,15 @@ export class MechEnemy {
     this.type = type;
     this.cfg = TYPES[type];
     this.fx = fx;
-    this.body = new MechBody(scene, fx, { scheme: type, lod: true, size: this.cfg.size });
-    this.k = this.body.k;
+    // the JSDF frame (mech_enemy.glb, the 30k-triangle build) in a hostile livery, else the procedural frame
+    const asset = skinned('mech_enemy');
+    const L = HOSTILE[type];
+    this.body = asset
+      ? new SkinnedMechBody(scene, fx, asset, { clone: true, livery: L, size: this.cfg.size, plume: L.plume })
+      : new MechBody(scene, fx, { scheme: type, lod: true, size: this.cfg.size });
+    this.skin = asset ? this.body : null;
+    if (asset) this.segs = segments(asset.meta);
+    this.k = S * this.cfg.size;                    // rig units -> metres (move ranges / arcs are in rig units)
     this.isEnemy = true;
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector3();
@@ -242,6 +264,8 @@ export class MechEnemy {
     this.slashed = false;
     this.shocked = false;
     this.state = 'attack';
+    this.seg = this.skin ? this.segs[id] : null;
+    this.arcI = 0;
     if (this.move.air) {
       // leap up to the player first (aerial follow-up)
       const P = ctx.player;
@@ -281,7 +305,16 @@ export class MechEnemy {
       const f = this.forward(_v);
       this.vel.x = f.x * want; this.vel.z = f.z * want;
     } else { this.vel.x *= Math.exp(-dt * 10); this.vel.z *= Math.exp(-dt * 10); }
-    if (s.phase === 'swing' && !this.slashed) {
+    if (this.seg && s.phase !== 'wind') {
+      // crescents along the clip's own swing arcs, retimed to the move's swing window
+      const sg = this.seg, k = ts / Math.max(0.01, sg.t1 - sg.t0);
+      while (this.arcI < sg.arcs.length && this.moveE >= tw + sg.arcs[this.arcI].dt * k) {
+        const a = sg.arcs[this.arcI++];
+        this.skin.arcWorld(a, _C, _U, _V);
+        const ang = clamp(a.a1, -Math.PI * 2 + 0.01, Math.PI * 2 - 0.01);
+        this.fx.crescent(_C, _U, _V, 0, ang, Math.max(0.05, (a.t1 - a.t0) * k), { radius: (a.r * this.skin.k + 0.6) * (mv.heavy ? 1.2 : 1.05), innerFrac: 0.5, life: 0.26, color: this.body.slashColor });
+      }
+    } else if (s.phase === 'swing' && !this.slashed) {
       this.slashed = true;
       arcBasis(mv, _U, _V); this.flatDir(_U, _U); this.flatDir(_V, _V);
       this.flatWorld(_v.set(mv.c[0], mv.c[1], mv.c[2]).multiplyScalar(this.k), _C);
@@ -478,7 +511,72 @@ export class MechEnemy {
   }
 
   // ---------------- animation ----------------
+  // clip-driven animation for the skinned frame
+  animateSkin(dt, ctx) {
+    const B = this.skin, st = this.state, k = this.k;
+    const enter = st !== this.prevState;
+    this.prevState = st;
+    let wantPitch = 0, pivot = 0, tint = 0, tintHex = TELE_PARRY;
+    const cur = B.currentName;
+    const done = !B.current || (B.current.loop === THREE.LoopOnce && B.current.time >= B.current.getClip().duration - 1e-3);
+    if (st === 'attack') {
+      const sg = this.seg, mv = this.move;
+      if (sg) {
+        const [tw, ts, tr] = mv.t, e = this.moveE;
+        const t = e < tw ? sg.start + (sg.t0 - sg.start) * (e / tw)
+          : e < tw + ts ? sg.t0 + (sg.t1 - sg.t0) * ((e - tw) / ts)
+          : sg.t1 + (sg.end - sg.t1) * Math.min(1, (e - tw - ts) / tr);
+        B.pose(sg.clip, t, 0.12);
+      }
+      if (this.mv.phase === 'wind') {
+        const e = this.moveE / mv.t[0];
+        tint = 0.25 + 0.75 * e * e; tintHex = mv.unblockable ? TELE_RED : TELE_PARRY;
+      }
+    } else if (st === 'gun') {
+      // cannon braced: the thrust clip held at full extension
+      B.pose('thrust', this.segs.gun ? this.segs.gun.t1 : 0.4, 0.15);
+      if (this.gunPhase === 'aim') { tint = 0.3 + 0.4 * (this.moveE / 1.05); tintHex = TELE_PARRY; }
+      else if (this.gunPhase === 'lock') { tint = 1; tintHex = TELE_PARRY; }
+    } else if (st === 'dash') {
+      if (enter) B.play('dash', { time: 0, fade: 0.06, speed: 2.2, restart: true });
+    } else if (st === 'hit') {
+      if (enter) B.play(Math.random() < 0.5 ? 'hit' : 'hit2', { time: 0, fade: 0.05, speed: 1.4, restart: true });
+    } else if (st === 'stagger') {
+      if (enter) B.play('big_hit', { time: 0.1, fade: 0.06, speed: 0.8, restart: true });
+    } else if (st === 'launched') {
+      if (enter) B.play('big_hit', { time: 0.1, fade: 0.05, speed: 1.3, restart: true });
+      else if (cur === 'big_hit' && done) B.play('fall', { fade: 0.25 });
+      wantPitch = -clamp(0.2 + this.tumble * 1.2, 0, 0.9);
+      pivot = 1.1 * k;
+    } else if (st === 'down') {
+      if (enter) B.play('knockdown', { time: 0.9, fade: 0.08, speed: 1.6, restart: true });
+    } else if (st === 'dead') {
+      if (enter) B.play('death', { time: 0.4, fade: 0.1, speed: 1.1, restart: true });
+    } else if (st === 'getup') {
+      if (enter) B.play('getup', { time: 1.1, fade: 0.1, speed: 2.9, restart: true });
+    } else if (st === 'spawn' || !this.grounded) {
+      B.play('fall', { fade: 0.25, speed: 0.8 });
+    } else {
+      // on foot: walk / strafe / back-pedal / run from the velocity in character space (x = the frame's left)
+      const sp = this.speed, f = Math.sin(this.yaw), c = Math.cos(this.yaw);
+      const fwd = this.vel.x * f + this.vel.z * c, side = this.vel.x * c - this.vel.z * f;
+      if (sp < 0.6) B.play('idle', { fade: 0.3 });
+      else if (Math.abs(side) > Math.abs(fwd) * 1.2) B.play(side > 0 ? 'walk_l' : 'walk_r', { fade: 0.25, speed: clamp(sp / 4.5, 0.6, 1.5) });
+      else if (fwd < 0) B.play('walk_b', { fade: 0.25, speed: clamp(sp / 4, 0.6, 1.5) });
+      else if (sp < 7) B.play('walk', { fade: 0.25, speed: clamp(sp / 4.5, 0.6, 1.5) });
+      else B.play('run', { fade: 0.2, speed: clamp(sp / 12, 0.55, 1.2) });
+    }
+    const rate = st === 'down' || st === 'dead' ? 7 : 6;
+    this.pitch += (wantPitch - this.pitch) * Math.min(1, dt * rate);
+    B.setTint(tintHex, tint);
+    this.burst = Math.max(0, this.burst - dt * 2.5);
+    const want = thrustFor({ boost: st === 'dash' ? 1 : 0, climb: st === 'spawn' ? 1 : 0, burst: this.burst * 1.3 });
+    const swinging = st === 'attack' && this.mv.phase === 'swing';
+    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: 0, pivot, thr: want, swinging });
+  }
+
   animate(dt, ctx) {
+    if (this.skin) return this.animateSkin(dt, ctx);
     const B = this.body, T = B.target, H = this.H, k = this.k, st = this.state;
     this.speedNorm += (Math.min(1.6, this.speed / 8) - this.speedNorm) * Math.min(1, dt * 10);
     let omega = 18, zeta = 0.8, pivot = 0, wantPitch = 0, lift = 0;

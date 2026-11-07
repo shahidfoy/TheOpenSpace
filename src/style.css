@@ -251,6 +251,20 @@ b, strong { font-weight: 600; }
 .cam-view small { display: block; font-size: 8.5px; color: var(--dim); letter-spacing: 0.16em; }
 .cam-view kbd { display: inline-block; margin-left: 6px; padding: 0 5px; font-family: var(--mono); font-size: 10px; color: var(--ice); border: 1px solid var(--line-2); border-radius: 3px; }
 .mode-surface .cam-view, .mode-map .cam-view { display: none; }
+/* surface: frame hangar (livery) */
+.hangar-btn { display: none; position: absolute; left: 12px; bottom: calc(var(--bot) + 300px); padding: 7px 12px; text-align: left; font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--ice); background: rgba(10,14,22,0.6); border: 1px solid var(--line-2); border-left: 2px solid rgba(127,212,255,0.5); clip-path: var(--cut); }
+.hangar-btn small { display: block; font-size: 8.5px; color: var(--dim); letter-spacing: 0.16em; }
+.mode-surface .hangar-btn { display: block; }
+.liveries { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; }
+.livery { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 9px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; color: var(--text); text-align: left; background: var(--glass); border: 1px solid var(--line); clip-path: var(--cut); }
+.livery.on { border-color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
+.livery .sws { display: flex; gap: 3px; }
+.livery .sw, .pick input { display: inline-block; width: 18px; height: 18px; border: 1px solid rgba(255,255,255,0.25); }
+.picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.pick { display: flex; align-items: center; gap: 8px; padding: 6px 8px; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em; color: var(--dim); background: var(--glass); border: 1px solid var(--line); cursor: pointer; }
+.pick input { width: 26px; height: 22px; padding: 0; background: none; cursor: pointer; }
+.pick input::-webkit-color-swatch-wrapper { padding: 0; }
+.pick input::-webkit-color-swatch { border: none; }
 
 /* ---------- touch controls ---------- */
 .controls .joy { position: absolute; left: 20px; bottom: calc(var(--bot) + 84px); width: 124px; height: 124px; border-radius: 50%; border: 1px solid var(--line-2); background: radial-gradient(circle, rgba(255,255,255,0.05), rgba(255,255,255,0.01) 70%); touch-action: none; }
@@ -456,7 +470,7 @@ b, strong { font-weight: 600; }
   .gauge { bottom: 96px; }
   .dockline { bottom: 108px; }
   .readout { bottom: 96px; }
-  .land, .fuel, .craft-swap { bottom: 170px; }
+  .land, .fuel, .craft-swap, .hangar-btn { bottom: 170px; }
   .cam-view { bottom: 232px; }
   .toasts { top: 120px; }
   .zone { top: 140px; }
