@@ -6,6 +6,8 @@ import {
   evalMove, arcBasis, MOVES, COMBO, ease, GUARD_HAND,
 } from './swordAnim.js';
 import { SwordFx } from './swordFx.js';
+import { SkinnedMechBody, buildSkinCombos } from './mechSkin.js';
+import { skinned } from '../assets.js';
 
 // Surface mech controller: run / sprint, jump + double jump (thruster burst), rocket flight (hold jump in the air
 // to climb on the foot / calf / back thrusters, Shift in the air to boost along the stick on the back and wing
@@ -36,7 +38,11 @@ const REACT = new Set(['hit', 'launched', 'down', 'getup', 'dead']);
 export class MechPilot {
   constructor(scene) {
     this.fx = new SwordFx(scene);
-    this.body = new MechBody(scene, this.fx, { scheme: 'player' });
+    // the skinned Darklord frame with mocap clips when mech_player.glb loaded, else the procedural knight frame
+    const asset = skinned('mech_player');
+    this.body = asset ? new SkinnedMechBody(scene, this.fx, asset) : new MechBody(scene, this.fx, { scheme: 'player' });
+    this.skin = asset ? this.body : null;
+    this.C = asset ? buildSkinCombos(this.body) : COMBO;
     this.rig = this.body.rig;
     this.root = this.body.root;
     this.pos = new THREE.Vector3();   // feet; the rig root is offset from it when leaning
@@ -292,6 +298,7 @@ export class MechPilot {
 
   land(vy, ctx) {
     this.jumps = 0;
+    this.landEdge = vy < -9;
     if (vy < -5 && this.state !== 'launched') {
       this.landT = Math.min(0.35, -vy * 0.03);
       ctx.puff?.(this.pos, 1.2);
@@ -375,6 +382,7 @@ export class MechPilot {
       this.vel.x -= dx / d * 7; this.vel.z -= dz / d * 7;
       this.fx.sparksAt(p.addScaledVector(_v2.set(dx / d, 0, dz / d), 1.4), 18, { color: 0xbfe8ff, speed: 16, life: 0.4 });
       this.body.recoil(0, 0.6, 0.5);
+      this.skin?.play('block_hit', { time: 0.05, fade: 0.04, speed: 1.6, restart: true });
       this.hitstop = Math.max(this.hitstop, 0.05);
       this.shake = Math.max(this.shake, 0.15);
       ctx.haptic?.('medium');
@@ -484,18 +492,18 @@ export class MechPilot {
     if (wish.lengthSq() > 0.05) this.yaw = Math.atan2(wish.x, wish.z);
     let id;
     if (!this.grounded) {
-      if (kind === 'heavy') { id = COMBO.plunge; this.vel.y = 3; }
+      if (kind === 'heavy') { id = this.C.plunge; this.vel.y = 3; }
       else {
         const n = this.state === 'attack' && this.move?.air ? this.combo : 0;
-        id = COMBO.air[n % COMBO.air.length];
+        id = this.C.air[n % this.C.air.length];
         this.combo = n + 1;
       }
-    } else if (kind === 'launch') { id = COMBO.launch; this.combo = 0; }
-    else if (kind === 'heavy') { id = COMBO.heavy; this.combo = 0; }
+    } else if (kind === 'launch') { id = this.C.launch; this.combo = 0; }
+    else if (kind === 'heavy') { id = this.C.heavy; this.combo = 0; }
     else {
       const chain = this.state === 'attack' || this.comboGap < 0.45;
-      if (!chain || this.combo >= COMBO.ground.length) this.combo = 0;
-      id = COMBO.ground[this.combo];
+      if (!chain || this.combo >= this.C.ground.length) this.combo = 0;
+      id = this.C.ground[this.combo];
       this.combo++;
     }
     const fromDodge = this.state === 'dodge';
@@ -507,6 +515,33 @@ export class MechPilot {
     this.shocked = false;
     this.state = 'attack';
     this.comboGap = 0;
+    this.playMoveClip();
+  }
+
+  // skinned body: start (or continue) the move's clip at its segment start
+  playMoveClip() {
+    const mv = this.move;
+    this.arcI = 0;
+    if (!this.skin || mv?.path !== 'clip') return;
+    const a = this.skin.actions[mv.clip];
+    const continuing = this.skin.current === a && Math.abs(a.time - mv.start) < 0.12;
+    if (!continuing) this.skin.play(mv.clip, { time: mv.start, fade: 0.07, speed: mv.speed, restart: true });
+    else a.timeScale = mv.speed;
+  }
+
+  // slash crescents along the clip's detected swing arcs (model space -> world)
+  clipSlashes() {
+    const mv = this.move, B = this.skin, tw = mv.t[0];
+    const m = this.root.matrixWorld;
+    while (this.arcI < mv.arcs.length && this.moveE >= tw + mv.arcs[this.arcI].dt) {
+      const a = mv.arcs[this.arcI++];
+      _C.set(a.c[0], a.c[1], a.c[2]).multiplyScalar(B.k).add(B.model.position).applyMatrix4(m);
+      _U.set(a.u[0], a.u[1], a.u[2]).transformDirection(m);
+      _V.set(a.v[0], a.v[1], a.v[2]).transformDirection(m);
+      const big = mv.heavy || mv.finisher || mv.launch;
+      const ang = clamp(a.a1, -Math.PI * 2 + 0.01, Math.PI * 2 - 0.01);
+      this.fx.crescent(_C, _U, _V, 0, ang, Math.max(0.05, a.dur), { radius: (a.r * B.k + 0.6) * (big ? 1.2 : 1.05), innerFrac: 0.5, life: big ? 0.32 : 0.22, color: this.skin.slashColor });
+    }
   }
 
   arcFrame(center, U, V) {
@@ -540,7 +575,8 @@ export class MechPilot {
     } else {
       this.vel.x *= Math.exp(-dt * 12); this.vel.z *= Math.exp(-dt * 12);
     }
-    if (s.phase === 'swing' && !this.slashed) {
+    if (mv.path === 'clip') { if (s.phase !== 'wind') this.clipSlashes(); }
+    else if (s.phase === 'swing' && !this.slashed) {
       this.slashed = true;
       this.arcFrame(_C, _U, _V);
       const big = mv.heavy || mv.finisher || mv.launch;
@@ -636,6 +672,7 @@ export class MechPilot {
 
   // ---------------- animation ----------------
   animate(dt) {
+    if (this.skin) return this.animateSkin(dt);
     const B = this.body, T = B.target, H = this.H;
     const sp = this.speed;
     this.speedNorm += (Math.min(1.6, sp / RUN) - this.speedNorm) * Math.min(1, dt * 10);
@@ -748,6 +785,82 @@ export class MechPilot {
     const lit = this.state === 'attack' || this.state === 'spin' || this.swordHold > 0 || this.guardK > 0.3;
     const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'spin';
     B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, lift: lift * Math.min(1, -this.pitch / 1.2), omega, zeta, H, spin, thr: want, lit, swinging });
+  }
+
+  // ---------------- clip-driven animation (skinned frame) ----------------
+  animateSkin(dt) {
+    const B = this.skin, st = this.state, sp = this.speed;
+    const enter = st !== this.prevState;
+    this.prevState = st;
+    let wantPitch = 0, wantRoll = 0, pivot = PIVOT;
+    const cur = B.currentName;
+    const done = !B.current || (B.current.loop === THREE.LoopOnce && B.current.time >= B.current.getClip().duration - 1e-3);
+    if (st === 'attack') {
+      // the move's clip was started in startAttack
+    } else if (st === 'spin') {
+      if (enter) B.play('circle', { time: 0.25, fade: 0.05, speed: 2.1, restart: true });
+    } else if (st === 'dodge') {
+      if (enter) {
+        const f = this.forward(_v), d = this.dodgeDir;
+        const fwd = d.x * f.x + d.z * f.z;
+        if (fwd > 0.4) B.play('dash', { time: 0.0, fade: 0.05, speed: 2.2, restart: true });
+        else B.play(Math.random() < 0.5 ? 'dodge' : 'dodge2', { time: 0.0, fade: 0.05, speed: 2.0, restart: true });
+      }
+    } else if (st === 'hit') {
+      if (enter) B.play(Math.random() < 0.5 ? 'hit' : 'hit2', { time: 0, fade: 0.05, speed: 1.4, restart: true });
+    } else if (st === 'launched') {
+      if (enter) B.play('big_hit', { time: 0.1, fade: 0.05, speed: 1.3, restart: true });
+      else if (cur === 'big_hit' && done) B.play('fall', { fade: 0.25 });
+      wantPitch = -clamp(0.2 + this.tumble * 1.2, 0, 0.9);
+      pivot = 1.1 * S;
+    } else if (st === 'down') {
+      if (enter) B.play('knockdown', { time: 0.9, fade: 0.08, speed: 1.6, restart: true });
+    } else if (st === 'dead') {
+      if (enter) B.play('death', { time: 0.4, fade: 0.1, speed: 1.1, restart: true });
+    } else if (st === 'getup') {
+      if (enter) B.play('getup', { time: 1.1, fade: 0.1, speed: 3.2, restart: true });
+    } else if (this.guardK > 0.05) {
+      if (!(cur === 'block_hit' && !done) && cur !== 'block') B.play('block', { time: 0.7, fade: 0.08, speed: 0, restart: true });
+    } else if (this.flying) {
+      B.play('fall', { fade: 0.3, speed: 0.8 });
+      const hs = Math.hypot(this.vel.x, this.vel.z);
+      const f = this.forward(_v);
+      const side = (this.accelX || 0) * f.z - (this.accelZ || 0) * f.x;
+      wantPitch = clamp(hs / FLY_TOP, 0, 1) * this.boostK * 1.05 + this.climb * (1 - this.boostK) * 0.05;
+      wantRoll = clamp(-side * 0.025, -0.6, 0.6);
+    } else if (!this.grounded) {
+      if (this.vel.y > 1) { if (cur !== 'jump') B.play('jump', { time: 0.35, fade: 0.1, speed: 0.7, restart: true }); }
+      else if (cur !== 'fall') B.play('fall', { fade: 0.35, speed: 0.8 });
+    } else if (this.landT > 0.12 && (this.landEdge || cur === 'land')) {
+      if (this.landEdge) B.play('land', { time: 0.4, fade: 0.06, speed: 2.4, restart: true });
+    } else if (sp < 0.6) {
+      B.play('idle', { fade: 0.3 });
+    } else if (sp < 6) {
+      B.play('walk', { fade: 0.25, speed: clamp(sp / 4.5, 0.6, 1.4) });
+    } else if (sp < 12) {
+      B.play('run', { fade: 0.2, speed: clamp(sp / 12, 0.55, 1.2) });
+    } else {
+      B.play('sprint', { fade: 0.2, speed: clamp(sp / 17, 0.7, 1.3) });
+    }
+    this.landEdge = false;
+    // lean into acceleration on foot
+    if (this.grounded && st === 'idle' && this.guardK < 0.05) {
+      const f = this.forward(_v);
+      const along = (this.accelX || 0) * f.x + (this.accelZ || 0) * f.z;
+      this.lean += (clamp(along * 0.01, -0.2, 0.25) - this.lean) * Math.min(1, dt * 8);
+    } else this.lean *= Math.max(0, 1 - dt * 8);
+
+    const rate = st === 'launched' ? 6 : this.flying ? 4 : 6;
+    this.pitch += (wantPitch - this.pitch) * Math.min(1, dt * rate);
+    this.roll += (wantRoll - this.roll) * Math.min(1, dt * 3);
+    if (!this.flying) this.boostK += (0 - this.boostK) * Math.min(1, dt * 6);
+    const burst = this.burstT > 0 ? 1.4 : 0;
+    const steer = Math.min(1, Math.abs(this.roll) * 2 + Math.abs(this.pitch - (this.prevPitch ?? this.pitch)) * 40);
+    this.prevPitch = this.pitch;
+    const want = thrustFor({ boost: this.boostK, climb: this.climb, burst, steer });
+    if (st === 'dodge') { want.back = Math.max(want.back, 1.2); want.sh = Math.max(want.sh, 0.9); }
+    const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'spin';
+    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lean: this.lean });
   }
 
   // sword low and forward at idle (run = 0), trailing behind while running (run = 1); w = arm IK weight

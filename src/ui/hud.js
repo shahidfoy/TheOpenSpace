@@ -13,6 +13,7 @@ import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
 import { ArenaHud } from './arenaHud.js';
 import { CRAFTS } from '../render/models.js';
+import { LIVERIES, FINISHES, ZONES, loadLivery, saveLivery } from '../render/mech/livery.js';
 
 const VIEW_NAMES = { chase: 'CHASE', free: 'FREE LOOK', cockpit: 'COCKPIT', flyby: 'FLY-BY', overhead: 'OVERHEAD', wide: 'WIDE' };
 
@@ -99,6 +100,7 @@ const TEMPLATE = `
   <button class="land" id="land" data-act="land"></button>
   <button class="craft-swap" id="craft-swap" data-act="craft"></button>
   <button class="cam-view" id="cam-view" data-act="camView"></button>
+  <button class="hangar-btn" id="hangar-btn" data-open="hangar"><small>FRAME</small>HANGAR</button>
   <div class="earthnav" id="earthnav"></div>
   <div class="attrib" id="attrib" data-act="attrib" title="Data credits (tap to expand)"></div>
 </div>
@@ -159,6 +161,13 @@ export class Hud {
       else if (t.dataset.open) this.panel === t.dataset.open ? this.close() : this.open(t.dataset.open);
       else if (t.dataset.close !== undefined) this.close();
       else this.act(t.dataset.act, t.dataset.arg, t.dataset.arg2);
+    });
+
+    // hangar colour pickers recolour the frame live
+    root.addEventListener('input', (e) => {
+      const z = e.target.dataset?.livery;
+      if (!z) return;
+      this.setLivery({ ...this.livery(), [z]: e.target.value, preset: null });
     });
 
     // B: board your ship / step out on EVA · C: cycle camera views
@@ -264,12 +273,20 @@ export class Hud {
       case 'tutDevice': this.tutDevice = arg; this.showTutorial(this.tutStep); return;
       case 'tutEnd': this.endTutorial(); return;
       case 'closeWin': this.$('overlay').classList.remove('show'); return;
+      case 'livery': this.setLivery({ ...LIVERIES[arg], preset: arg }); break;
+      case 'liveryFinish': this.setLivery({ ...this.livery(), finish: arg, preset: null }); break;
+      case 'liveryMetal': { const l = this.livery(), m = l.metals || ''; this.setLivery({ ...l, metals: m.includes(arg) ? m.replace(arg, '') : m + arg, preset: null }); break; }
     }
     this.renderSheet();
   }
 
   open(panel) {
     if (panel.startsWith('body:') && this.panel !== panel) this.escortSel = null;
+    if (panel === 'hangar' && this.app.mode === 'surface') {
+      // swing the camera round to look the frame in the face while you paint it
+      const sv = this.app.surfaceView;
+      sv.camYaw = sv.pilot.yaw + 0.45; sv.camDist = 12; sv.camPitch = 0.1;
+    }
     this.panel = panel;
     this.$('sheet').classList.add('open');
     this.renderSheet(true);
@@ -394,7 +411,8 @@ export class Hud {
       const voyage = this.app.mode === 'local' && this.app.localView.mode === 'voyage';
       if (voyage !== this.root.classList.contains('mode-voyage')) this.syncNav();
     }
-    if (this.panel && (this.sheetAcc > 1 || this.dirty)) this.renderSheet();
+    // (the hangar holds live colour pickers: re-rendering it would close them mid-drag)
+    if (this.panel && ((this.sheetAcc > 1 && this.panel !== 'hangar') || this.dirty)) this.renderSheet();
     if (this.app.mode === 'map' && this.app.mapView.view === 'cyber' && (this.cyAcc = (this.cyAcc || 0) + dt) > 2) { this.cyAcc = 0; this.$('legend').innerHTML = this.cyberLegend(); }
     this.syncView();
     if (this.app.mode === 'earth') this.updateEarth();
@@ -685,7 +703,7 @@ export class Hud {
     const [name, arg] = this.panel.split(':');
     const body = this.$('sheet-body');
     const keep = body.scrollTop;
-    const fn = { base: this.pBase, tech: this.pTech, fleet: this.pFleet, market: this.pMarket, body: this.pBody, launch: this.pLaunch, goals: this.pGoals, settings: this.pSettings, earthnav: this.pEarthNav, cyber: this.pCyber }[name];
+    const fn = { base: this.pBase, tech: this.pTech, fleet: this.pFleet, market: this.pMarket, body: this.pBody, launch: this.pLaunch, goals: this.pGoals, settings: this.pSettings, hangar: this.pHangar, earthnav: this.pEarthNav, cyber: this.pCyber }[name];
     const { title, kicker = '', html } = fn.call(this, arg);
     this.$('sheet-title').textContent = title;
     this.$('sheet-kicker').textContent = kicker;
@@ -880,6 +898,31 @@ export class Hud {
         <h3>Save</h3><p class="note">Progress saves automatically, and to Telegram Cloud when played inside Telegram.</p>
         <button class="btn danger" data-act="reset">RESET GAME</button>
         <h3>About</h3><p class="note">Planet positions use real inclined orbital elements, so every distance and travel time is computed from where the planets really are right now. Planet maps: Solar System Scope (CC BY 4.0) and NASA/USGS/JPL. Star catalogue: Hipparcos/BSC via d3-celestial. Prototype v0.3.</p>`,
+    };
+  }
+
+  // ---------- hangar: mech livery ----------
+  livery() { return (this._livery ||= loadLivery()); }
+  setLivery(l) {
+    this._livery = l;
+    saveLivery(l);
+    this.app.surfaceView?.pilot?.skin?.setLivery(l);
+  }
+  pHangar() {
+    const l = this.livery();
+    const sw = (v) => `<i class="sw" style="background:${v.a}"></i><i class="sw" style="background:${v.b}"></i><i class="sw" style="background:${v.c}"></i>`;
+    const presets = Object.entries(LIVERIES).map(([k, v]) => `<button class="livery ${l.preset === k ? 'on' : ''}" data-act="livery" data-arg="${k}"><span class="sws">${sw(v)}</span>${v.name}</button>`).join('');
+    const pick = ZONES.map(([z, name]) => `<label class="pick"><input type="color" data-livery="${z}" value="${l[z]}"><span>${name}</span></label>`).join('');
+    const plate = [['a', 'Main'], ['b', 'Second'], ['c', 'Trim']].map(([z, n]) => `<button class="${(l.metals || '').includes(z) ? 'on' : ''}" data-act="liveryMetal" data-arg="${z}">${n.toUpperCase()}</button>`).join('');
+    const skinned = !!this.app.surfaceView?.pilot?.skin;
+    return {
+      title: 'Hangar', kicker: 'Frame livery',
+      html: `${skinned ? '' : '<p class="note">The frame model has not loaded, so the procedural mech is in use; liveries apply once it loads.</p>'}
+        <h3>Liveries</h3><div class="liveries">${presets}</div>
+        <h3>Custom paint</h3><div class="picks">${pick}</div>
+        <h3>Finish</h3><div class="seg wide">${Object.keys(FINISHES).map((k) => `<button class="${l.finish === k ? 'on' : ''}" data-act="liveryFinish" data-arg="${k}">${k.toUpperCase()}</button>`).join('')}</div>
+        <h3>Bare metal plating</h3><div class="seg wide">${plate}</div>
+        <p class="note">Plated zones turn polished metal in their colour (gold, chrome, gunmetal). Your livery is saved on this device.</p>`,
     };
   }
 
