@@ -111,20 +111,23 @@ export function setThrust(obj, thr, time) {
 // Navigation lights (red port, green starboard, white tail strobe) and attitude-thruster (RCS)
 // puffs. Skiff frame: forward +Z, up +Y, its left +X. Each puff fires along `dir` and answers one
 // rotation axis of the demand vector (x pitch nose-down +, y yaw nose-left +, z roll right-wing-down +).
+// Positions fit the 9.3 m Kestrel (nose z +4.65, tail z -4.65, wingtips x +/-3.3 at z -2.45).
 const RCS = [
   // pitch: nose-top + tail-bottom push the nose down; nose-bottom + tail-top lift it
-  [[0, 0.4, 3.3], [0, 1, 0], 'x', 1], [[0, -0.35, -3.6], [0, -1, 0], 'x', 1],
-  [[0, -0.3, 3.3], [0, -1, 0], 'x', -1], [[0, 0.55, -3.6], [0, 1, 0], 'x', -1],
+  [[0, 0.2, 3.7], [0, 1, 0], 'x', 1], [[0, -0.55, -4.0], [0, -1, 0], 'x', 1],
+  [[0, -0.45, 3.7], [0, -1, 0], 'x', -1], [[0, 0.35, -4.0], [0, 1, 0], 'x', -1],
   // yaw: fire sideways at nose and tail in opposite directions
-  [[-0.42, 0, 3.1], [-1, 0, 0], 'y', 1], [[0.6, 0.15, -3.6], [1, 0, 0], 'y', 1],
-  [[0.42, 0, 3.1], [1, 0, 0], 'y', -1], [[-0.6, 0.15, -3.6], [-1, 0, 0], 'y', -1],
+  [[-0.36, -0.15, 3.5], [-1, 0, 0], 'y', 1], [[0.9, -0.15, -4.0], [1, 0, 0], 'y', 1],
+  [[0.36, -0.15, 3.5], [1, 0, 0], 'y', -1], [[-0.9, -0.15, -4.0], [-1, 0, 0], 'y', -1],
   // roll: up at one wingtip, down at the other
-  [[-4.15, -0.1, -2.05], [0, 1, 0], 'z', 1], [[4.15, -0.55, -2.05], [0, -1, 0], 'z', 1],
-  [[4.15, -0.1, -2.05], [0, 1, 0], 'z', -1], [[-4.15, -0.55, -2.05], [0, -1, 0], 'z', -1],
+  [[-3.25, 0.0, -2.45], [0, 1, 0], 'z', 1], [[3.25, -0.18, -2.45], [0, -1, 0], 'z', 1],
+  [[3.25, 0.0, -2.45], [0, 1, 0], 'z', -1], [[-3.25, -0.18, -2.45], [0, -1, 0], 'z', -1],
 ];
-function addShipFX(g) {
+// a: the model's anchors (nav_L / nav_R wingtips, strobe); the fallbacks fit the same hull.
+function addShipFX(g, a = {}) {
+  const at = (k, p) => (a[k] ? a[k].position.toArray() : p);
   const nav = [
-    [0xff3b3b, [4.25, -0.32, -2.05]], [0x3bff7a, [-4.25, -0.32, -2.05]], [0xffffff, [0, 0.95, -3.95]],
+    [0xff3b3b, at('nav_L', [3.32, -0.08, -2.45])], [0x3bff7a, at('nav_R', [-3.32, -0.08, -2.45])], [0xffffff, at('strobe', [0, 0.22, -4.3])],
   ].map(([c, p]) => {
     const s = glowSprite(c, 1.1, 2.2);
     s.position.set(...p);
@@ -163,7 +166,7 @@ export function makeSkiff() {
   if (!g) return skiffProc();
   const a = anchors(g);
   addPlumes(g, a, 0.36, 3.4);
-  addShipFX(g);
+  addShipFX(g, a);
   g.userData.muzzle = a.nose;
   const l = new THREE.PointLight(0xffc890, 3, 12, 2);
   l.position.set(0, 0.6, 4.4);
@@ -302,20 +305,63 @@ export function poseFrame(g, c, dt, time) {
   setJets(j.pods, C(0.08 + 0.7 * cruise * Math.max(0, c.input.y) + dash + 0.4 * C(c.lift, 0, 1) * wh, 0, 1.1), time);
 }
 
+// Procedural-fallback helpers: a surface of revolution along +Z from [radius, z] points, and a flat
+// plate (wing / fin) extruded from an outline in its own plane.
+function latheZ(pts, seg, mat, x = 0, y = 0, z = 0) {
+  const geo = new THREE.LatheGeometry(pts.map(([r, h]) => new THREE.Vector2(r, h)), seg);
+  geo.rotateX(Math.PI / 2); // lathe axis Y -> +Z
+  return mesh(geo, mat, x, y, z);
+}
+// outline: [x, z] points in the horizontal plane (z forward); t: thickness. vertical rotates it upright.
+function plate(outline, t, mat, vertical = false) {
+  const sh = new THREE.Shape(outline.map(([a, b]) => new THREE.Vector2(a, b)));
+  const geo = new THREE.ExtrudeGeometry(sh, { depth: t, bevelEnabled: false });
+  geo.translate(0, 0, -t / 2);
+  geo.rotateX(Math.PI / 2); // shape y -> +Z, thickness along Y
+  if (vertical) geo.rotateZ(Math.PI / 2);
+  return mesh(geo, mat);
+}
+// hull band around the ship's long (Z) axis
+const ringZ = (r, t, mat, z) => mesh(new THREE.TorusGeometry(r, t, 6, 40), mat, 0, 0, z);
+function anchor(g, x, y, z) {
+  const o = new THREE.Object3D();
+  o.position.set(x, y, z);
+  g.add(o);
+  return o;
+}
+
+// Kestrel fallback: the same 9.3 m arrowhead as the hero model (flattened lathe fuselage, canopy,
+// swept wings with tip pods, canted tail fins, one tail engine) and the same FX anchors.
 function skiffProc() {
   const g = new THREE.Group();
-  g.add(cylZ(0.28, 0.55, 3.2, 8, MAT.hull, 0, 0, 0));
-  const nose = mesh(new THREE.ConeGeometry(0.28, 0.9, 8), MAT.hullLight, 0, 0, 2.05);
-  nose.rotation.x = Math.PI / 2;
-  g.add(nose);
+  const body = latheZ([[0, -4.75], [0.42, -4.7], [0.62, -4.2], [0.78, -2.5], [0.8, 0], [0.7, 1.8], [0.45, 3.4], [0.2, 4.3], [0, 4.65]], 14, MAT.hullLight);
+  body.scale.y = 0.6;
+  g.add(body);
+  const keel = latheZ([[0, -4.2], [0.5, -4.0], [0.55, -1], [0.35, 2.5], [0, 3.6]], 10, MAT.hullDark, 0, -0.18, 0);
+  keel.scale.y = 0.5;
+  g.add(keel);
+  const canopy = mesh(new THREE.SphereGeometry(1, 18, 10), MAT.glass, 0, 0.4, 1.9);
+  canopy.scale.set(0.34, 0.24, 1.15);
+  g.add(canopy);
   for (const s of [-1, 1]) {
-    g.add(box(1.9, 0.08, 1.3, MAT.hull, s * 1.15, -0.05, -0.45));
-    g.add(cylZ(0.22, 0.27, 1.1, 10, MAT.hullDark, s * 0.48, 0, -1.55));
+    const w = plate([[s * 0.6, 0.9], [s * 3.3, -1.9], [s * 3.3, -3.1], [s * 0.6, -3.3]], 0.1, MAT.hull);
+    w.position.y = -0.05;
+    g.add(w);
+    const stripe = plate([[s * 0.8, 0.4], [s * 3.1, -1.95], [s * 3.1, -2.2], [s * 0.8, -0.1]], 0.02, MAT.accent);
+    stripe.position.y = 0.01;
+    g.add(stripe);
+    g.add(cylZ(0.07, 0.07, 1.5, 8, MAT.hullDark, s * 3.32, -0.05, -2.45));
+    const fin = plate([[0, -2.9], [0.9, -4.2], [0.9, -4.7], [0, -4.6]], 0.06, MAT.hullDark, true);
+    fin.rotation.z = s * -0.35;
+    fin.position.set(s * 0.45, 0.3, 0);
+    g.add(fin);
   }
-  addPlumes(g, { exhaust_0: { position: new THREE.Vector3(-0.48, 0, -2.1) }, exhaust_1: { position: new THREE.Vector3(0.48, 0, -2.1) } }, 0.2, 1.8);
-  g.userData.muzzle = new THREE.Object3D();
-  g.userData.muzzle.position.set(0, -0.22, 2.2);
-  g.add(g.userData.muzzle);
+  g.add(cylZ(0.42, 0.36, 0.5, 18, MAT.hullDark, 0, -0.24, -4.6));
+  g.add(cylZ(0.3, 0.3, 0.04, 18, MAT.engine, 0, -0.24, -4.84));
+  const a = { exhaust_0: anchor(g, 0, -0.24, -4.86), nav_L: anchor(g, 3.32, -0.05, -2.45), nav_R: anchor(g, -3.32, -0.05, -2.45), strobe: anchor(g, 0, 0.3, -4.3) };
+  addPlumes(g, a, 0.36, 3.4);
+  addShipFX(g, a);
+  g.userData.muzzle = anchor(g, 0, -0.23, 4.72);
   return g;
 }
 
@@ -323,16 +369,27 @@ function skiffProc() {
 export function makeHauler() {
   const g = instance('hauler');
   if (!g) return haulerProc();
-  addPlumes(g, anchors(g), 0.5, 3.6);
+  addPlumes(g, anchors(g), 0.95, 5);
   return g;
 }
 
+// Mule fallback: the 18 m industrial hauler's layout (pressure tank up front, ribbed spine with side
+// tanks and a dorsal cab, one big engine bell aft).
 function haulerProc() {
   const g = new THREE.Group();
-  g.add(box(0.8, 0.8, 12, MAT.hullDark, 0, 0, 0));
-  g.add(box(2.4, 1.6, 2.4, MAT.hazard, 0, 0.2, 6.6));
-  for (let i = 0; i < 4; i++) for (const s of [-1, 1]) g.add(box(1.5, 1.5, 2.2, MAT.accent, s * 1.2, 0, 3.4 - i * 2.5));
-  addPlumes(g, { exhaust_0: { position: new THREE.Vector3(0, 0, -7) } }, 0.5, 3);
+  g.add(latheZ([[0, 9], [1.6, 8.9], [2.4, 8.3], [2.6, 6.5], [2.6, 3.6], [2.2, 3.2], [0, 3.2]], 20, PBR.paintBlue));
+  for (const z of [6.0, 4.4]) g.add(ringZ(2.62, 0.08, MAT.hullDark, z));
+  g.add(box(2.2, 2.4, 10, MAT.hullDark, 0, -0.2, -1.5));
+  for (let i = 0; i < 6; i++) g.add(box(2.5, 2.7, 0.25, MAT.hull, 0, -0.2, 2.6 - i * 1.6));
+  for (const s of [-1, 1]) {
+    g.add(cylZ(0.55, 0.55, 7, 14, MAT.hullLight, s * 1.7, -0.9, -1));
+    g.add(cylZ(0.3, 0.3, 8, 10, MAT.hull, s * 1.3, 0.9, -1.5));
+  }
+  g.add(box(2.4, 1.1, 3.2, MAT.hull, 0, 1.6, 1.2));
+  g.add(box(1.6, 0.25, 0.1, MAT.window, 0, 1.75, 2.82));
+  g.add(cylZ(1.2, 0.7, 1.4, 20, MAT.hullDark, 0, -0.48, -7.4));
+  g.add(cylZ(0.6, 0.6, 0.05, 20, MAT.engine, 0, -0.48, -8.1));
+  addPlumes(g, { exhaust_0: { position: new THREE.Vector3(0, -0.48, -8.7) } }, 0.95, 5);
   return g;
 }
 
@@ -344,12 +401,25 @@ export function makeSeedShip() {
   return g;
 }
 
+// Seed-ship fallback: ogive hull, foil-tank bay, engine bell and four splayed landing legs (nose +Z).
 function seedProc() {
   const g = new THREE.Group();
-  g.add(mesh(new THREE.SphereGeometry(1.8, 20, 14), MAT.hullLight, 0, 0, 1));
-  g.add(cylZ(0.5, 0.5, 6, 10, MAT.hullDark, 0, 0, -2));
-  g.add(cylZ(0.9, 1.2, 1.4, 12, MAT.hull, 0, 0, -5.5));
-  addPlumes(g, { exhaust_0: { position: new THREE.Vector3(0, 0, -6.2) } }, 1, 4);
+  g.add(latheZ([[0, 5.45], [0.68, 5.12], [1.3, 4.2], [1.6, 2.95], [1.6, -0.2], [1.66, -0.42], [0, -0.42]], 24, MAT.hullLight));
+  g.add(ringZ(1.61, 0.05, MAT.accent, 2.85));
+  g.add(ringZ(1.61, 0.06, MAT.window, 2.2));
+  g.add(cylZ(1.35, 1.35, 2.0, 8, MAT.hullDark, 0, 0, -1.95));
+  for (let k = 0; k < 6; k++) {
+    const a = (k * Math.PI) / 3;
+    g.add(mesh(new THREE.SphereGeometry(0.55, 14, 10), MAT.foil, Math.cos(a) * 0.95, Math.sin(a) * 0.95, -1.95));
+  }
+  g.add(latheZ([[0.4, -3.6], [0.75, -4.2], [1.05, -4.9], [0.98, -4.9], [0.35, -3.6]], 20, MAT.hullDark));
+  for (let k = 0; k < 4; k++) {
+    const a = (k * Math.PI) / 2 + Math.PI / 4, c = Math.cos(a), s = Math.sin(a);
+    g.add(strut(new THREE.Vector3(c * 1.62, s * 1.62, -0.15), new THREE.Vector3(c * 2.95, s * 2.95, -5.42), 0.09, MAT.hull));
+    const pad = cylZ(0.38, 0.4, 0.15, 12, MAT.hull, c * 2.95, s * 2.95, -5.55);
+    g.add(pad);
+  }
+  addPlumes(g, { exhaust_0: { position: new THREE.Vector3(0, 0, -4.95) } }, 1.15, 5);
   return g;
 }
 
@@ -358,12 +428,15 @@ export function makeDrone() {
   return instance('drone') || droneProc();
 }
 
+// Drone fallback: a 1.3 m white sphere with a gold-rimmed lens forward (+Z) and two whip antennas.
 function droneProc() {
   const g = new THREE.Group();
-  const b = new THREE.Mesh(new THREE.OctahedronGeometry(0.55, 0), MAT.hullLight);
-  b.scale.set(1, 0.6, 1.2);
-  g.add(b);
-  g.add(mesh(new THREE.SphereGeometry(0.16, 8, 6), MAT.red, 0, 0, 0.58));
+  g.add(mesh(new THREE.SphereGeometry(0.52, 20, 14), MAT.hullLight));
+  g.add(torus(0.53, 0.03, MAT.hullDark, 0, 0, 0, 6, 32));
+  const rim = mesh(new THREE.TorusGeometry(0.22, 0.05, 8, 24), PBR.visor, 0, -0.05, 0.47);
+  g.add(rim);
+  g.add(mesh(new THREE.SphereGeometry(0.17, 14, 10), MAT.red, 0, -0.05, 0.45));
+  for (const s of [-1, 1]) g.add(strut(new THREE.Vector3(s * 0.12, 0.45, -0.1), new THREE.Vector3(s * 0.2, 0.75, -0.3), 0.01, MAT.hullDark));
   return g;
 }
 
