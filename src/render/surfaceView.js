@@ -15,6 +15,8 @@ import { haptic } from '../telegram.js';
 
 // Walkable worlds. g in m/s² (real values); sky/fog only where there is an atmosphere.
 export const SURFACES = {
+  // Earth: a desert canyon of terraced mesas under a blue sky, with a proving ground beside the pad
+  earth: { g: 9.81, ground: [0xb98a56, 0xdcb37c, 0x8e4426], sky: 0x8fb8de, fog: [0xc9d6dc, 160, 1250], arena: true, terrain: 'canyon', haze: 0xe8d2b0 },
   moon: { g: 1.62, ground: [0x6b6965, 0x9a968f, 0x34332f], parent: 'earth', arena: true },
   mercury: { g: 3.7, ground: [0x5f5953, 0x8a8178, 0x302c28] },
   mars: { g: 3.72, ground: [0x7a3418, 0xb8673a, 0x45190a], sky: 0xb98a62, fog: [0xc29268, 120, 1100] },
@@ -48,13 +50,14 @@ function fbm2(x, y, s, oct = 4) {
 
 class Terrain {
   // flat: optional { x, z, r, blend } plateau (the arena) blended into the heightfield
-  constructor(seed, flat = null) {
+  constructor(seed, flat = null, style = null) {
     this.seed = seed;
+    this.canyon = style === 'canyon';
     this.flat = null;
     this.craters = [];
     let r = seed * 9.31;
     const rnd = () => { r = (r * 16807 + 11) % 2147483647; return r / 2147483647; };
-    for (let i = 0; i < 46; i++) {
+    for (let i = 0; i < (this.canyon ? 0 : 46); i++) {
       const x = (rnd() - 0.5) * SIZE * 0.95, z = (rnd() - 0.5) * SIZE * 0.95;
       if (Math.hypot(x, z) < 90) continue;
       const rad = 14 + Math.pow(rnd(), 2.2) * 110;
@@ -66,6 +69,17 @@ class Terrain {
   sample(x, z, out = {}) {
     let h = (fbm2(x * 0.005, z * 0.005, this.seed) - 0.5) * 34 + (fbm2(x * 0.03, z * 0.03, this.seed + 5, 3) - 0.5) * 4;
     let floor = 0;
+    if (this.canyon) {
+      // sandy floor with low dunes; mesas rise in terraced steps where the large-scale noise crosses a threshold
+      const n = fbm2(x * 0.0042, z * 0.0042, this.seed, 5);
+      const m = THREE.MathUtils.smoothstep(n, 0.5, 0.6);
+      let top = m * 52;
+      const step = 9, k = top / step, fi = Math.floor(k), fr = k - fi;
+      top = (fi + THREE.MathUtils.smoothstep(fr, 0.55, 0.85)) * step;
+      const dunes = Math.sin(x * 0.018 + Math.sin(z * 0.011) * 2.2) * 0.9 + (fbm2(x * 0.02, z * 0.02, this.seed + 7, 3) - 0.5) * 3;
+      h = top + dunes * (1 - m) + (fbm2(x * 0.06, z * 0.06, this.seed + 3, 2) - 0.5) * 1.2 * m;
+      floor = Math.min(1, m * 1.3);
+    }
     for (const c of this.craters) {
       const dx = x - c.x, dz = z - c.z, d2 = (dx * dx + dz * dz) / (c.r * c.r);
       if (d2 > 2.6) continue;
@@ -76,6 +90,7 @@ class Terrain {
     const rr = Math.hypot(x, z);
     const flat = THREE.MathUtils.smoothstep(rr, 26, 70);
     h *= flat;
+    if (this.canyon) floor *= flat;
     h -= (rr * rr) / 5200; // exaggerated curvature drops the edges below the horizon
     const F = this.flat;
     if (F) {
@@ -86,7 +101,7 @@ class Terrain {
         floor *= 1 - w;
       }
     }
-    out.h = h; out.floor = floor * flat;
+    out.h = h; out.floor = this.canyon ? floor : floor * flat;
     return out;
   }
   height(x, z) { return this.sample(x, z).h; }
@@ -145,7 +160,7 @@ export class SurfaceView {
     this.content = new THREE.Group();
     this.scene.add(this.content);
     if (this.arena.fighting) this.arena.end('leave');
-    this.terrain = new Terrain(id.length * 3 + id.charCodeAt(0), cfg.arena ? LunarArena.flat() : null);
+    this.terrain = new Terrain(id.length * 3 + id.charCodeAt(0), cfg.arena ? LunarArena.flat() : null, cfg.terrain);
     this.hasArena = !!cfg.arena;
 
     // atmosphere vs vacuum

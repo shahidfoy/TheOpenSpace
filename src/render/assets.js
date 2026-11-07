@@ -6,6 +6,9 @@ import { upgrade } from './materials.js';
 // load fall back to procedural meshes.
 const NAMES = ['frame', 'skiff', 'hauler', 'seed', 'drone', 'mech', 'mech_lo', 'station', 'junk'];
 const ASSETS = {};
+// Skinned, clip-animated models (kept as whole glTFs for their animations) + their swing metadata json.
+const SKINNED = ['mech_player', 'mech_enemy'];
+const SKIN = {};
 
 export async function loadAssets(timeoutMs = 15000, onProgress) {
   const draco = new DRACOLoader().setDecoderPath(`${import.meta.env.BASE_URL}draco/`).setDecoderConfig({ type: 'wasm' });
@@ -16,10 +19,14 @@ export async function loadAssets(timeoutMs = 15000, onProgress) {
     .then((g) => { ASSETS[n] = upgrade(g.scene); })
     .catch((e) => console.warn(`model ${n} failed, using procedural fallback`, e))
     .finally(() => onProgress?.(++done / NAMES.length))));
-  await Promise.race([all, new Promise((r) => setTimeout(r, timeoutMs))]);
+  const skins = Promise.all(SKINNED.map((n) => Promise.all([loader.loadAsync(`${base}${n}.glb`), fetch(`${base}${n}.json`).then((r) => r.json())])
+    .then(([gltf, meta]) => { SKIN[n] = { gltf, meta }; })
+    .catch((e) => console.warn(`skinned model ${n} failed, using procedural fallback`, e))));
+  await Promise.race([Promise.all([all, skins]), new Promise((r) => setTimeout(r, timeoutMs))]);
   draco.dispose();
 }
 
+export const skinned = (name) => SKIN[name] || null;
 export const instance = (name) => ASSETS[name]?.clone(true) || null;
 
 // One named root object out of a multi-object file (e.g. junk.glb → junk_sat).

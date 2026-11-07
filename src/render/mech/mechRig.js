@@ -130,7 +130,7 @@ function makeLaserSword(M, bladeHex = 0x38d4ff) {
 // ---------- the rig ----------
 // ---------- thrusters: additive plume cone + nozzle glow on an anchor whose local -Y is the exhaust ----------
 const THRUST_SIZE = { back: 1.5, wing: 1.2, sh: 0.7, calf: 0.85, foot: 1.0 };
-function makeThruster(anchor, group, k = THRUST_SIZE[group] ?? 1, color = 0x6fb8ff) {
+export function makeThruster(anchor, group, k = THRUST_SIZE[group] ?? 1, color = 0x6fb8ff) {
   const len = 0.32 * k, rad = 0.045 * k;
   const geo = new THREE.ConeGeometry(rad, len, 18, 1, true);
   geo.translate(0, len / 2, 0);                      // wide end (uv.y = 0) on the nozzle
