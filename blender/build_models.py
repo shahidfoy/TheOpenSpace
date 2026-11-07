@@ -1,6 +1,12 @@
-"""Builds The Open Space hero models procedurally and exports GLBs.
+"""Builds The Open Space hero models and exports GLBs.
 
 Run:  blender --background --factory-startup --python blender/build_models.py -- public/models [preview_dir] [names...]
+
+Some ships are third-party CC-BY models (see public/models/CREDITS.txt) imported from the
+originals kept outside the repo in ../game-assets/ships/<name>/original.glb (override the
+folder with the TOS_ASSETS env var). They are re-oriented, scaled, given the game's anchors
+and engine/nav-light bits, and re-exported with WebP textures + Draco. Without the originals
+each builder falls back to its procedural model.
 
 Conventions (Blender space): forward = -Y, up = +Z, right = +X.
 glTF export maps that to three.js forward = +Z, up = +Y.
@@ -24,6 +30,7 @@ PREVIEW = os.path.abspath(argv[1]) if len(argv) > 1 and argv[1] != '-' else None
 os.makedirs(OUT, exist_ok=True)
 if PREVIEW:
     os.makedirs(PREVIEW, exist_ok=True)
+ASSETS = os.environ.get('TOS_ASSETS') or os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'game-assets', 'ships'))
 
 # ---------------------------------------------------------------- materials
 # (base linear rgb, metallic, roughness, emission rgb, emission strength)
@@ -298,6 +305,85 @@ def empty(name, loc, parent=None):
 X, Y, Z = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))
 
 
+# ---------------------------------------------------------------- third-party models
+def _bbox(objs):
+    pts = [o.matrix_world @ Vector(c) for o in objs for c in o.bound_box]
+    lo = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+    hi = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+    return lo, hi
+
+
+def vendor(name, sub, size, axis=1, rot=(0, 0, 0), ratio=None, tex=1024, rename=None):
+    """Import ../game-assets/ships/<sub>/original.glb as one mesh object `name`: world transforms baked,
+    rotated by `rot` (radians, applied first), centred on its bounding box and scaled so its extent
+    along `axis` (0 x, 1 y, 2 z) is `size` metres. ratio < 1 decimates; images are capped at `tex` px.
+    rename maps imported material names to new ones (e.g. onto the game's PBR names). None if missing."""
+    path = os.path.join(ASSETS, sub, 'original.glb')
+    if not os.path.exists(path):
+        print(f'NOTE {path} missing: using the procedural {name}')
+        return None
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=path)
+    new = [o for o in bpy.data.objects if o not in before]
+    bpy.context.view_layer.update()
+    meshes = [o for o in new if o.type == 'MESH']
+    R = Euler(rot).to_matrix().to_4x4()
+    for o in meshes:
+        mw = o.matrix_world.copy()
+        o.parent = None
+        o.data = o.data.copy()
+        o.data.transform(R @ mw)
+        o.matrix_world = Matrix.Identity(4)
+    for o in new:
+        if o.type != 'MESH':
+            bpy.data.objects.remove(o)
+    with bpy.context.temp_override(active_object=meshes[0], selected_editable_objects=meshes, selected_objects=meshes, object=meshes[0]):
+        bpy.ops.object.join()
+    obj = meshes[0]
+    obj.name = obj.data.name = name
+    bpy.context.view_layer.update()
+    lo, hi = _bbox([obj])
+    k = size / (hi - lo)[axis]
+    obj.data.transform(Matrix.Scale(k, 4) @ Matrix.Translation(-(lo + hi) / 2))
+    if ratio:
+        mod = obj.modifiers.new('dec', 'DECIMATE')
+        mod.ratio = ratio
+        mod.use_collapse_triangulate = True
+        with bpy.context.temp_override(object=obj, active_object=obj):
+            bpy.ops.object.modifier_apply(modifier=mod.name)
+    for m in obj.data.materials:
+        if m and rename and m.name in rename:
+            m.name = rename[m.name]
+    for img in bpy.data.images:
+        if img.size[0] > tex or img.size[1] > tex:
+            img.scale(min(tex, img.size[0]), min(tex, img.size[1]))
+    bpy.context.view_layer.update()
+    lo, hi = _bbox([obj])
+    print(f'VENDOR {name}: {len(obj.data.polygons)} faces, size {tuple(round(v, 2) for v in hi - lo)}')
+    return obj
+
+
+def mat_bounds(obj):
+    """Debug: per-material bounding boxes of a mesh (to place anchors on imported models)."""
+    me = obj.data
+    for i, m in enumerate(me.materials):
+        vs = {v for p in me.polygons if p.material_index == i for v in p.vertices}
+        if not vs:
+            continue
+        cs = [me.vertices[v].co for v in vs]
+        lo = Vector((min(c.x for c in cs), min(c.y for c in cs), min(c.z for c in cs)))
+        hi = Vector((max(c.x for c in cs), max(c.y for c in cs), max(c.z for c in cs)))
+        print(f'  MATBOX {m.name}: lo {tuple(round(v, 2) for v in lo)} hi {tuple(round(v, 2) for v in hi)}')
+
+
+def attach(obj, g):
+    """Merge a procedural Group's mesh into an imported object (keeps both material sets)."""
+    part = g.build()
+    with bpy.context.temp_override(active_object=obj, selected_editable_objects=[obj, part], selected_objects=[obj, part], object=obj):
+        bpy.ops.object.join()
+    return obj
+
+
 def loft(g, secs, mat, smooth=False):
     """Faceted hull lofted through cross-sections. secs: (y, w, zt, zb, ws, zc) = station, chine half
     width, top and keel heights, shoulder half width, chine height. Each ring is an octagon."""
@@ -317,7 +403,7 @@ def loft(g, secs, mat, smooth=False):
 
 
 # ================================================================ SKIFF  (Kestrel Mk II strike cutter, the player's ship)
-def build_skiff():
+def build_skiff_proc():
     """Kestrel Mk II: an ~9 m arrowhead cutter. Faceted gunmetal hull under layered pearl armour panels
     with shut-line gaps, a raised tinted canopy in a cowl, swept wings and forward canards, twin armoured
     nacelles with ringed intakes and canted tail fins, amber light strips along the chines and a nose
@@ -455,7 +541,7 @@ def container(g, rng, c, size, paint):
                 g.box((0.16, 0.16, 0.16), (cx + ex * (sx / 2 - 0.05), cy + ey * (sy / 2 - 0.05), cz + ez * (sz / 2 - 0.05)), 'hullDark', bevel=0)
 
 
-def build_hauler():
+def build_hauler_proc():
     rng = random.Random(11)
     g = Group('hauler')
     # cab
@@ -528,48 +614,204 @@ def build_hauler():
     return root
 
 
+# ================================================================ lathe / truss helpers
+def bm_lathe(profile, seg=32, closed=False, cap=True):
+    """Surface of revolution about Z through (r, z) points (r = 0 makes a pole). closed joins the last
+    point back to the first (a solid ring/bell with wall thickness); cap fills open end rings."""
+    bm = bmesh.new()
+    angs = [2 * math.pi * i / seg for i in range(seg)]
+    rings = [bm.verts.new((0, 0, z)) if r <= 1e-6 else [bm.verts.new((r * math.cos(a), r * math.sin(a), z)) for a in angs] for r, z in profile]
+    pairs = list(zip(rings, rings[1:])) + ([(rings[-1], rings[0])] if closed else [])
+    for A, B in pairs:
+        for i in range(seg):
+            j = (i + 1) % seg
+            if isinstance(A, list) and isinstance(B, list):
+                bm.faces.new((A[i], A[j], B[j], B[i]))
+            elif isinstance(A, list):
+                bm.faces.new((A[i], A[j], B))
+            elif isinstance(B, list):
+                bm.faces.new((A, B[j], B[i]))
+    if cap and not closed:
+        for R in (rings[0], rings[-1]):
+            if isinstance(R, list):
+                bm.faces.new(R)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    return bm
+
+
+AXIS_ROT = {'z': (0, 0, 0), 'y': (-math.pi / 2, 0, 0), 'x': (0, math.pi / 2, 0)}
+
+
+def lathe(g, profile, loc, mat, axis='z', seg=32, closed=False, cap=True, bevel=0.0):
+    return g.add(bm_lathe(profile, seg, closed, cap), mat, loc, AXIS_ROT[axis], bevel)
+
+
+def bell(g, loc, r0, r1, length, axis='y', sign=1, mat='hullDark', glow='engine', seg=28):
+    """Rocket nozzle: throat r0 at loc flaring to exit r1 `length` along +axis (sign -1 flips), with a
+    lip, a wall thickness and a glow disc down the throat."""
+    prof = [(r0, 0), (r0 + (r1 - r0) * 0.35, length * 0.45), (r1 * 0.97, length * 0.9), (r1, length),
+            (r1 + 0.03, length), (r1 + 0.02, length * 0.9), (r0 + (r1 - r0) * 0.37 + 0.04, length * 0.45), (r0 + 0.06, 0)]
+    prof = [(r, h * sign) for r, h in prof]
+    lathe(g, prof, loc, mat, axis, seg, closed=True)
+    d = Vector({'x': (1, 0, 0), 'y': (0, 1, 0), 'z': (0, 0, 1)}[axis]) * sign
+    if glow:
+        g.cyl(r0 * 1.05, r0 * 1.05, 0.02, tuple(Vector(loc) + d * 0.05), glow, axis=axis, seg=seg, bevel=0)
+    return g
+
+
+def truss(g, a, b, w, mat='hullDark', bays=None, r=0.035, up=None):
+    """Square lattice truss from a to b: four longerons, a frame at every bay and zig-zag diagonals."""
+    a, b = Vector(a), Vector(b)
+    d = b - a
+    n = d.normalized()
+    up = Vector(up) if up else (Z if abs(n.z) < 0.9 else X)
+    u = n.cross(up).normalized()
+    v = n.cross(u).normalized()
+    bays = bays or max(1, round(d.length / w))
+    cs = [(u * s1 + v * s2) * (w / 2) for s1, s2 in ((1, 1), (-1, 1), (-1, -1), (1, -1))]
+    for c in cs:
+        g.seg(a + c, b + c, r, mat, 6)
+    for k in range(bays + 1):
+        p = a + d * (k / bays)
+        for i in range(4):
+            g.seg(p + cs[i], p + cs[(i + 1) % 4], r * 0.7, mat, 5)
+    for k in range(bays):
+        p0, p1 = a + d * (k / bays), a + d * ((k + 1) / bays)
+        for i in range(4):
+            c0, c1 = cs[i], cs[(i + 1) % 4]
+            g.seg(p0 + (c0 if k % 2 else c1), p1 + (c1 if k % 2 else c0), r * 0.6, mat, 5)
+    return g
+
+
+def band_windows(g, r, z, n, w, h, mat='window', axis_rot=None, skip=()):
+    """A row of n small lit windows around a Z-axis cylinder of radius r at height z."""
+    for k in range(n):
+        if k in skip:
+            continue
+        a = 2 * math.pi * (k + 0.5) / n
+        nr = Vector((math.cos(a), math.sin(a), 0))
+        u = Vector((-math.sin(a), math.cos(a), 0))
+        g.obox((w, h, 0.03), nr * r + Vector((0, 0, z)), u, Z, nr, mat, bevel=0)
+
+
+def ribs(g, r, zs, mat='hullDark', t=0.06, seg=40):
+    for z in zs:
+        g.torus(r + t * 0.3, t, (0, 0, z), mat, seg=seg, rseg=6, sx=0.6)
+
+
 # ================================================================ SEED SHIP  (colony lander)
 def build_seed():
+    """Colony seed ship: an ~11 m lander that stands on its engines. Ogive crew/cargo hull with panel
+    bands, a lit window ring and hatch, four folded solar wings, a service ring with RCS quads, an open
+    truss bay of gold-foil propellant spheres around the thrust tube, one big centre bell with four
+    verniers, and four articulated landing legs with shock struts and pads. Nose -Y, engines +Y."""
     rng = random.Random(3)
     g = Group('seed')
-    g.cyl(1.6, 1.6, 4.0, (0, -2.0, 0), 'hullLight', seg=32)
-    g.sphere(1.6, (0, -4.0, 0), 'hullLight', scale=(1, 0.7, 1), seg=32, rings=16)
-    for y in (-3.5, -0.4):
-        g.torus(1.62, 0.07, (0, y, 0), 'accent', axis='y', seg=40, rseg=6)
-    g.torus(1.61, 0.05, (0, -2.4, 0), 'window', axis='y', seg=40, rseg=4, sx=0.6)
+    # forward hull (lathe along +Y: profile h is the y coordinate)
+    lathe(g, [(0, -5.45), (0.3, -5.38), (0.68, -5.12), (1.02, -4.72), (1.3, -4.2), (1.5, -3.6), (1.6, -2.95), (1.6, 0.2), (1.66, 0.3), (1.66, 0.42), (0, 0.42)],
+          (0, 0, 0), 'pearl', axis='y', seg=48)
+    g.cyl(0.22, 0.3, 0.12, (0, -5.42, 0), 'hullDark', seg=16)
+    for y, mat in ((-3.85, 'accent'), (-3.7, 'hullDark'), (-1.15, 'hullDark'), (0.05, 'accent')):
+        r = 1.6 if y > -2.95 else 1.43
+        g.torus(r + 0.01, 0.045, (0, y, 0), mat, axis='y', seg=48, rseg=6, sx=0.6)
+    # window ring and an upper row of small ports
+    for k in range(24):
+        if k in (5, 6, 17, 18):
+            continue
+        a = 2 * math.pi * (k + 0.5) / 24
+        nr = Vector((math.cos(a), 0, math.sin(a)))
+        u = Vector((-math.sin(a), 0, math.cos(a)))
+        g.obox((0.24, 0.32, 0.03), nr * 1.605 + Vector((0, -2.45, 0)), u, Y, nr, 'window', bevel=0)
+        if k % 2 == 0:
+            g.obox((0.12, 0.12, 0.03), nr * 1.52 + Vector((0, -3.35, 0)), u, Y, nr, 'window', bevel=0)
+    # crew hatch with amber surround
+    nr, u = Vector((1, 0, 0)), Vector((0, 0, 1))
+    g.obox((0.9, 1.3, 0.05), nr * 1.6 + Vector((0, -1.8, 0)), u, Y, nr, 'hullDark', bevel=0.02)
+    g.obox((0.7, 1.1, 0.06), nr * 1.61 + Vector((0, -1.8, 0)), u, Y, nr, 'hull', bevel=0.02)
+    g.obox((0.95, 0.04, 0.07), nr * 1.6 + Vector((0, -2.48, 0)), u, Y, nr, 'amber', bevel=0)
     for k in range(4):
         a = k * math.pi / 2 + math.pi / 4
-        n = Vector((math.cos(a), 0, math.sin(a)))
+        nr = Vector((math.cos(a), 0, math.sin(a)))
         u = Vector((-math.sin(a), 0, math.cos(a)))
-        # folded solar wings
-        g.obox((1.1, 3.4, 0.06), n * 1.72 + Vector((0, -2.0, 0)), u, Y, n, 'solar', bevel=0.01)
-        g.obox((1.15, 0.06, 0.08), n * 1.76 + Vector((0, -3.7, 0)), u, Y, n, 'hullDark', bevel=0)
-        # landing legs
-        top = n * 1.5 + Vector((0, 0.8, 0))
-        foot = n * 2.7 + Vector((0, 5.6, 0))
-        g.seg(top, foot, 0.1, 'hullDark', 8)
-        g.seg(n * 1.0 + Vector((0, 3.2, 0)), (top + foot) / 2, 0.06, 'hull', 6)
-        g.cyl(0.45, 0.35, 0.12, tuple(foot + Vector((0, 0.05, 0))), 'hull', seg=16)
+        # folded solar wing: frame, two cell panels, hinge
+        c = nr * 1.66 + Vector((0, -1.3, 0))
+        g.obox((1.05, 0.95, 0.05), c + Vector((0, -0.5, 0)), u, Y, nr, 'solar', bevel=0.005)
+        g.obox((1.05, 0.95, 0.05), c + Vector((0, 0.5, 0)), u, Y, nr, 'solar', bevel=0.005)
+        g.obox((1.12, 2.1, 0.035), c - nr * 0.03, u, Y, nr, 'hullDark', bevel=0.005)
+        g.obox((1.14, 0.06, 0.08), c, u, Y, nr, 'hullLight', bevel=0)
+        # cargo-bay panel outline and greebles between the wings
         b = k * math.pi / 2
-        g.greeble(rng, Vector((math.cos(b), 0, math.sin(b))) * 1.62 + Vector((0, -1.0, 0)), Y, Vector((-math.sin(b), 0, math.cos(b))),
-                  Vector((math.cos(b), 0, math.sin(b))), 1.2, 0.5, 4)
-    # gold-foil propellant tanks
+        nb = Vector((math.cos(b), 0, math.sin(b)))
+        ub = Vector((-math.sin(b), 0, math.cos(b)))
+        if k != 0:
+            g.obox((0.8, 1.2, 0.03), nb * 1.6 + Vector((0, -0.6, 0)), ub, Y, nb, 'hullDark', bevel=0.01)
+        g.greeble(rng, nb * 1.6 + Vector((0, -3.15, 0)), Y, ub, nb, 0.5, 0.4, 3, hmax=0.05, smax=0.18)
+    # service ring with RCS quads
+    lathe(g, [(1.66, 0.42), (1.7, 0.5), (1.7, 0.85), (1.45, 0.95), (0, 0.95)], (0, 0, 0), 'hullDark', axis='y', seg=48, cap=False)
+    for k in range(4):
+        a = k * math.pi / 2
+        nr = Vector((math.cos(a), 0, math.sin(a)))
+        u = Vector((-math.sin(a), 0, math.cos(a)))
+        c = nr * 1.78 + Vector((0, 0.67, 0))
+        g.obox((0.32, 0.3, 0.2), c, u, Y, nr, 'hull', bevel=0.02)
+        for dv in (-1, 1):
+            g.cyl(0.035, 0.05, 0.1, tuple(c + u * dv * 0.2), 'hullDark', axis='x' if abs(u.x) > 0.5 else 'z', seg=8, bevel=0)
+            g.cyl(0.035, 0.05, 0.1, tuple(c + Y * dv * 0.2), 'hullDark', seg=8, bevel=0)
+    # open truss bay: octagonal frames, longerons, propellant spheres, thrust tube
+    for y in (0.95, 2.95):
+        g.torus(1.35, 0.06, (0, y, 0), 'hullDark', axis='y', seg=8, rseg=6)
+    for k in range(8):
+        a = k * math.pi / 4
+        p = Vector((math.cos(a) * 1.35, 0, math.sin(a) * 1.35))
+        q = Vector((math.cos(a + math.pi / 4) * 1.35, 0, math.sin(a + math.pi / 4) * 1.35))
+        g.seg(p + Vector((0, 0.95, 0)), p + Vector((0, 2.95, 0)), 0.045, 'hullDark', 6)
+        g.seg(p + Vector((0, 0.95, 0)), q + Vector((0, 2.95, 0)), 0.03, 'hull', 5)
     for k in range(6):
-        a = k * math.pi / 3
-        g.sphere(0.62, (math.cos(a) * 1.15, 1.0, math.sin(a) * 1.15), 'foil', seg=18, rings=10)
-    g.cyl(0.7, 0.7, 3.2, (0, 1.6, 0), 'hullDark', seg=20)
-    g.cyl(1.65, 1.2, 0.4, (0, 0.1, 0), 'hull', seg=32)
-    g.cyl(0.55, 1.35, 1.6, (0, 4.0, 0), 'hullDark', seg=28)
-    g.torus(1.0, 0.06, (0, 3.6, 0), 'hullLight', axis='y', seg=28, rseg=5)
-    g.cyl(1.25, 1.25, 0.04, (0, 4.79, 0), 'engine', seg=28, bevel=0)
-    g.sphere(0.07, (0, -5.15, 0), 'red', seg=8, rings=6)
+        a = k * math.pi / 3 + math.pi / 6
+        c = (math.cos(a) * 0.95, 1.95, math.sin(a) * 0.95)
+        g.sphere(0.55, c, 'foil', seg=20, rings=12)
+        g.torus(0.56, 0.025, c, 'hullDark', axis='y', seg=20, rseg=4)
+    g.cyl(0.42, 0.42, 2.0, (0, 1.95, 0), 'hull', seg=20)
+    for y in (1.3, 1.95, 2.6):
+        g.torus(0.43, 0.03, (0, y, 0), 'hullDark', axis='y', seg=20, rseg=4)
+    # aft bulkhead + engines
+    lathe(g, [(0, 2.95), (1.42, 2.95), (1.42, 3.12), (1.2, 3.3), (0, 3.3)], (0, 0, 0), 'hullDark', axis='y', seg=48)
+    g.cyl(0.55, 0.45, 0.4, (0, 3.45, 0), 'hull', seg=24)
+    bell(g, (0, 3.6, 0), 0.4, 1.05, 1.28, axis='y', mat='hullDark')
+    g.torus(0.82, 0.03, (0, 4.3, 0), 'hullLight', axis='y', seg=28, rseg=4)
+    for k in range(4):
+        a = k * math.pi / 2
+        c = Vector((math.cos(a) * 1.15, 3.35, math.sin(a) * 1.15))
+        g.cyl(0.16, 0.14, 0.2, tuple(c), 'hull', seg=12)
+        bell(g, tuple(c + Vector((0, 0.1, 0))), 0.12, 0.3, 0.55, axis='y', mat='hullDark', seg=16)
+    # landing legs at 45 degrees: hinge, main strut with a chrome shock piston, side brace, pad
+    for k in range(4):
+        a = k * math.pi / 2 + math.pi / 4
+        nr = Vector((math.cos(a), 0, math.sin(a)))
+        u = Vector((-math.sin(a), 0, math.cos(a)))
+        hinge = nr * 1.62 + Vector((0, 0.15, 0))
+        foot = nr * 2.95 + Vector((0, 5.42, 0))
+        knee = hinge.lerp(foot, 0.55)
+        g.obox((0.38, 0.5, 0.25), hinge, u, Y, nr, 'hullDark', bevel=0.03)
+        g.seg(hinge, knee, 0.11, 'hull', 10)
+        g.seg(knee, foot, 0.065, 'chrome', 10)
+        g.cyl(0.14, 0.14, 0.18, tuple(knee), 'hullDark', axis='y', seg=12)
+        brace = nr * 1.4 + Vector((0, 2.9, 0))
+        for s in (-1, 1):
+            g.seg(brace + u * s * 0.35, knee + u * s * 0.06, 0.045, 'hullDark', 6)
+        lathe(g, [(0, 5.5), (0.36, 5.5), (0.4, 5.6), (0.3, 5.68), (0, 5.68)], tuple(nr * 2.95), 'hull', axis='y', seg=20)
+        g.seg(foot, foot + Vector((0, 0.1, 0)), 0.09, 'hullDark', 8)
+    # nose beacon + antennae
+    g.sphere(0.07, (0, -5.5, 0), 'red', seg=8, rings=6)
+    for s in (-1, 1):
+        g.seg((s * 0.9, -4.6, 0.7), (s * 1.0, -5.3, 0.85), 0.012, 'hullDark', 5)
     root = g.build()
-    empty('anchor_exhaust_0', (0, 4.9, 0), root)
+    empty('anchor_exhaust_0', (0, 4.95, 0), root)
     return root
 
 
 # ================================================================ DRONE  (utility robot)
-def build_drone():
+def build_drone_proc():
     g = Group('drone')
     g.hexa(taper_pts(0.85, 1.05, 0.5, front=(0.7, 0.7), back=(0.9, 0.9)), 'hullLight', (0, 0, 0), bevel=0.06)
     g.hexa(taper_pts(0.6, 0.7, 0.1, front=(0.7, 1)), 'accent', (0, 0.05, 0.28), bevel=0.02)
@@ -1097,109 +1339,292 @@ def build_frame():
 
 # ================================================================ STATION CORE  (Eden)
 def build_station():
+    """Eden station core, axis +Z (three.js +Y). A segmented spine: big hub drum with lit window bands
+    and bearing races; above it a ribbed hab module with port rows, a docking node with four radial
+    ports, a lattice truss, an equipment drum in foil and the antenna mast with comm dishes; below it a
+    lab module, a node with the two side docking ports, and a service module with radiator fins and RCS
+    quads. Saddle trusses at z 3.5 meet the game's solar-wing struts. The habitat ring (child 'ring',
+    spun at runtime) has a chamfered lathed cross-section, inner and outer window bands, structural
+    ribs, roof greebles and four spokes (pressurised tube + lattice truss + lift car)."""
     rng = random.Random(21)
     g = Group('station', uvscale=0.5)
-    g.cyl(1.6, 1.6, 12, (0, 0, 0), 'hull', axis='z', seg=24)
-    for z in (-5.4, -3.2, 3.2, 5.4):
-        g.cyl(1.75, 1.75, 0.35, (0, 0, z), 'hullLight', axis='z', seg=24)
-    g.cyl(2.5, 2.5, 3.0, (0, 0, 0), 'hullLight', axis='z', seg=32)
-    g.torus(2.51, 0.06, (0, 0, 0.6), 'window', seg=40, rseg=4, sx=0.5)
-    g.torus(2.51, 0.06, (0, 0, -0.6), 'window', seg=40, rseg=4, sx=0.5)
-    g.cyl(2.55, 2.55, 0.2, (0, 0, 1.45), 'accent', axis='z', seg=32)
-    g.cyl(1.1, 1.6, 1.0, (0, 0, 6.5), 'hullLight', axis='z', seg=20)
-    g.cyl(1.1, 1.6, 1.0, (0, 0, -6.5), 'hullLight', axis='z', seg=20)
-    g.cyl(0.1, 0.1, 6, (0, 0, 9.5), 'hullDark', axis='z', seg=6, bevel=0)
-    for k in range(4):
+    # hub drum
+    lathe(g, [(0, -1.6), (2.15, -1.6), (2.5, -1.3), (2.5, 1.3), (2.15, 1.6), (0, 1.6)], (0, 0, 0), 'hullLight', seg=56)
+    for z in (-1.0, 1.0):
+        g.torus(2.53, 0.07, (0, 0, z), 'hullDark', seg=56, rseg=6, sx=0.6)
+    band_windows(g, 2.51, 0.5, 40, 0.22, 0.3)
+    band_windows(g, 2.51, -0.5, 40, 0.22, 0.3)
+    g.cyl(2.17, 2.17, 0.08, (0, 0, 1.58), 'accent', axis='z', seg=56, bevel=0)
+    for k in range(8):
+        a = k * math.pi / 4 + math.pi / 8
+        nr = Vector((math.cos(a), math.sin(a), 0))
+        g.sphere(0.06, tuple(nr * 2.52 + Vector((0, 0, 1.18))), 'amber', seg=8, rings=5)
+    # --- upper spine
+    lathe(g, [(2.15, 1.6), (1.45, 2.25), (0, 2.25)], (0, 0, 0), 'hull', seg=48, cap=False)
+    g.cyl(1.4, 1.4, 2.8, (0, 0, 3.65), 'hullLight', axis='z', seg=40)
+    ribs(g, 1.4, (2.4, 3.1, 4.2, 4.9), 'hullDark')
+    band_windows(g, 1.41, 3.65, 20, 0.16, 0.42, skip=(0, 5, 10, 15))
+    for k in range(4):  # saddle trusses for the solar wings (+/-X), greebles on the other faces
         a = k * math.pi / 2
-        n = Vector((math.cos(a), math.sin(a), 0))
+        nr = Vector((math.cos(a), math.sin(a), 0))
         u = Vector((-math.sin(a), math.cos(a), 0))
-        g.greeble(rng, n * 1.6 + Vector((0, 0, 3.8)), u, Z, n, 1.4, 2.6, 8)
-        g.greeble(rng, n * 1.6 + Vector((0, 0, -3.8)), u, Z, n, 1.4, 2.6, 8)
-    # docking ports
+        if k % 2 == 0:
+            truss(g, nr * 1.35 + Vector((0, 0, 3.5)), nr * 2.6 + Vector((0, 0, 3.5)), 0.5, 'hullDark', bays=2, r=0.03)
+            g.obox((0.5, 0.5, 0.5), nr * 2.6 + Vector((0, 0, 3.5)), u, Z, nr, 'hull', bevel=0.04)
+        else:
+            g.greeble(rng, nr * 1.4 + Vector((0, 0, 3.65)), u, Z, nr, 0.9, 2.0, 7, hmax=0.07, smax=0.25)
+    # docking node with four radial ports
+    g.sphere(1.55, (0, 0, 5.65), 'hullLight', scale=(1, 1, 0.55), seg=40, rings=16)
+    g.torus(1.56, 0.06, (0, 0, 5.65), 'hullDark', seg=48, rseg=6, sx=0.6)
+    for k in range(4):
+        a = k * math.pi / 2 + math.pi / 4
+        nr = Vector((math.cos(a), math.sin(a), 0))
+        p = nr * 1.75 + Vector((0, 0, 5.65))
+        g.seg(nr * 1.2 + Vector((0, 0, 5.65)), p, 0.42, 'hullLight', 20)
+        g.seg(p, p + nr * 0.18, 0.52, 'hullDark', 20)
+        g.seg(p + nr * 0.18, p + nr * 0.22, 0.4, 'hull', 20)
+        for s in (-1, 1):
+            g.sphere(0.05, tuple(p + nr * 0.2 + Z * s * 0.48), 'amber', seg=8, rings=5)
+    # truss section, equipment drum, mast
+    truss(g, (0, 0, 6.35), (0, 0, 7.75), 1.3, 'hullDark', bays=2, r=0.045)
+    g.cyl(0.35, 0.35, 1.4, (0, 0, 7.05), 'hull', axis='z', seg=16)
+    lathe(g, [(0, 7.75), (1.05, 7.75), (1.1, 7.85), (1.1, 8.55), (0.9, 8.75), (0, 8.75)], (0, 0, 0), 'foil', seg=32)
+    g.torus(1.11, 0.04, (0, 0, 8.2), 'hullDark', seg=32, rseg=5)
+    g.cyl(0.14, 0.08, 3.7, (0, 0, 10.6), 'hullDark', axis='z', seg=8, bevel=0)
+    for z in (9.4, 10.6, 11.6):
+        g.cyl(0.25, 0.25, 0.05, (0, 0, z), 'hull', axis='z', seg=10, bevel=0)
+    for s, z, R in ((1, 9.6, 0.7), (-1, 10.9, 0.45)):
+        c = Vector((s * 0.75, 0, z))
+        g.seg(Vector((0, 0, z)), c, 0.035, 'hullDark', 6)
+        k = R / 0.7
+        prof = [(0, -0.02), (R * 0.5, 0.0), (R, 0.1 * k), (R + 0.03, 0.12 * k), (R * 0.5, 0.03), (0, 0.02)]
+        lathe(g, [(rr, h * s) for rr, h in prof], tuple(c + Vector((s * 0.05, 0, 0))), 'hullLight', axis='x', seg=24, closed=True)
+        g.seg(c, c + Vector((s * 0.35, 0, 0)), 0.02, 'hullDark', 5)
+    # --- lower spine
+    lathe(g, [(2.15, -1.6), (1.55, -2.2), (0, -2.2)], (0, 0, 0), 'hull', seg=48, cap=False)
+    g.cyl(1.5, 1.5, 2.4, (0, 0, -3.4), 'paintWhite', axis='z', seg=40)
+    ribs(g, 1.5, (-2.35, -2.95, -3.85, -4.45), 'hullDark')
+    band_windows(g, 1.51, -3.4, 16, 0.3, 0.2, skip=(3, 4, 11, 12))
+    for k in range(4):
+        a = k * math.pi / 2 + math.pi / 4
+        nr = Vector((math.cos(a), math.sin(a), 0))
+        u = Vector((-math.sin(a), math.cos(a), 0))
+        g.greeble(rng, nr * 1.5 + Vector((0, 0, -3.4)), u, Z, nr, 0.8, 1.6, 6, hmax=0.06, smax=0.22)
+    # node with the two side docking ports
+    g.cyl(1.3, 1.3, 1.0, (0, 0, -5.1), 'hullLight', axis='z', seg=36)
     for s in (-1, 1):
-        g.cyl(0.6, 0.6, 1.6, (s * 3.2, 0, -4.2), 'hullLight', axis='x', seg=16)
-        g.cyl(0.75, 0.75, 0.2, (s * 4.0, 0, -4.2), 'hullDark', axis='x', seg=16)
-        g.torus(0.6, 0.04, (s * 4.12, 0, -4.2), 'amber', axis='x', seg=20, rseg=4)
+        g.cyl(0.55, 0.55, 1.9, (s * 2.1, 0, -5.1), 'hullLight', axis='x', seg=24)
+        for x in (s * 1.7, s * 2.5):
+            g.torus(0.57, 0.04, (x, 0, -5.1), 'hullDark', axis='x', seg=24, rseg=5)
+        g.cyl(0.72, 0.72, 0.18, (s * 3.1, 0, -5.1), 'hullDark', axis='x', seg=24)
+        g.cyl(0.5, 0.5, 0.05, (s * 3.21, 0, -5.1), 'hull', axis='x', seg=24, bevel=0)
+        g.torus(0.62, 0.035, (s * 3.22, 0, -5.1), 'amber', axis='x', seg=24, rseg=4)
+    # service module with radiator fins and RCS quads
+    g.cyl(1.6, 1.6, 1.4, (0, 0, -6.3), 'hull', axis='z', seg=40)
+    g.torus(1.61, 0.05, (0, 0, -5.65), 'yellow', seg=40, rseg=5, sx=0.6)
+    for k in range(6):
+        a = k * math.pi / 3
+        nr = Vector((math.cos(a), math.sin(a), 0))
+        u = Vector((-math.sin(a), math.cos(a), 0))
+        g.obox((1.0, 1.2, 0.05), nr * 2.1 + Vector((0, 0, -6.3)), nr, Z, u, 'hullLight', bevel=0.01)
+        for j in range(5):
+            g.obox((0.03, 1.2, 0.08), nr * (1.7 + j * 0.2) + Vector((0, 0, -6.3)), nr, Z, u, 'hullDark', bevel=0)
+    for k in range(4):
+        a = k * math.pi / 2 + math.pi / 4
+        nr = Vector((math.cos(a), math.sin(a), 0))
+        u = Vector((-math.sin(a), math.cos(a), 0))
+        c = nr * 1.7 + Vector((0, 0, -6.95))
+        g.obox((0.3, 0.3, 0.22), c, u, Z, nr, 'hullDark', bevel=0.02)
+        for v in (u, -u, Z, -Z):
+            g.seg(c + v * 0.15, c + v * 0.26, 0.04, 'hull', 8)
+    lathe(g, [(1.6, -7.0), (1.2, -7.35), (0, -7.35)], (0, 0, 0), 'hullDark', seg=40, cap=False)
+    g.cyl(0.6, 0.6, 0.3, (0, 0, -7.5), 'hull', axis='z', seg=24)
     root = g.build()
 
+    # --- habitat ring
     r = Group('ring', uvscale=0.5)
-    R, n = 7.0, 36
+    R = 7.0
+    prof = [(R - 0.7, -0.9), (R + 0.55, -0.9), (R + 0.78, -0.62), (R + 0.78, 0.62), (R + 0.55, 0.9), (R - 0.7, 0.9), (R - 0.78, 0.7), (R - 0.78, -0.7)]
+    lathe(r, prof, (0, 0, 0), 'hullLight', seg=96, closed=True)
+    r.torus(R + 0.79, 0.05, (0, 0, 0.42), 'window', seg=96, rseg=4, sx=0.5)
+    r.torus(R + 0.79, 0.05, (0, 0, -0.1), 'window', seg=96, rseg=4, sx=0.5)
+    r.torus(R - 0.79, 0.04, (0, 0, 0.3), 'window', seg=96, rseg=4, sx=0.5)
+    n = 36
     for i in range(n):
-        a = 2 * math.pi * (i + 0.5) / n
-        c = Vector((math.cos(a) * R, math.sin(a) * R, 0))
+        a = 2 * math.pi * i / n
+        c = Vector((math.cos(a), math.sin(a), 0))
         u = Vector((-math.sin(a), math.cos(a), 0))
-        nrm = Vector((math.cos(a), math.sin(a), 0))
-        L = 2 * math.pi * R / n + 0.06
-        r.obox((L, 1.8, 1.5), c, u, Z, nrm, 'hullLight', bevel=0.05)
-        r.obox((L * 0.9, 0.18, 0.04), c + nrm * 0.76, u, Z, nrm, 'window', bevel=0)
-        r.obox((L * 0.9, 0.1, 0.04), c - nrm * 0.76 + Vector((0, 0, 0.35)), u, Z, -nrm, 'window', bevel=0)
-        r.obox((L, 0.12, 1.54), c + Vector((0, 0, 0.92)), u, Z, nrm, 'accent' if i % 6 == 0 else 'hull', bevel=0.01)
-        if i % 3 == 0:
-            r.obox((0.5, 0.5, 0.3), c + nrm * 0.9 + Vector((0, 0, -0.5)), u, Z, nrm, 'hullDark', bevel=0.02)
+        # rib: a thin frame around the cross-section
+        mat = 'accent' if i % 9 == 0 else 'hull'
+        r.obox((0.14, 1.9, 0.08), c * (R + 0.82), u, Z, c, mat, bevel=0.01)
+        r.obox((0.14, 0.08, 1.62), c * (R + 0.05) + Z * 0.93, u, Z, c, mat, bevel=0.01)
+        r.obox((0.14, 0.08, 1.62), c * (R + 0.05) - Z * 0.93, u, Z, c, 'hull', bevel=0.01)
+        if i % 2:
+            m = Vector((math.cos(a + math.pi / n), math.sin(a + math.pi / n), 0))
+            mu = Vector((-m.y, m.x, 0))
+            r.greeble(rng, m * (R + 0.05) + Z * 0.9, mu, m, Z, 0.9, 1.1, 3, hmax=0.08, smax=0.3)
+        if i % 4 == 0:
+            r.sphere(0.06, tuple(c * (R + 0.86) + Z * 0.75), 'amber', seg=8, rings=5)
     for k in range(4):
-        a = k * math.pi / 2
+        a = k * math.pi / 2 + math.pi / 4
         d = Vector((math.cos(a), math.sin(a), 0))
-        r.seg(d * 2.5, d * 6.2, 0.28, 'hullDark', 10)
-        r.seg(d * 2.5 + Vector((0, 0, 0.5)), d * 6.2 + Vector((0, 0, 0.5)), 0.1, 'hull', 6)
-        r.cyl(0.45, 0.45, 0.6, tuple(d * 4.3), 'hull', axis='x', seg=12, rot=(0, 0, a))
+        dp = Vector((-d.y, d.x, 0))
+        r.seg(d * 2.4, d * 6.3, 0.3, 'hullLight', 16)
+        for t in (3.2, 4.4, 5.6):
+            r.seg(d * (t - 0.06), d * (t + 0.06), 0.34, 'hullDark', 16)
+        truss(r, d * 2.5 + dp * 0.75, d * 6.3 + dp * 0.75, 0.32, 'hullDark', bays=8, r=0.025)
+        r.obox((0.6, 0.5, 0.5), d * 4.0 + dp * 0.75, d, Z, dp, 'yellow', bevel=0.03)
+        r.add(bm_cyl(0.55, 0.45, 0.4, 16, 'x'), 'hullDark', tuple(d * 6.3), (0, 0, a), 0.015)
     r.build((0, 0, 0), root)
     return root
 
 
 # ================================================================ ORBITAL JUNK  (salvage field)
-def build_junk():
-    rng = random.Random(9)
-    # dead comsat: foil bus, bent wings, dish
+def junk_sat_proc(rng):
+    """Dead comsat fallback: foil bus, bent wings, dish."""
     g = Group('junk_sat')
     g.box((1.2, 1.2, 1.5), (0, 0, 0), 'foil', bevel=0.04)
     g.box((1.25, 1.25, 0.1), (0, 0, 0.7), 'hullLight', bevel=0.01)
-    g.seg((0.6, 0, 0.1), (1.0, 0, 0.1), 0.04, 'hullDark')
-    g.obox((3.0, 1.1, 0.05), (2.5, 0, 0.35), Vector((1, 0, 0.25)), Y, Vector((-0.25, 0, 1)), 'solar', bevel=0.01)
-    g.seg((-0.6, 0, 0.1), (-1.0, 0, 0.1), 0.04, 'hullDark')
-    g.obox((3.0, 1.1, 0.05), (-2.4, 0.2, -0.3), Vector((1, 0.15, -0.3)), Y, Vector((0.3, 0, 1)), 'solar', bevel=0.01)
+    for s, c, ax, nv in ((1, (2.5, 0, 0.35), Vector((1, 0, 0.25)), Vector((-0.25, 0, 1))), (-1, (-2.4, 0.2, -0.3), Vector((1, 0.15, -0.3)), Vector((0.3, 0, 1)))):
+        g.seg((s * 0.6, 0, 0.1), (s * 1.0, 0, 0.1), 0.04, 'hullDark')
+        g.obox((3.0, 1.1, 0.05), c, ax, Y, nv, 'solar', bevel=0.01)
     g.cyl(0.9, 0.2, 0.35, (0, -0.85, 0.3), 'hullLight', seg=20, rot=(0.3, 0, 0))
-    g.cyl(0.03, 0.03, 0.6, (0, -1.0, 0.3), 'hullDark', seg=6, bevel=0)
     g.greeble(rng, (0, 0, 0.75), X, Y, Z, 1.0, 1.0, 6)
-    g.build((0, 0, 0))
-    # spent upper stage
+    return g.build((0, 0, 0))
+
+
+def build_junk():
+    """Salvage field: five named roots (junk_sat, junk_stage, junk_panel, junk_bus, junk_tank) the game
+    picks with instanceChild. junk_sat is "Simple Satellite Low Poly Free" by DjalalxJay (CC-BY); the rest
+    are procedural: a spent upper stage with its engine, interstage stubs and torn insulation; a ripped
+    solar-array wing on its truss; a crumpled foil sat bus with a dish and thrusters; a split COPV tank."""
+    rng = random.Random(9)
+    sat = vendor('junk_sat', 'junk_sat', 7.0, axis=0)
+    if sat is None:
+        junk_sat_proc(rng)
+
+    # spent upper stage (axis Y): ribbed tank barrel, aft skirt with engine bell, torn interstage
     g = Group('junk_stage')
-    g.cyl(1.2, 1.2, 5.0, (0, 0, 0), 'paintWhite', seg=24)
-    g.cyl(1.22, 1.22, 0.3, (0, -1.6, 0), 'hullDark', seg=24)
-    g.cyl(1.22, 1.22, 0.3, (0, 1.6, 0), 'hullDark', seg=24)
-    g.cyl(1.2, 0.5, 0.8, (0, 2.9, 0), 'hull', seg=20)
-    g.cyl(0.35, 0.9, 1.3, (0, 3.9, 0), 'hullDark', seg=20)
-    g.cyl(1.0, 1.0, 0.5, (0, -2.75, 0), 'hull', seg=24)
-    g.box((0.1, 3.0, 0.4), (1.2, 0, 0), 'accent', bevel=0.01)
+    lathe(g, [(0, -2.9), (0.75, -2.85), (1.12, -2.6), (1.2, -2.3), (1.2, 1.7), (1.24, 1.8), (1.24, 2.1), (0.9, 2.5), (0, 2.5)], (0, 0, 0), 'paintWhite', axis='y', seg=40)
+    for y in (-1.6, -0.4, 0.8):
+        g.torus(1.21, 0.05, (0, y, 0), 'hullDark', axis='y', seg=40, rseg=5, sx=0.6)
+    g.box((0.08, 3.6, 0.5), (1.2, -0.4, 0), 'accent', bevel=0.01)
+    for k in range(6):  # stringers on the aft skirt
+        a = k * math.pi / 3
+        nr = Vector((math.cos(a), 0, math.sin(a)))
+        g.obox((0.08, 0.5, 0.06), nr * 1.25 + Vector((0, 1.95, 0)), Vector((-math.sin(a), 0, math.cos(a))), Y, nr, 'hullDark', bevel=0)
+    g.cyl(0.4, 0.35, 0.35, (0, 2.65, 0), 'hull', seg=20)
+    bell(g, (0, 2.8, 0), 0.25, 0.8, 1.4, axis='y', mat='hullDark', glow=None)
+    for k in range(5):  # torn interstage panels sticking up from the forward dome
+        a = k * 2 * math.pi / 5 + rng.uniform(-0.2, 0.2)
+        nr = Vector((math.cos(a), 0, math.sin(a)))
+        u = Vector((-math.sin(a), 0, math.cos(a)))
+        h = rng.uniform(0.4, 0.9)
+        g.obox((0.7, h, 0.04), nr * 1.18 + Vector((0, -2.35 - h / 2, 0)) + nr * h * 0.15, u, (Y - nr * 0.3).normalized(), nr, 'hull', bevel=0.005)
+    for k in range(3):  # strips of insulation peeling off
+        a = rng.uniform(0, 2 * math.pi)
+        nr = Vector((math.cos(a), 0, math.sin(a)))
+        u = Vector((-math.sin(a), 0, math.cos(a)))
+        y = rng.uniform(-1.5, 1.0)
+        g.obox((0.5, 0.9, 0.02), nr * 1.32 + Vector((0, y, 0)), u, (Y + nr * 0.5).normalized(), nr, 'foil', bevel=0)
     g.build((0, 0, 0))
-    # torn solar panel
+
+    # ripped solar-array wing: yoke truss, two hinged panels (one twisted), a dangling half panel
     g = Group('junk_panel')
-    g.box((3.2, 1.4, 0.05), (0, 0, 0), 'solar', bevel=0.01)
-    g.box((3.3, 0.06, 0.08), (0, 0.7, 0), 'hullLight', bevel=0)
-    g.box((3.3, 0.06, 0.08), (0, -0.7, 0), 'hullLight', bevel=0)
-    g.box((1.4, 1.4, 0.05), (2.1, 0.3, 0.3), 'solar', bevel=0.01, rot=(0.2, -0.5, 0.2))
-    g.seg((-1.6, 0, 0), (-2.4, 0, 0), 0.05, 'hullDark')
+    truss(g, (-2.6, 0, 0), (-1.5, 0, 0), 0.22, 'hullDark', bays=3, r=0.02)
+    for x0, rot in ((-0.0, (0, 0, 0)), (2.7, (0.25, -0.35, 0.1))):
+        c = Vector((x0, 0, 0))
+        g.box((2.6, 1.4, 0.04), tuple(c), 'solar', bevel=0.004, rot=rot)
+        g.box((2.66, 0.05, 0.07), tuple(c + Vector((0, 0.72, 0))), 'hullLight', bevel=0, rot=rot)
+        g.box((2.66, 0.05, 0.07), tuple(c + Vector((0, -0.72, 0))), 'hullLight', bevel=0, rot=rot)
+        g.box((0.05, 1.46, 0.06), tuple(c + Vector((-1.33, 0, 0))), 'hullLight', bevel=0, rot=rot)
+    g.box((1.2, 1.4, 0.04), (4.4, 0.35, -0.55), 'solar', bevel=0.004, rot=(0.4, -0.9, 0.3))
+    g.seg((3.95, 0.7, 0.3), (4.2, 0.9, -0.3), 0.015, 'hullDark', 5)
     g.build((0, 0, 0))
-    # small sat bus in gold foil with antenna stubs
+
+    # small sat bus: crumpled gold foil, radiator face, dish, thrusters and whip antennas
     g = Group('junk_bus')
-    g.box((0.9, 0.9, 0.9), (0, 0, 0), 'foil', bevel=0.03)
-    g.cyl(0.25, 0.25, 0.3, (0, 0, 0.6), 'hullLight', axis='z', seg=14)
+    bm = bm_box(0.9, 0.9, 0.9)
+    bmesh.ops.subdivide_edges(bm, edges=bm.edges[:], cuts=4, use_grid_fill=True)
+    for v in bm.verts:
+        v.co += v.co.normalized() * rng.uniform(-0.025, 0.02)
+    g.add(bm, 'foil', bevel=0, smooth=False)
+    g.box((0.92, 0.04, 0.8), (0, 0.46, 0), 'hullLight', bevel=0.005)
+    for k in range(6):
+        g.box((0.86, 0.05, 0.03), (0, 0.48, -0.35 + k * 0.14), 'hullDark', bevel=0)
+    g.box((0.92, 0.92, 0.1), (0, 0, -0.5), 'hullDark', bevel=0.01)
+    g.cyl(0.12, 0.12, 0.25, (0, 0, 0.58), 'hullLight', axis='z', seg=12)
+    lathe(g, [(0, 0.7), (0.3, 0.72), (0.55, 0.85), (0.57, 0.87), (0.3, 0.75), (0, 0.73)], (0, 0, 0), 'hullLight', seg=28, closed=True)
+    g.seg((0, 0, 0.73), (0, 0, 1.05), 0.012, 'hullDark', 5)
+    for s in (-1, 1):
+        g.cyl(0.04, 0.07, 0.12, (s * 0.35, -0.35, -0.6), 'hull', axis='z', seg=10)
     for k in range(3):
         a = k * 2.1
-        g.seg((0, 0, 0.4), (math.cos(a) * 1.0, math.sin(a) * 1.0, 0.9), 0.015, 'hullDark', 5)
-    g.box((0.92, 0.92, 0.12), (0, 0, -0.5), 'hullDark', bevel=0.01)
+        g.seg((0.4 * math.cos(a), 0.4 * math.sin(a), 0.42), (math.cos(a) * 1.0, math.sin(a) * 1.0, 0.95), 0.012, 'hullDark', 5)
     g.build((0, 0, 0))
-    # ruptured propellant tank
+
+    # ruptured composite-overwrapped pressure tank: wrap bands, polar boss, a burst split, broken strut
     g = Group('junk_tank')
-    g.sphere(0.9, (0, 0, 0), 'hullLight', scale=(1, 1.4, 1), seg=20, rings=12)
-    g.torus(0.92, 0.05, (0, 0, 0), 'hullDark', axis='y', seg=24, rseg=4)
-    g.seg((0, 1.2, 0), (0, 1.9, 0.2), 0.08, 'hull')
+    lathe(g, [(0, -1.35), (0.18, -1.33), (0.5, -1.22), (0.78, -0.95), (0.9, -0.55), (0.9, 0.55), (0.78, 0.95), (0.5, 1.22), (0.18, 1.33), (0, 1.35)],
+          (0, 0, 0), 'hullLight', axis='y', seg=36)
+    for y in (-0.55, -0.2, 0.15, 0.5):
+        g.torus(0.91, 0.03, (0, y, 0), 'hullDark', axis='y', seg=36, rseg=4, sx=0.5)
+    for s in (-1, 1):
+        g.cyl(0.18, 0.2, 0.15, (0, s * 1.38, 0), 'hull', seg=14)
+    g.obox((0.5, 0.9, 0.3), Vector((0.78, 0.15, 0.35)), Vector((0, 0, 1)), Y, Vector((0.9, 0, 0.4)).normalized(), 'hullDark', bevel=0.02)
+    for k in range(5):  # frayed wrap fibres around the burst
+        a = 0.35 + rng.uniform(-0.25, 0.25)
+        nr = Vector((math.cos(a), 0, math.sin(a)))
+        g.seg(nr * 0.95 + Vector((0, -0.2 + k * 0.17, 0)), nr * (1.15 + rng.uniform(0, 0.25)) + Vector((0, -0.2 + k * 0.17 + rng.uniform(-0.15, 0.15), 0.1)), 0.012, 'hullLight', 4)
+    g.seg((0, 1.45, 0), (0.15, 2.1, 0.25), 0.07, 'hull', 8)
+    g.seg((0.15, 2.1, 0.25), (0.45, 2.3, 0.2), 0.05, 'hullDark', 8)
     g.build((0, 0, 0))
+
+
+# ================================================================ imported hero ships (CC-BY, see CREDITS.txt)
+def build_skiff():
+    """Kestrel Mk II: "Space Fighter" by pirate8888, scaled to a 9.3 m cutter. One main engine in the
+    tail (glow disc + exhaust anchor), chin gun at the nose, nav lights on the wingtips."""
+    o = vendor('skiff', 'skiff', 9.3)
+    if o is None:
+        return build_skiff_proc()
+    g = Group('skiff_fx')
+    g.cyl(0.3, 0.3, 0.02, (0, 4.42, -0.24), 'engine', seg=28, bevel=0)
+    g.torus(0.31, 0.02, (0, 4.43, -0.24), 'engineHot', axis='y', seg=28, rseg=5)
+    for s in (-1, 1):
+        g.sphere(0.04, (s * 3.29, 2.45, -0.08), 'red' if s > 0 else 'green', seg=10, rings=6)
+    attach(o, g)
+    empty('anchor_nose', (0, -4.72, -0.23), o)
+    empty('anchor_exhaust_0', (0, 4.62, -0.24), o)
+    empty('anchor_nav_L', (3.32, 2.45, -0.08), o)
+    empty('anchor_nav_R', (-3.32, 2.45, -0.08), o)
+    empty('anchor_strobe', (0, 4.3, 0.22), o)
+    return o
+
+
+def build_hauler():
+    """Mule hauler: "Industrial Ship - Concept by Alexander Preuss" by SleepyHead, scaled to 18 m. Its engine
+    emission mesh becomes the game's 'engine' material; the single big bell carries the exhaust anchor."""
+    o = vendor('hauler', 'hauler', 18.0, rename={'Engine_Emission': 'engine'})
+    if o is None:
+        return build_hauler_proc()
+    empty('anchor_nose', (0, -9.1, -0.6), o)
+    empty('anchor_exhaust_0', (0, 8.7, -0.48), o)
+    return o
+
+
+def build_drone():
+    """Utility drone: "Scifi Drone" by Doverlock, a 1.3 m sphere with its lens facing forward (-Y)
+    (three.js lookAt aims +Z, which is Blender -Y)."""
+    o = vendor('drone', 'drone', 1.3, axis=2, ratio=0.45)
+    return o if o is not None else build_drone_proc()
 
 
 # ---------------------------------------------------------------- export + preview
 def export(name):
     path = os.path.join(OUT, f'{name}.glb')
-    bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_yup=True, export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=7)
+    bpy.ops.export_scene.gltf(filepath=path, export_format='GLB', export_yup=True, export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=7,
+                              export_image_format='WEBP', export_image_quality=82)
     print(f'EXPORTED {path} ({os.path.getsize(path) // 1024} KB)')
 
 
