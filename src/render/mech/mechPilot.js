@@ -36,11 +36,12 @@ const clamp = THREE.MathUtils.clamp;
 const REACT = new Set(['hit', 'launched', 'down', 'getup', 'dead']);
 
 export class MechPilot {
-  constructor(scene) {
+  // opts.clone: give this pilot its own copy of the skinned model (a second mech in another scene)
+  constructor(scene, opts = {}) {
     this.fx = new SwordFx(scene);
     // the skinned Darklord frame with mocap clips when mech_player.glb loaded, else the procedural knight frame
     const asset = skinned('mech_player');
-    this.body = asset ? new SkinnedMechBody(scene, this.fx, asset, { saber: true }) : new MechBody(scene, this.fx, { scheme: 'player' });
+    this.body = asset ? new SkinnedMechBody(scene, this.fx, asset, { saber: true, clone: !!opts.clone }) : new MechBody(scene, this.fx, { scheme: 'player' });
     this.skin = asset ? this.body : null;
     this.C = asset ? buildSkinCombos(this.body) : COMBO;
     this.rig = this.body.rig;

@@ -62,14 +62,14 @@ export function createInput(app) {
   canvas.addEventListener('pointerup', (e) => {
     // a quick mouse click (not a drag) is a sword strike on the surface: left = slash, right = heavy
     const p = drags.get(e.pointerId);
-    if (p && e.pointerType === 'mouse' && app.mode === 'surface' && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) < 6 && performance.now() - p.t0 < 350) {
+    if (p && e.pointerType === 'mouse' && (app.mode === 'surface' || app.shipView?.mechActive) && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) < 6 && performance.now() - p.t0 < 350) {
       if (p.button === 2) taps.heavy++;
       else if (p.button === 1) taps.launch++;
       else if (p.button === 0) taps.attack++;
     }
     end(e);
   });
-  canvas.addEventListener('contextmenu', (e) => { if (app.mode === 'surface') e.preventDefault(); });
+  canvas.addEventListener('contextmenu', (e) => { if (app.mode === 'surface' || app.mode === 'ship') e.preventDefault(); });
   canvas.addEventListener('auxclick', (e) => { if (app.mode === 'surface' && e.button === 1) e.preventDefault(); });
   canvas.addEventListener('mousedown', (e) => { if (app.mode === 'surface' && e.button === 1) e.preventDefault(); });   // no autoscroll
   canvas.addEventListener('pointercancel', end);

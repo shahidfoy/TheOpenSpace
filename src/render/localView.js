@@ -866,6 +866,20 @@ export class LocalView {
     this.updateScreenInfo();
   }
 
+  // The world keeps turning while you're inside the station (its windows show this scene): orbit and sky, the
+  // drones, the drifting junk and the station's own moving parts, without flying the craft or moving the camera.
+  tickWorld(dt) {
+    this.time += dt;
+    if (this.mode === 'base') { this.updateDrones(dt); this.updateOrbit(dt); }
+    for (const r of this.rocks) if (r.alive) { r.mesh.rotation.x += r.spin.x * dt; r.mesh.rotation.y += r.spin.y * dt; }
+    if (this.station) {
+      const a = this.station.userData.anim;
+      for (const sp of a.spin) sp.obj.rotation.y += sp.speed * dt;
+      for (const b of a.blink) b.visible = Math.sin(this.time * 3) > 0;
+    }
+    if (this.parked) updateShipFX(this.parked, this.time);
+  }
+
   // Screen-space data for the HUD: target bracket, nav markers, sun flare.
   project(p, out) {
     tmp.copy(p).project(this.camera);
