@@ -45,6 +45,15 @@ export class Parkour {
 
     if (st === 'mantle') return this.updateMantle(dt);
 
+    // a sword move owns the body: it sets the velocity, the clip and the facing
+    if (this.action) {
+      this.action.drive(dt, this);
+      this.integrate(dt, ctx.boxes);
+      if (this.pos.y < ctx.killY) { this.action = null; this.spawn(ctx.spawn.pos, ctx.spawn.yaw); }
+      this.animate(dt, true);
+      return;
+    }
+
     if (st === 'climb') {
       const n = this.wall.n, b = this.wall.box;
       _t.crossVectors(UP, n);                                       // along the wall, to the climber's left
@@ -100,6 +109,15 @@ export class Parkour {
           this.ch.play('wallrun', { fade: 0.15 });
         }
       }
+      // ledge grab: reach the top of any wall while pushing into it (jumping, falling, or a low wall on foot)
+      // and pull yourself up onto it
+      const L = this.wall;
+      if (L && this.state !== 'climb' && this.state !== 'wallrun') {
+        const into = -wish.dot(L.n), reach = L.box.max.y - this.pos.y;
+        const air = !this.grounded && v.y < 4.5 && reach > this.H * 0.35 && reach < this.H * 1.3;
+        const low = this.grounded && reach > 0.45 && reach < this.H * 0.95;
+        if (into > 0.3 && (air || low) && this.tryMantle(L.box, L.n)) return;
+      }
     }
 
     this.integrate(dt, ctx.boxes);
@@ -124,21 +142,31 @@ export class Parkour {
     const end = _c.copy(this.pos).addScaledVector(n, -(this.R + 0.45));
     const top = this.boxes.find((o) => o.max.y > b.max.y - 0.35 && o.max.y < b.max.y + 0.7 && end.x >= o.min.x && end.x <= o.max.x && end.z >= o.min.z && end.z <= o.max.z);
     if (!top) return false;
+    // nothing in the way where you'd stand
+    const clear = !this.boxes.some((o) => o !== top && end.x > o.min.x - this.R * 0.6 && end.x < o.max.x + this.R * 0.6 && end.z > o.min.z - this.R * 0.6 && end.z < o.max.z + this.R * 0.6
+      && o.min.y < top.max.y + this.H * 0.9 && o.max.y > top.max.y + 0.05);
+    if (!clear) return false;
     end.y = top.max.y;
-    this.mantle = { t: 0, from: this.pos.clone(), to: end.clone() };
+    const h = end.y - this.pos.y;
+    // catch the edge (hands at the ledge), then haul up and step over: longer for a higher pull
+    const from = this.pos.clone();
+    this.mantle = { t: 0, dur: MANTLE_T * clamp(h / 1.3, 0.55, 1.25) + 0.1, from, to: end.clone(), yaw: Math.atan2(-n.x, -n.z) };
     this.state = 'mantle';
     this.vel.set(0, 0, 0);
-    this.ch.play('climb_up', { fade: 0.1, speed: 2.2 });
+    this.yaw = this.mantle.yaw;
+    this.ch.play('climb_up', { fade: 0.08, speed: 2.4 });
     return true;
   }
 
   updateMantle(dt) {
     const m = this.mantle;
-    m.t = Math.min(1, m.t + dt / MANTLE_T);
-    const up = Math.min(1, m.t / 0.6), fwd = Math.max(0, (m.t - 0.45) / 0.55);
+    m.t = Math.min(1, m.t + dt / (m.dur || MANTLE_T));
+    // a short catch at the edge, the haul (rises fast), then the step over the lip
+    const hauling = Math.max(0, (m.t - 0.12) / 0.88);
+    const up = Math.min(1, hauling / 0.62), fwd = Math.max(0, (hauling - 0.5) / 0.5);
     const e = (x) => x * x * (3 - 2 * x);
     this.pos.set(lerp(m.from.x, m.to.x, e(fwd)), lerp(m.from.y, m.to.y, e(up)), lerp(m.from.z, m.to.z, e(fwd)));
-    if (m.t >= 1) { this.state = 'ground'; this.grounded = true; this.mantle = null; this.airJumps = 1; this.ch.play('idle', { fade: 0.25 }); }
+    if (m.t >= 1) { this.state = 'ground'; this.grounded = true; this.mantle = null; this.airJumps = 1; this.lastWall = null; this.ch.play(this.idleClip || 'idle', { fade: 0.25 }); }
     this.animate(dt);
   }
 
@@ -203,11 +231,14 @@ export class Parkour {
     if (vy < -11) { this.landT = 0.32; this.ch.play('land', { time: 0.18, fade: 0.06, speed: 1.6, restart: true }); }
   }
 
-  animate(dt) {
+  animate(dt, locked = false) {
     const c = this.ch, st = this.state, v = this.vel;
+    const idle = this.idleClip || 'idle', run = this.runClip || 'run';
     this.fallV = this.grounded ? 0 : v.y;
     const hs = Math.hypot(v.x, v.z);
-    if (st === 'climb') {
+    if (locked) {
+      // the sword move drives the clip
+    } else if (st === 'climb') {
       const mv = v.y;
       c.play(mv < -0.1 ? 'climb_down' : 'climb_up', { fade: 0.15, speed: Math.abs(mv) > 0.1 || Math.abs(hs) > 0.1 ? 1 : 0 });
     } else if (st === 'wallrun') {
@@ -216,8 +247,8 @@ export class Parkour {
       // the climb clip at speed sells the pull-up
     } else if (this.grounded) {
       if (this.landT > 0 && c.currentName === 'land') { /* let the landing play */ }
-      else if (hs < 0.35) c.play('idle', { fade: 0.25 });
-      else if (hs < 7.4) c.play('run', { fade: 0.2, speed: clamp(hs / RUN, 0.55, 1.25) });
+      else if (hs < 0.35) c.play(idle, { fade: 0.25 });
+      else if (hs < 7.4) c.play(run, { fade: 0.2, speed: clamp(hs / RUN, 0.55, 1.25) * (run === 'run' ? 1 : 0.9) });
       else c.play('sprint', { fade: 0.2, speed: clamp(hs / SPRINT, 0.8, 1.2) });
     } else {
       const jumping = c.currentName === 'jump' && !c.done() && v.y > -2;
