@@ -240,6 +240,18 @@ const foilN = normalFrom(foilH, 14);
 const rockH = fbm(rand(5), 8, 6);
 export const ROCK_NORMAL = normalFrom(rockH, 10);
 
+// Replacement for <emissivemap_fragment> on the NEXORION suit (player mech and flight suit). Its glow is painted cyan
+// into its colour texture (the trim lines) and its emissive texture (the crystals). Both become one mask (cyan-ness of
+// the colour, brightness of the emissive), the colour under it goes black, and the material's emissive colour lights
+// it, so the livery's light colour picks the hue.
+export const SUIT_GLOW = `float glowMask = smoothstep( 0.06, 0.3, min( diffuseColor.g, diffuseColor.b ) - diffuseColor.r ) * 0.8;
+#ifdef USE_EMISSIVEMAP
+  vec4 emissiveColor = texture2D( emissiveMap, vEmissiveMapUv );
+  glowMask = max( glowMask, smoothstep( 0.04, 0.6, dot( emissiveColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ) );
+#endif
+  diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.03 ), min( 1.0, glowMask * 1.25 ) );
+  totalEmissiveRadiance *= vec3( glowMask );`;
+
 const std = (o) => new THREE.MeshStandardMaterial({ roughness: 1, metalness: 1, ...o });
 const metalMat = (color, metal, maps, n, nScale = 0.7) => std({
   color, metalness: metal, map: maps.map, roughnessMap: maps.orm, metalnessMap: maps.orm,

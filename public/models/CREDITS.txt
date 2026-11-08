@@ -1,4 +1,4 @@
-mech_player.glb (player suit)
+mech_player.glb (player suit: the on-foot mech, and at human scale the flight suit)
   "NEXORION // The Neon Vanguard" by Atahan3D - https://sketchfab.com/3d-models/nexorion-the-neon-vanguard-4f5c15fb803b4bd493cf45b9cc4e24ce
   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
   Modified: decimated, rigged and skinned, sword added, textures re-encoded as WebP, sword animations retargeted
