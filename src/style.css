@@ -667,3 +667,23 @@ b, strong { font-weight: 600; }
 .sh-mech-pic { width: 100%; aspect-ratio: 1; display: grid; place-items: center; background: radial-gradient(circle at 50% 40%, #2a5a7a, #0a121c 70%); }
 .sh-mech-pic span { font-size: 22px; letter-spacing: 0.3em; color: var(--ice); text-shadow: 0 0 14px rgba(127,212,255,0.8); }
 .sh-card.mech.on { border-color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
+/* wardrobe: a side panel so the character stays visible on the pedestal */
+.sh-ward { place-items: center end; padding: 0 20px; background: linear-gradient(90deg, transparent 40%, rgba(4,6,10,0.55)); backdrop-filter: none; }
+.sh-ward .sh-card-wrap { width: min(440px, calc(100vw - 32px)); max-height: calc(100vh - 140px); overflow-y: auto; text-align: left; }
+.sh-ward h3 { text-align: center; }
+.sh-sec { margin: 12px 0 6px; font-size: 10px; letter-spacing: 0.24em; color: var(--dim); }
+.sh-ward .sh-cards { justify-content: flex-start; gap: 8px; }
+.sh-ward .sh-card { width: 92px; padding: 5px; }
+.sh-ward .sh-card b { font-size: 11px; }
+.sh-ward .sh-card small { font-size: 9px; }
+.sh-ward .sh-mech-pic span { font-size: 13px; }
+.sh-card.sm { width: 84px; }
+.sh-look[hidden], .sh-mechnote[hidden] { display: none; }
+.sh-mechnote { margin-top: 12px; font-size: 11px; color: var(--amber); }
+.sh-sw { display: flex; flex-wrap: wrap; gap: 7px; }
+.sh-sw .sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.18); cursor: pointer; padding: 0; }
+.sh-sw .sw.orig { background: conic-gradient(#ff7ec4, #8a5cff, #3a78ff, #22c7b8, #e6b24a, #ff7ec4); position: relative; }
+.sh-sw .sw.orig::after { content: ''; position: absolute; inset: 5px; border-radius: 50%; background: #10151d; }
+.sh-sw .sw.on { border-color: #fff; box-shadow: 0 0 0 2px var(--ice); }
+.sh-ward .sh-close { display: block; margin: 16px auto 0; }
+@media (max-width: 700px) { .sh-ward { place-items: end center; padding: 0 0 70px; background: linear-gradient(180deg, transparent 45%, rgba(4,6,10,0.6)); } .sh-ward .sh-card-wrap { max-height: 52vh; } }

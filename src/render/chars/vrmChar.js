@@ -9,11 +9,67 @@ import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 // is rescaled to the model's leg length. Root motion is stripped (the controller moves the character), keeping only the
 // clip's own bob so loops stay seamless.
 
+// Each character has one or more outfits: separate VRM models of the same character published by its creator
+// (every outfit's file and licence is listed in public/characters/CREDITS.txt). The first outfit is the default.
 export const CHARACTERS = [
-  { id: 'rachael', name: 'Rachael', file: 'rachael.vrm', thumb: 'rachael.png', blurb: 'Vampire succubus · agile', by: 'Banjo Boi' },
-  { id: 'remi', name: 'Ayame Remi', file: 'remi.vrm', thumb: 'remi.jpg', blurb: 'Summer ver. · light on her feet', by: 'ゔぁんそこ' },
-  { id: 'emo', name: 'Kuro', file: 'emo.vrm', thumb: 'emo.png', blurb: 'Hoodie runner · steady', by: 'Em0 MFXXX' },
+  { id: 'rachael', name: 'Rachael', thumb: 'rachael.png', blurb: 'Goth vampire · agile', by: 'Banjo Boi',
+    outfits: [
+      { id: 'goth', name: 'Goth', file: 'rachael.vrm', thumb: 'rachael.png' },
+      { id: 'vampire', name: 'Vampire Dress', file: 'outfits/rachael_vampire.vrm', thumb: 'outfits/rachael_vampire.jpg' },
+      { id: 'dream', name: 'Dream', file: 'outfits/rachael_dream.vrm', thumb: 'outfits/rachael_dream.jpg' },
+      { id: 'xmas', name: 'Christmas', file: 'outfits/rachael_xmas.vrm', thumb: 'outfits/rachael_xmas.jpg' },
+    ] },
+  { id: 'remi', name: 'Ayame Remi', thumb: 'remi.jpg', blurb: 'Light on her feet', by: 'ゔぁんそこ',
+    outfits: [
+      { id: 'swim', name: 'Summer Swimsuit', file: 'remi.vrm', thumb: 'remi.jpg' },
+      { id: 'rider', name: 'Rider Suit', file: 'outfits/remi_rider.vrm', thumb: 'outfits/remi_rider.jpg' },
+      { id: 'ninja', name: 'Ninja', file: 'outfits/remi_ninja.vrm', thumb: 'outfits/remi_ninja.jpg' },
+      { id: 'coat', name: 'Long Coat', file: 'outfits/remi_coat.vrm', thumb: 'outfits/remi_coat.jpg' },
+      { id: 'cat', name: 'Black Cat', file: 'outfits/remi_cat.vrm', thumb: 'outfits/remi_cat.jpg' },
+      { id: 'dress', name: 'Black Dress', file: 'outfits/remi_dress.vrm', thumb: 'outfits/remi_dress.jpg' },
+      { id: 'hoodie', name: 'Hoodie', file: 'outfits/remi_hoodie.vrm', thumb: 'outfits/remi_hoodie.jpg' },
+      { id: 'yukata', name: 'Yukata', file: 'outfits/remi_yukata.vrm', thumb: 'outfits/remi_yukata.jpg' },
+    ] },
+  { id: 'emo', name: 'Kuro', thumb: 'emo.png', blurb: 'Hoodie runner · steady', by: 'Em0 MFXXX',
+    outfits: [{ id: 'hoodie', name: 'Hoodie', file: 'emo.vrm', thumb: 'emo.png' }] },
 ];
+
+// Colourways: a true recolour (not a multiply) of a model's clothing or hair. VRoid exports name their materials
+// *_CLOTH and *_HAIR; those get a small patch at the end of the MToon shader that maps the shaded colour's
+// brightness onto the chosen colour, so even black clothes can turn red and green hair can go silver.
+export const SWATCHES = [
+  null, '#1e1e24', '#f2f2f4', '#c41e3a', '#ff7ec4', '#8a5cff', '#3a78ff', '#22c7b8', '#e6b24a', '#b8c0cc',
+];
+export function applyColours(vrm, { cloth = null, hair = null } = {}) {
+  vrm.scene.traverse((o) => {
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      const kind = /_CLOTH/.test(m.name) ? 'cloth' : /_HAIR/.test(m.name) ? 'hair' : null;
+      if (!kind || !m.isShaderMaterial) continue;
+      if (!m.userData.recolor) patchRecolor(m);
+      const hex = kind === 'cloth' ? cloth : hair;
+      m.userData.recolor.amt.value = hex ? 1 : 0;
+      if (hex) m.userData.recolor.tint.value.set(hex);
+    }
+  });
+}
+function patchRecolor(m) {
+  const u = (m.userData.recolor = { tint: { value: new THREE.Color() }, amt: { value: 0 } });
+  const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
+  m.onBeforeCompile = (sh, r) => {
+    prev?.call(m, sh, r);
+    sh.uniforms.uRecolorTint = u.tint; sh.uniforms.uRecolorAmt = u.amt;
+    sh.fragmentShader = 'uniform vec3 uRecolorTint;\nuniform float uRecolorAmt;\n' + sh.fragmentShader.replace('#include <tonemapping_fragment>', `
+      if (uRecolorAmt > 0.0) {
+        float lum = dot(gl_FragColor.rgb, vec3(0.299, 0.587, 0.114));
+        vec3 rc = uRecolorTint * (0.12 + lum * 1.15) + max(vec3(0.0), vec3(lum - 0.85)) * 0.6;
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, rc, uRecolorAmt);
+      }
+      #include <tonemapping_fragment>`);
+  };
+  m.customProgramCacheKey = () => (prevKey ? prevKey.call(m) : '') + '|recolor';
+  m.needsUpdate = true;
+}
 
 // clip name -> [file, root mode]: 'loop' strips all drift, 'xz' keeps the vertical motion (jumps, landings)
 const CLIPS = {
@@ -88,11 +144,13 @@ function retarget(asset, vrm, name, mode) {
 }
 
 export class VrmChar {
-  static async load(def, onProgress) {
+  // def: a CHARACTERS entry; outfit: one of its outfits (default: the first)
+  static async load(def, outfit, onProgress) {
+    outfit = outfit || def.outfits[0];
     const loader = new GLTFLoader();
     loader.register((p) => new VRMLoaderPlugin(p));
     const fbx = Promise.all(Object.values(CLIPS).map(([f]) => loadFbx(f)));
-    const gltf = await loader.loadAsync(BASE + def.file, (e) => onProgress?.(e.total ? e.loaded / e.total : 0));
+    const gltf = await loader.loadAsync(BASE + outfit.file, (e) => onProgress?.(e.total ? e.loaded / e.total : 0));
     const vrm = gltf.userData.vrm;
     VRMUtils.removeUnnecessaryVertices(gltf.scene);
     VRMUtils.combineSkeletons?.(gltf.scene);
@@ -101,6 +159,7 @@ export class VrmChar {
     vrm.scene.updateMatrixWorld(true);
     const assets = await fbx;
     const c = new VrmChar(def, vrm);
+    c.outfit = outfit;
     Object.keys(CLIPS).forEach((name, i) => c.addClip(name, retarget(assets[i], vrm, name, CLIPS[name][1])));
     c.play('idle', { fade: 0 });
     c.mixer.update(0);
