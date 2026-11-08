@@ -3,6 +3,7 @@ import { S, makeThruster } from './mechRig.js';
 import { MOVES } from './swordAnim.js';
 import { applyLivery, loadLivery } from './livery.js';
 import { SUIT_GLOW } from '../materials.js';
+import { Saber } from './saber.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 // Skinned mechs built by blender/build_mech_player.py: the player suit ("NEXORION // The Neon Vanguard" by Atahan3D)
@@ -41,8 +42,9 @@ function paint(name, src) {
 }
 
 export class SkinnedMechBody {
-  // opts: { livery (defaults to the saved player livery), clone (own copy of the model: arena enemies), size, plume }
-  constructor(scene, fx, asset, { livery = null, clone = false, size = 1, plume = 0x7fc8ff } = {}) {
+  // opts: { livery (defaults to the saved player livery), clone (own copy of the model: arena enemies), size, plume,
+  //         saber (swap the modelled sword for an energy saber that only ignites in a fight: the player) }
+  constructor(scene, fx, asset, { livery = null, clone = false, size = 1, plume = 0x7fc8ff, saber = false } = {}) {
     this.skinned = true;
     this.meta = asset.meta;
     this.root = new THREE.Group();
@@ -104,6 +106,7 @@ export class SkinnedMechBody {
       if (!loops.has(clip.name)) { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
       this.actions[clip.name] = a;
     }
+    this.alt = {};                                 // twin actions, so a clip can crossfade into itself
     this.current = null; this.currentName = '';
     this.play('idle', { fade: 0 });
     this.mixer.update(0);
@@ -139,6 +142,23 @@ export class SkinnedMechBody {
     // blade light: always in the scene (toggling lights recompiles every material), dimmed when idle
     this.light = new THREE.PointLight(0x9fe4ff, 0, 26, 2);
     (this.grip || model).add(this.light);
+
+    // energy saber: hide the modelled blade (and on the suit, whose frame material is the sword's alone, its hilt)
+    // and mount a saber on the grip bone in metres
+    this.saber = null;
+    if (saber && this.grip) {
+      const suit = this.mats.some((m) => /^suit/.test(m.name));
+      model.traverse((o) => {
+        if (o.isMesh && (/^mech_blade/.test(o.material.name) || (suit && /^Secondary_Color/.test(o.material.name)))) o.visible = false;
+      });
+      const H = asset.meta.height * this.k;
+      this.saber = new Saber(this.blade * this.k * 1.04, H * 0.165);
+      this.grip.getWorldScale(ws);
+      this.saber.group.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
+      this.grip.add(this.saber.group);
+      this.saber.group.add(this.light);
+      this.light.position.set(0, this.saber.base + this.saber.length * 0.45, 0);
+    }
     this.trail = fx.makeTrail(0x6fdcff);
     this.slashColor = 0xbff4ff;
 
@@ -155,7 +175,8 @@ export class SkinnedMechBody {
     applyLivery(this.zone, l);
     this.slashColor = new THREE.Color(l.blade).lerp(new THREE.Color(0xffffff), 0.55).getHex();
     this.light.color.set(l.blade).lerp(new THREE.Color(0xffffff), 0.3);
-    this.trail.mesh.material.uniforms.color.value.set(l.blade).multiplyScalar(2);
+    this.trail.mesh.material.uniforms.color.value.set(l.blade).multiplyScalar(this.saber ? 2.6 : 2);
+    this.saber?.setColor(l.blade);
   }
 
   has(name) { return !!this.actions[name]; }
@@ -165,8 +186,8 @@ export class SkinnedMechBody {
   pose(name, t, fade = 0.1) {
     const a = this.actions[name];
     if (!a) return;
-    if (this.current !== a) this.play(name, { time: t, speed: 0, fade, restart: true });
-    else { a.timeScale = 0; a.time = t; }
+    if (this.currentName !== name) this.play(name, { time: t, speed: 0, fade, restart: true });
+    else this.scrub(t);
   }
 
   // a clip-space swing arc (mech_player.json) in world space
@@ -180,9 +201,12 @@ export class SkinnedMechBody {
 
   // crossfade to a clip. opts: time (s), fade (s), speed, restart
   play(name, { time = null, fade = 0.15, speed = 1, restart = false } = {}) {
-    const a = this.actions[name];
+    let a = this.actions[name];
     if (!a) return null;
-    if (this.current === a && !restart && time === null) { a.timeScale = speed; return a; }
+    if (this.currentName === name && !restart && time === null) { this.current.timeScale = speed; return this.current; }
+    // restarting the clip that is already playing: blend from its twin. Resetting the playing action and fading it
+    // back in from zero weight would dip the whole body toward the rest stance for the length of the fade.
+    if (this.currentName === name && fade > 0) a = this.current === a ? this.twin(name) : a;
     a.enabled = true;
     a.reset();
     a.timeScale = speed;
@@ -193,6 +217,25 @@ export class SkinnedMechBody {
     else if (fade > 0) a.fadeIn(fade);
     this.current = a; this.currentName = name;
     return a;
+  }
+
+  twin(name) {
+    if (!this.alt[name]) {
+      const src = this.actions[name];
+      const t = this.mixer.clipAction(src.getClip().clone());
+      t.setLoop(src.loop, Infinity);
+      t.clampWhenFinished = src.clampWhenFinished;
+      this.alt[name] = t;
+    }
+    return this.alt[name];
+  }
+
+  // drive the playing clip's time directly (attacks follow a time-warp curve instead of a constant speed)
+  scrub(t) {
+    if (!this.current) return;
+    this.current.timeScale = 0;
+    this.current.paused = false;
+    this.current.time = t;
   }
 
   recoil(lx, lz, k = 1) {
@@ -228,7 +271,7 @@ export class SkinnedMechBody {
     }
     root.updateMatrixWorld(true);
     this.updateThrusters(dt, o.thr);
-    this.updateSword(dt, o.swinging);
+    this.updateSword(dt, o.swinging, o.lit);
     this.updateTint(dt);
   }
 
@@ -249,9 +292,16 @@ export class SkinnedMechBody {
     }
   }
 
-  updateSword(dt, swinging) {
+  updateSword(dt, swinging, lit) {
     const flick = 0.92 + Math.sin(this.time * 61) * 0.04 + Math.sin(this.time * 37) * 0.04;
-    this.light.intensity = (swinging ? 22 : 0) * flick;
+    if (this.saber) {
+      if (this.saber.update(dt, lit, swinging)) {
+        // ignition crackle at the emitter
+        const p = this.saber.group.localToWorld(_v.set(0, this.saber.base, 0));
+        this.fx.sparksAt(p, 8, { color: this.light.color.getHex(), speed: 6, life: 0.22, width: 0.04, grav: 0 });
+      }
+      this.light.intensity = this.saber.k * (swinging ? 24 : 10) * flick;
+    } else this.light.intensity = (swinging ? 22 : 0) * flick;
     const b = _v, t = _v2;
     this.bladeWorld(b, t);
     this.fx.pushTrail(b, t, swinging, this.trail);
@@ -272,6 +322,12 @@ export class SkinnedMechBody {
     const ax = _q.setFromRotationMatrix(m);
     const dir = outTip.set(0, 1, 0).applyQuaternion(ax).normalize();
     const p = this.grip.getWorldPosition(outBase);
+    if (this.saber) {
+      const s = this.saber;
+      outTip.copy(p).addScaledVector(dir, s.reach);
+      outBase.copy(p).addScaledVector(dir, s.base + s.length * s.k * 0.12);
+      return;
+    }
     const L = this.blade * this.k;
     outTip.copy(p).addScaledVector(dir, L);
     outBase.copy(p).addScaledVector(dir, L * 0.3);
@@ -300,18 +356,54 @@ function groups(meta, clip, { minPeak = 22, gap = 0.09, limit = 99 } = {}) {
   return out.slice(0, limit);
 }
 
+// Clip moves don't play at one constant speed: the clip time follows a smooth curve through four keys (segment start,
+// swing start, swing end, segment end). The windup eases in (anticipation), the cut itself runs fast, and the
+// follow-through decelerates into a held finish - the rhythm of an anime katana cut: draw, flash, freeze. The curve
+// is a monotone cubic Hermite, so the motion has no velocity pops, and a chained move can pick up the previous
+// one's clip time and speed for a seamless flow through the combo.
+const WIND_K = 0.9, SWING_K = 1.25, REC_K = 0.85;
+
+// (re)builds mv.warp and mv.t starting from clip time c0 at clip speed v0 (null: a fresh start, easing in)
+export function makeWarp(mv, c0, v0 = null) {
+  const sp = mv.speed, [, s0, s1, s2] = mv.seg;
+  const ws = sp * WIND_K, ss = sp * SWING_K, rs = sp * REC_K;
+  const tw = v0 != null ? Math.max(0.05, 2 * (s0 - c0) / (Math.max(0, v0) + ss)) : Math.max(0.03, (s0 - c0) / ws);
+  const T = [0, tw, tw + Math.max(0.03, (s1 - s0) / ss), 0];
+  T[3] = T[2] + Math.max(0.05, (s2 - s1) / rs);
+  const C = [c0, s0, s1, s2];
+  const M = [v0 != null ? Math.max(0, v0) : ws * 0.5, ss * 1.15, ss * 0.65, rs * 0.2];
+  for (let i = 0; i < 3; i++) {                     // Fritsch-Carlson: keep every segment monotone
+    const d = (C[i + 1] - C[i]) / (T[i + 1] - T[i]);
+    if (d <= 1e-6) { M[i] = M[i + 1] = 0; continue; }
+    const a = M[i] / d, b = M[i + 1] / d, h = a * a + b * b;
+    if (h > 9) { const tau = 3 / Math.sqrt(h); M[i] = tau * a * d; M[i + 1] = tau * b * d; }
+  }
+  mv.warp = { T, C, M };
+  mv.t = [T[1], T[2] - T[1], T[3] - T[2]];
+  return mv;
+}
+export function clipTime(mv, e) {
+  const { T, C, M } = mv.warp;
+  if (e <= 0) return C[0];
+  if (e >= T[3]) return C[3];
+  const i = e < T[1] ? 0 : e < T[2] ? 1 : 2;
+  const h = T[i + 1] - T[i], s = (e - T[i]) / h, s2 = s * s, s3 = s2 * s;
+  return (2 * s3 - 3 * s2 + 1) * C[i] + (s3 - 2 * s2 + s) * h * M[i] + (-2 * s3 + 3 * s2) * C[i + 1] + (s3 - s2) * h * M[i + 1];
+}
+export function clipRate(mv, e) { return (clipTime(mv, e + 1e-3) - clipTime(mv, Math.max(0, e - 1e-3))) / (e + 1e-3 - Math.max(0, e - 1e-3)); }
+
 function moveFrom(k, clip, g, start, end, speed, extra) {
-  return {
-    ...BASE, ...extra, clip, start, speed,
-    t: [Math.max(0.01, (g.t0 - start) / speed), Math.max(0.03, (g.t1 - g.t0) / speed), Math.max(0.05, (end - g.t1) / speed)],
-    arcs: g.parts.map((p) => ({ ...p, dt: (p.t0 - g.t0) / speed, dur: (p.t1 - p.t0) / speed })),
+  const ss = speed * SWING_K;
+  return makeWarp({
+    ...BASE, ...extra, clip, start, speed, seg: [start, g.t0, g.t1, end],
+    arcs: g.parts.map((p) => ({ ...p, dt: (p.t0 - g.t0) / ss, dur: (p.t1 - p.t0) / ss })),
     range: ((g.reach ?? 1.4) * k + 1.2) / S,
     cone: THREE.MathUtils.clamp(Math.max(Math.abs(g.h0 ?? -1), Math.abs(g.h1 ?? 1)) + 0.35, 0.7, Math.PI),
-  };
+  }, start);
 }
 
-function chain(k, meta, clip, { speed = 1, minPeak, limit = 99, lead = 0.2, tail = 0.45, base = {}, last = {} } = {}) {
-  const gs = groups(meta, clip, { minPeak, limit });
+function chain(k, meta, clip, { speed = 1, minPeak, gap, limit = 99, lead = 0.2, tail = 0.45, base = {}, last = {} } = {}) {
+  const gs = groups(meta, clip, { minPeak, gap, limit });
   const dur = meta.clips[clip]?.dur ?? 1;
   return gs.map((g, i) => {
     const start = i === 0 ? Math.max(0, g.t0 - lead) : (gs[i - 1].t1 + g.t0) / 2;
@@ -346,7 +438,9 @@ export function buildSkinCombos(body) {
   const reg = (prefix, list) => list.map((m, i) => { const id = `${prefix}${i}`; MOVES[id] = m; return id; });
   const has = (c) => !!meta.clips[c];
   const K = { dmg: 14 };
-  const ground = has('combo1') ? reg('sg', chain(k, meta, 'combo1', { speed: 0.95, minPeak: 30, limit: 4, base: K, last: { dmg: 24, hitstop: 0.1, finisher: true } })) : [];
+  // every cut of the katana combo clip, back to back: picking only its two biggest swings left a second-long dead
+  // windup between hits while the clip played through the cuts it skipped
+  const ground = has('combo1') ? reg('sg', chain(k, meta, 'combo1', { speed: 1, minPeak: 22, gap: 0.12, limit: 5, base: K, last: { dmg: 26, hitstop: 0.1, finisher: true } })) : [];
   return {
     ground: ground.length ? ground : ['k1', 'k2', 'k3', 'k4'],
     heavy: has('charge') ? reg('sh', [single(k, meta, 'charge', { speed: 1.05, extra: { dmg: 32, hitstop: 0.12, shock: 3.2, heavy: true } })])[0] : 'kH',

@@ -6,7 +6,7 @@ import {
   evalMove, arcBasis, MOVES, COMBO, ease, GUARD_HAND,
 } from './swordAnim.js';
 import { SwordFx } from './swordFx.js';
-import { SkinnedMechBody, buildSkinCombos } from './mechSkin.js';
+import { SkinnedMechBody, buildSkinCombos, makeWarp, clipTime, clipRate } from './mechSkin.js';
 import { skinned } from '../assets.js';
 
 // Surface mech controller: run / sprint, jump + double jump (thruster burst), rocket flight (hold jump in the air
@@ -40,7 +40,7 @@ export class MechPilot {
     this.fx = new SwordFx(scene);
     // the skinned Darklord frame with mocap clips when mech_player.glb loaded, else the procedural knight frame
     const asset = skinned('mech_player');
-    this.body = asset ? new SkinnedMechBody(scene, this.fx, asset) : new MechBody(scene, this.fx, { scheme: 'player' });
+    this.body = asset ? new SkinnedMechBody(scene, this.fx, asset, { saber: true }) : new MechBody(scene, this.fx, { scheme: 'player' });
     this.skin = asset ? this.body : null;
     this.C = asset ? buildSkinCombos(this.body) : COMBO;
     this.rig = this.body.rig;
@@ -104,9 +104,10 @@ export class MechPilot {
     const dt = rawDt * this.timeScale;
     this.hurtT = Math.max(0, this.hurtT - rawDt);
     if (this.iframe > 0) this.iframe -= dt;
-    // the blade only exists while fighting: it ignites on an attack or guard, stays lit briefly so combos chain
+    // the blade only exists while fighting: it ignites on an attack or guard and stays lit just long enough for the
+    // next press of a combo, then retracts (the saber suit keeps it out for less time than the procedural frame)
     const fighting = this.state === 'attack' || this.state === 'spin' || this.guarding;
-    if (fighting) this.swordHold = 1.4; else this.swordHold = Math.max(0, this.swordHold - rawDt);
+    if (fighting) this.swordHold = this.skin ? 0.55 : 1.4; else this.swordHold = Math.max(0, this.swordHold - rawDt);
 
     const g = (this.g = ctx.g);
     const jumpEdge = I.jump && !this.jumpHeld;
@@ -508,25 +509,34 @@ export class MechPilot {
     }
     const fromDodge = this.state === 'dodge';
     this.attackTarget = this.pickTarget(ctx, fromDodge ? 12 * S : 9 * S);
-    this.move = MOVES[id];
+    const prev = this.state === 'attack' ? this.move : null, prevE = this.moveE;
+    // each attack gets its own copy: a chained clip move re-times its windup from where the last one left off
+    this.move = { ...MOVES[id], t: MOVES[id].t.slice() };
     this.moveE = 0;
     this.moveHit.clear();
     this.slashed = false;
     this.shocked = false;
     this.state = 'attack';
     this.comboGap = 0;
-    this.playMoveClip();
+    this.playMoveClip(prev, prevE);
   }
 
-  // skinned body: start (or continue) the move's clip at its segment start
-  playMoveClip() {
-    const mv = this.move;
+  // skinned body: start the move's clip, or flow straight into it. Combo hits are consecutive slices of one clip, so
+  // a hit chained from the last one's follow-through just keeps scrubbing the same clip from where it is, at the
+  // speed it was moving: no crossfade, no snap back to the segment start. Anything else blends in over ~0.1 s.
+  playMoveClip(prev, prevE) {
+    const mv = this.move, B = this.skin;
     this.arcI = 0;
-    if (!this.skin || mv?.path !== 'clip') return;
-    const a = this.skin.actions[mv.clip];
-    const continuing = this.skin.current === a && Math.abs(a.time - mv.start) < 0.12;
-    if (!continuing) this.skin.play(mv.clip, { time: mv.start, fade: 0.07, speed: mv.speed, restart: true });
-    else a.timeScale = mv.speed;
+    if (!B || mv?.path !== 'clip') return;
+    if (prev?.warp && prev.clip === mv.clip && B.currentName === mv.clip) {
+      const c = clipTime(prev, prevE);
+      if (c > mv.seg[0] - 0.45 && c < mv.seg[1] - 0.04) {
+        makeWarp(mv, c, clipRate(prev, prevE));
+        return;
+      }
+    }
+    makeWarp(mv, mv.seg[0]);
+    B.play(mv.clip, { time: mv.seg[0], fade: prev ? 0.09 : 0.12, speed: 0, restart: true });
   }
 
   // slash crescents along the clip's detected swing arcs (model space -> world)
@@ -570,10 +580,11 @@ export class MechPilot {
         // aerial attacks home in vertically too, so juggles connect
         if (mv.air && !mv.plunge) this.vel.y = clamp((t.pos.y - this.pos.y) * 3, -8, 8);
       }
-      const f = this.forward(_v);
-      this.vel.x = f.x * want; this.vel.z = f.z * want;
+      // step in like a kendo fumikomi: the push builds through the windup and peaks as the cut lands
+      const f = this.forward(_v), k = 1 - Math.exp(-(this.moveE < tw ? 14 : 24) * dt);
+      this.vel.x = lerp(this.vel.x, f.x * want, k); this.vel.z = lerp(this.vel.z, f.z * want, k);
     } else {
-      this.vel.x *= Math.exp(-dt * 12); this.vel.z *= Math.exp(-dt * 12);
+      this.vel.x *= Math.exp(-dt * 9); this.vel.z *= Math.exp(-dt * 9);
     }
     if (mv.path === 'clip') { if (s.phase !== 'wind') this.clipSlashes(); }
     else if (s.phase === 'swing' && !this.slashed) {
@@ -796,7 +807,8 @@ export class MechPilot {
     const cur = B.currentName;
     const done = !B.current || (B.current.loop === THREE.LoopOnce && B.current.time >= B.current.getClip().duration - 1e-3);
     if (st === 'attack') {
-      // the move's clip was started in startAttack
+      // the move's clip was started in startAttack; its time follows the move's warp curve
+      if (this.move?.warp && cur === this.move.clip) B.scrub(clipTime(this.move, this.moveE));
     } else if (st === 'spin') {
       if (enter) B.play('circle', { time: 0.25, fade: 0.05, speed: 2.1, restart: true });
     } else if (st === 'dodge') {
@@ -860,7 +872,8 @@ export class MechPilot {
     const want = thrustFor({ boost: this.boostK, climb: this.climb, burst, steer });
     if (st === 'dodge') { want.back = Math.max(want.back, 1.2); want.sh = Math.max(want.sh, 0.9); }
     const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'spin';
-    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lean: this.lean });
+    const lit = (st === 'attack' || st === 'spin' || this.swordHold > 0 || this.guardK > 0.3) && !REACT.has(st);
+    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean });
   }
 
   // sword low and forward at idle (run = 0), trailing behind while running (run = 1); w = arm IK weight
