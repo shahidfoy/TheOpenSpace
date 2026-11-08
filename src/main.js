@@ -14,6 +14,7 @@ import { LocalView } from './render/localView.js';
 import { MapView } from './render/mapView.js';
 import { SurfaceView, SURFACES } from './render/surfaceView.js';
 import { EarthView } from './render/earthView.js';
+import { ShipView } from './render/shipView.js';
 import { loadAssets } from './render/assets.js';
 import { setAnisotropy } from './render/materials.js';
 import { LensShader, SanitizeShader } from './render/post.js';
@@ -76,7 +77,8 @@ async function boot() {
   app.mapView = new MapView(app);
   app.surfaceView = new SurfaceView(app);
   app.earthView = new EarthView(app);
-  for (const sc of [app.localView.scene, app.mapView.scene, app.surfaceView.scene, app.earthView.scene]) {
+  app.shipView = new ShipView(app);
+  for (const sc of [app.localView.scene, app.mapView.scene, app.surfaceView.scene, app.earthView.scene, ...app.shipView.scenes]) {
     sc.environment = env;
     sc.environmentIntensity = 0.35;
   }
@@ -113,7 +115,7 @@ async function boot() {
       lens.uniforms.uAspect.value = w / h;
     }
     labels.setSize(w, h);
-    for (const cam of [app.localView.camera, app.mapView.camera, app.surfaceView.camera, app.earthView.camera]) { cam.aspect = w / h; cam.updateProjectionMatrix(); }
+    for (const cam of [app.localView.camera, app.mapView.camera, app.surfaceView.camera, app.earthView.camera, app.shipView.camera]) { cam.aspect = w / h; cam.updateProjectionMatrix(); }
   }
   function resize() {
     pr = Math.min(devicePixelRatio, QUALITY[app.quality].maxPR);
@@ -158,8 +160,16 @@ async function boot() {
   // running underneath, and PILOT brings you back to wherever you were flying.
   app.flight = 'local'; // 'local' (orbit / voyage), 'surface' or 'earth'
   app.resumePilot = () => app.setMode(app.flight);
+  // the mothership: dock the exosuit or ship close to the station and walk inside it
+  app.canEnterShip = () => app.mode === 'local' && app.localView.mode === 'base' && !!app.localView.craft
+    && app.localView.craft.position.length() < 45;
   app.setMode = (m) => {
     if (m === 'surface' && app.flight !== 'surface' && !app.canLand()) return;
+    if (m === 'ship' && app.mode !== 'ship') {
+      if (app.mode !== 'map' && !app.canEnterShip() && app.flight !== 'ship') return;
+      if (app.flight !== 'ship') { app.hud.flash(); app.shipView.enter(BODY[state.presence].base.toUpperCase()); }
+    }
+    if (app.flight === 'ship' && m !== 'ship' && m !== 'map') app.shipView.leave();
     if (m === 'earth' && app.flight !== 'earth') {
       if (!app.canDescend()) return;
       if (app.localView.cargoTotal()) app.localView.unload();
@@ -279,7 +289,7 @@ async function boot() {
     saveAcc += dt;
     if (saveAcc > 10) { saveAcc = 0; app.save(); }
 
-    const view = app.mode === 'local' ? app.localView : app.mode === 'surface' ? app.surfaceView : app.mode === 'earth' ? app.earthView : app.mapView;
+    const view = app.mode === 'local' ? app.localView : app.mode === 'surface' ? app.surfaceView : app.mode === 'earth' ? app.earthView : app.mode === 'ship' ? app.shipView : app.mapView;
     if (app.mode === 'map') {
       view.update(dt, S.simNow(state));
       // the atmospheric flight carries on while you look at the map (hands off the controls)

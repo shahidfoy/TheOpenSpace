@@ -9,6 +9,7 @@
     "preview": "vite preview --host"
   },
   "dependencies": {
+    "@pixiv/three-vrm": "^3.5.5",
     "satellite.js": "^5.0.0",
     "three": "^0.169.0"
   },

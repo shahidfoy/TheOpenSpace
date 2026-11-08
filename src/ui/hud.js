@@ -99,6 +99,7 @@ const TEMPLATE = `
   <div class="fuel" id="fuel"><span id="grav"></span><div class="bar"><i id="fuel-b"></i></div></div>
   <button class="land" id="land" data-act="land"></button>
   <button class="craft-swap" id="craft-swap" data-act="craft"></button>
+  <button class="enter-ship" id="enter-ship" data-act="enterShip" hidden></button>
   <button class="cam-view" id="cam-view" data-act="camView"></button>
   <button class="hangar-btn" id="hangar-btn" data-open="hangar"><small>FRAME</small>HANGAR</button>
   <div class="earthnav" id="earthnav"></div>
@@ -174,6 +175,7 @@ export class Hud {
     addEventListener('keydown', (e) => {
       if (e.repeat || this.panel || e.target.closest?.('input,textarea')) return;
       if (e.code === 'KeyB') this.act('craft');
+      else if (e.code === 'KeyG' && this.app.canEnterShip()) this.act('enterShip');
       else if (e.code === 'KeyC') this.act('camView');
     });
 
@@ -244,6 +246,7 @@ export class Hud {
         this.syncView();
         return;
       }
+      case 'enterShip': if (this.app.canEnterShip()) { this.close(); this.app.setMode('ship'); } return;
       case 'craft': {
         const lv = this.app.localView, st = lv.swapState();
         if (!st || this.app.mode !== 'local') return;
@@ -339,6 +342,7 @@ export class Hud {
     const voyage = this.app.mode === 'local' && this.app.localView.mode === 'voyage';
     this.root.classList.toggle('mode-pilot', this.app.mode !== 'map');
     this.root.classList.toggle('mode-surface', this.app.mode === 'surface');
+    this.root.classList.toggle('mode-ship', this.app.mode === 'ship');
     this.root.classList.toggle('mode-map', this.app.mode === 'map');
     this.root.classList.toggle('mode-voyage', voyage);
     const earth = this.app.mode === 'earth';
@@ -416,7 +420,13 @@ export class Hud {
     if (this.app.mode === 'map' && this.app.mapView.view === 'cyber' && (this.cyAcc = (this.cyAcc || 0) + dt) > 2) { this.cyAcc = 0; this.$('legend').innerHTML = this.cyberLegend(); }
     this.syncView();
     if (this.app.mode === 'earth') this.updateEarth();
-    else if (this.app.mode !== 'map') this.updatePilot();
+    else if (this.app.mode !== 'map' && this.app.mode !== 'ship') this.updatePilot();
+    // inside the station's docking range: offer to go aboard the mothership
+    const es = this.$('enter-ship'), canEnter = this.app.canEnterShip();
+    if (es.hidden === canEnter) {
+      es.hidden = !canEnter;
+      if (canEnter) setHtml(es, `<small>DOCKING RANGE</small>⬢ ENTER ${BODY[s.presence].base.toUpperCase()}${isTouch() ? '' : ' <kbd>G</kbd>'}`);
+    }
     if (this.app.mode === 'surface') this.arenaHud.update(this.app.surfaceView, this.keyboard);
     else this.arenaHud.hide();
     if (s.won && !this.winShown) this.showWin();

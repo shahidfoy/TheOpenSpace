@@ -629,3 +629,34 @@ b, strong { font-weight: 600; }
   .ah-combo b { font-size: 34px; }
   .ah-combo em { font-size: 24px; }
 }
+
+/* ---------- mothership interior + training sim ---------- */
+.enter-ship { position: absolute; left: 12px; bottom: calc(var(--bot) + 410px); min-width: 170px; padding: 9px 13px; text-align: left; font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; font-weight: 700; color: #0a0e14; background: linear-gradient(90deg, var(--ice), #b8ecff); border: 1px solid var(--ice); clip-path: var(--cut); animation: swapGlow 1.6s ease-in-out infinite; }
+.enter-ship small { display: block; margin-bottom: 2px; font-size: 9px; color: rgba(10,14,22,0.7); letter-spacing: 0.16em; }
+.enter-ship kbd { display: inline-block; margin-left: 6px; padding: 0 5px; font-family: var(--mono); font-size: 10.5px; background: rgba(10,14,22,0.2); border: 1px solid rgba(10,14,22,0.5); border-radius: 3px; }
+.enter-ship[hidden] { display: none; }
+.mode-ship .pilot-hud { display: none; }
+.mode-ship .controls .btns > :not(.up) { display: none !important; }
+.mode-ship .controls .hint { display: none; }
+.ship-hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; font-family: var(--mono); color: var(--text); }
+.ship-hud[hidden] { display: none; }
+.sh-title { position: absolute; top: calc(var(--top) + 86px); left: 50%; transform: translateX(-50%); font-size: 13px; letter-spacing: 0.3em; color: var(--ice); text-shadow: 0 0 12px rgba(127,212,255,0.6); white-space: nowrap; }
+.sh-help { position: absolute; bottom: calc(var(--bot) + 84px); left: 50%; transform: translateX(-50%); font-size: 11px; letter-spacing: 0.1em; color: var(--dim); white-space: nowrap; }
+.sh-prompt { position: absolute; bottom: calc(var(--bot) + 120px); left: 50%; transform: translateX(-50%); pointer-events: auto; padding: 10px 16px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.1em; color: #0a0e14; font-weight: 700; background: linear-gradient(90deg, var(--ice), #c4f0ff); border: 0; clip-path: var(--cut); cursor: pointer; }
+.sh-prompt kbd { padding: 0 6px; margin-right: 6px; background: rgba(10,14,22,0.2); border: 1px solid rgba(10,14,22,0.5); border-radius: 3px; }
+.sh-prompt[hidden], .sh-load[hidden], .sh-ward[hidden] { display: none; }
+.sh-load { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 12px 18px; font-size: 13px; letter-spacing: 0.2em; color: var(--ice); background: rgba(6,8,12,0.75); border: 1px solid var(--line-2); clip-path: var(--cut); }
+.sh-fade { position: absolute; inset: 0; background: #000; opacity: 0; transition: opacity 0.25s; }
+.sh-fade.on { opacity: 1; }
+.sh-ward { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: auto; background: rgba(4,6,10,0.55); backdrop-filter: blur(6px); }
+.sh-card-wrap { padding: 18px; background: var(--glass-2); border: 1px solid var(--line-2); clip-path: var(--cut-l); text-align: center; max-width: calc(100vw - 32px); }
+.sh-card-wrap h3 { margin: 0 0 14px; font-size: 14px; letter-spacing: 0.3em; color: var(--ice); font-weight: 600; }
+.sh-cards { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.sh-card { width: 150px; padding: 8px; display: grid; gap: 4px; font-family: var(--mono); color: var(--text); background: rgba(10,14,22,0.7); border: 1px solid var(--line-2); clip-path: var(--cut); cursor: pointer; text-align: left; }
+.sh-card img { width: 100%; aspect-ratio: 1; object-fit: cover; background: #1a2230; }
+.sh-card b { font-size: 13px; letter-spacing: 0.08em; }
+.sh-card small { font-size: 10px; color: var(--dim); }
+.sh-card.on { border-color: var(--ice); box-shadow: inset 0 0 0 1px var(--ice); }
+.sh-card:hover { background: rgba(127,212,255,0.12); }
+.sh-close { margin-top: 14px; padding: 8px 18px; font-family: var(--mono); letter-spacing: 0.2em; color: var(--text); background: transparent; border: 1px solid var(--line-2); cursor: pointer; }
+@media (max-width: 640px) { .sh-help { display: none; } .sh-card { width: 120px; } .enter-ship { bottom: 230px; } }
