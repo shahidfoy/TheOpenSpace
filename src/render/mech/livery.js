@@ -14,13 +14,17 @@ export const FINISHES = {
 
 export const LIVERIES = {
   knight: { name: 'Knight', a: '#86938b', b: '#5d6a63', c: '#b5452f', frame: '#2b3035', glow: '#4ef0d8', blade: '#52d8ff', finish: 'satin', metals: '' },
+  titan: { name: 'Titan', a: '#b81a1e', b: '#d4a030', c: '#d4a030', frame: '#1c1820', glow: '#60e8ff', blade: '#60e8ff', finish: 'gloss', metals: 'bc' },
+  federation: { name: 'Federation', a: '#e8ecf0', b: '#1a3a8c', c: '#c41a1e', frame: '#2a2e36', glow: '#60e8ff', blade: '#60d0ff', finish: 'gloss', metals: '' },
   crimson: { name: 'Crimson Gold', a: '#9a1414', b: '#d6a43a', c: '#d6a43a', frame: '#2a2326', glow: '#a8ecff', blade: '#8fe6ff', finish: 'gloss', metals: 'bc' },
   tricolor: { name: 'Tricolor', a: '#e9ecef', b: '#1b3c9c', c: '#c81e1e', frame: '#2c3036', glow: '#63ffb8', blade: '#ff5aa8', finish: 'gloss', metals: '' },
   paladin: { name: 'Paladin', a: '#eef0f2', b: '#c9a24a', c: '#1f4fa8', frame: '#30343a', glow: '#8fd8ff', blade: '#ffd27a', finish: 'gloss', metals: 'b' },
+  striker: { name: 'Striker', a: '#d4d8de', b: '#4a5058', c: '#c41a1e', frame: '#1c2028', glow: '#60e8ff', blade: '#40d8ff', finish: 'gloss', metals: '' },
   shadow: { name: 'Shadow', a: '#25282c', b: '#17191c', c: '#ff6a1a', frame: '#101114', glow: '#ff7a2a', blade: '#ff6a2a', finish: 'matte', metals: '' },
   azure: { name: 'Azure', a: '#1d4fa0', b: '#e6eaee', c: '#e0b040', frame: '#262a30', glow: '#7fe0ff', blade: '#7fe0ff', finish: 'gloss', metals: 'c' },
   desert: { name: 'Desert', a: '#b59a6c', b: '#5e5a3c', c: '#2b2d24', frame: '#2a2a26', glow: '#ffc35a', blade: '#ffd27a', finish: 'matte', metals: '' },
   chrome: { name: 'Chrome', a: '#c9ced4', b: '#8a9099', c: '#e04a1c', frame: '#26292e', glow: '#ff9a4a', blade: '#7fe0ff', finish: 'metal', metals: 'abc' },
+  unicorn: { name: 'Unicorn', a: '#f0f2f4', b: '#e8eaee', c: '#30a8e0', frame: '#2c3038', glow: '#40ff90', blade: '#40ffb0', finish: 'gloss', metals: 'ab' },
 };
 export const ZONES = [['a', 'Main'], ['b', 'Second'], ['c', 'Trim'], ['frame', 'Frame'], ['glow', 'Lights'], ['blade', 'Blade edge']];
 
@@ -28,9 +32,9 @@ const KEY = 'openspace_livery';
 export function loadLivery() {
   try {
     const v = JSON.parse(localStorage.getItem(KEY) || 'null');
-    if (v && v.a) return { ...LIVERIES.knight, ...v };
+    if (v && v.a) return { ...LIVERIES.striker, ...v };
   } catch {}
-  return { ...LIVERIES.knight };
+  return { ...LIVERIES.striker };
 }
 export function saveLivery(l) {
   try { localStorage.setItem(KEY, JSON.stringify(l)); } catch {}

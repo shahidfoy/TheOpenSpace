@@ -52,13 +52,13 @@ let MATS = null;
 function mats(fresh = false) {
   if (MATS && !fresh) return MATS;
   const M = {
-    armor: rimMat({ color: 0xa9b8b1, rough: 0.46, metal: 0.35, rimStr: 0.2 }),
-    armor2: rimMat({ color: 0x737f7d, rough: 0.5, metal: 0.4, rimStr: 0.16 }),
-    frame: rimMat({ color: 0x23272b, rough: 0.55, metal: 0.6, rimStr: 0.12 }),
-    red: rimMat({ color: 0xa8302a, rough: 0.4, metal: 0.3, rimStr: 0.2 }),
-    gold: rimMat({ color: 0xc39a4c, rough: 0.25, metal: 0.95, rimStr: 0.3 }),
-    eye: glow(0x5effc0, 1.8),
-    vent: glow(0x58e6ff, 1.4),
+    armor: rimMat({ color: 0xd4d8de, rough: 0.38, metal: 0.3, rimStr: 0.24 }),
+    armor2: rimMat({ color: 0x4a5058, rough: 0.45, metal: 0.5, rimStr: 0.18 }),
+    frame: rimMat({ color: 0x1c2028, rough: 0.5, metal: 0.65, rimStr: 0.14 }),
+    red: rimMat({ color: 0xc41a1e, rough: 0.35, metal: 0.3, rimStr: 0.22 }),
+    gold: rimMat({ color: 0xd4a030, rough: 0.22, metal: 0.95, rimStr: 0.32 }),
+    eye: glow(0x60e8ff, 2.2),
+    vent: glow(0x60d8ff, 1.6),
   };
   if (!fresh) MATS = M;
   return M;
@@ -149,7 +149,7 @@ export function makeThruster(anchor, group, k = THRUST_SIZE[group] ?? 1, color =
 // player: white / blue / red car paint (clear-coated physical). Enemies: cheaper standard materials, dark armour
 // with hot glows, like hostile frames; their glows double as the attack-telegraph colour.
 export const SCHEMES = {
-  player: { white: 0xe4e8ec, grey: 0x5b626b, blue: 0x153d9a, red: 0xb3161a, glow: 0x58e8ff, eye: 0x5cffc4, nozzle: 0x3f7fd0, plume: 0x6fb8ff, blade: 0x38d4ff, tag: ['07', 'KF-07', 'KNIGHT FRAME', 'LUNAR OPS'] },
+  player: { white: 0xdce0e6, grey: 0x4a5260, blue: 0x1a3a8c, red: 0xc41a1e, glow: 0x60e8ff, eye: 0x60e8ff, nozzle: 0x4080d8, plume: 0x70c0ff, blade: 0x40d8ff, tag: ['07', 'XF-07', 'STRIKER FRAME', 'LUNAR OPS'] },
   lancer: { white: 0x2e3238, grey: 0x16181c, blue: 0x0d0e11, red: 0xd0181f, glow: 0xff3a1c, eye: 0xff2a14, nozzle: 0xd0401c, plume: 0xff7a3a, blade: 0xff3b2a, tag: ['13', 'RX-13', 'RAIDER FRAME', 'HOSTILE'] },
   gunner: { white: 0x4a4f45, grey: 0x1c1f1b, blue: 0x2a2d24, red: 0xe07a12, glow: 0xff9a1f, eye: 0xffb030, nozzle: 0xd07a1c, plume: 0xffa84a, blade: 0xffa030, tag: ['21', 'GX-21', 'LANCE GUNNER', 'HOSTILE'] },
   brute: { white: 0x9e1218, grey: 0x1a1214, blue: 0x120c0d, red: 0x1c1c20, glow: 0xffd23a, eye: 0xffe14a, nozzle: 0xffb020, plume: 0xffc05a, blade: 0xffcc33, tag: ['66', 'BX-66', 'BRUTE FRAME', 'HOSTILE'] },
@@ -386,102 +386,110 @@ export function buildMechRig({ scheme = 'player', lod = false } = {}) {
     mk('an' + s, J['kn' + s], 0, -SH, 0);
   }
 
-  // ---- pelvis + skirt armour ----
-  add(J.hips, H(0.26, 0.13, 0.19, { bx: 0.8 }), M.frame, 0, -0.02, 0);
-  add(J.hips, H(0.3, 0.05, 0.21, { c: 0.01 }), M.armor2, 0, 0.045, 0);
-  add(J.hips, H(0.09, 0.15, 0.05, { bx: 0.55, c: 0.012 }), M.armor, 0, -0.07, 0.105, 0.1);
-  add(J.hips, H(0.05, 0.02, 0.012, { c: 0.004 }), M.red, 0, -0.02, 0.135, 0.1);
+  // ---- pelvis + angular skirt armour ----
+  add(J.hips, H(0.28, 0.12, 0.18, { bx: 0.85 }), M.frame, 0, -0.02, 0);
+  add(J.hips, H(0.32, 0.04, 0.2, { c: 0.008 }), M.armor2, 0, 0.04, 0);
+  add(J.hips, H(0.12, 0.17, 0.04, { bx: 0.4, tx: 0.9, c: 0.01 }), M.armor, 0, -0.08, 0.11, 0.15);
+  add(J.hips, H(0.06, 0.015, 0.01, { c: 0.003 }), M.gold, 0, -0.02, 0.14, 0.1);
   for (const sx of [1, -1]) {
-    add(J.hips, H(0.13, 0.17, 0.028, { bx: 1.15, c: 0.008 }), M.armor, sx * 0.1, -0.08, 0.1, 0.22, sx * 0.3, sx * 0.06);
-    add(J.hips, H(0.032, 0.22, 0.2, { bz: 1.15, c: 0.01 }), M.armor, sx * 0.175, -0.07, 0, 0, 0, sx * 0.2);
-    add(J.hips, H(0.008, 0.14, 0.12, { c: 0.003 }), M.armor2, sx * 0.195, -0.06, 0, 0, 0, sx * 0.2);
+    add(J.hips, H(0.14, 0.19, 0.025, { bx: 1.2, c: 0.006 }), M.armor, sx * 0.11, -0.09, 0.09, 0.2, sx * 0.35, sx * 0.08);
+    add(J.hips, H(0.035, 0.24, 0.18, { bz: 1.1, c: 0.008 }), M.armor, sx * 0.18, -0.07, 0, 0, 0, sx * 0.22);
+    add(J.hips, H(0.006, 0.12, 0.1, { c: 0.002 }), M.red, sx * 0.2, -0.06, 0, 0, 0, sx * 0.22);
   }
-  add(J.hips, H(0.22, 0.16, 0.03, { bx: 1.1, c: 0.01 }), M.armor, 0, -0.07, -0.11, -0.2);
+  add(J.hips, H(0.24, 0.18, 0.025, { bx: 1.1, c: 0.008 }), M.armor, 0, -0.08, -0.11, -0.2);
 
   // ---- waist ----
-  add(J.spine, H(0.19, 0.17, 0.15, { tx: 1.15 }), M.frame, 0, 0.07, 0);
-  add(J.spine, H(0.15, 0.1, 0.04, { c: 0.01 }), M.armor2, 0, 0.06, 0.07, -0.05);
-  for (const sx of [1, -1]) add(J.spine, H(0.05, 0.12, 0.13, { c: 0.01 }), M.armor2, sx * 0.1, 0.07, 0);
+  add(J.spine, H(0.2, 0.16, 0.15, { tx: 1.18 }), M.frame, 0, 0.07, 0);
+  add(J.spine, H(0.14, 0.09, 0.035, { c: 0.008 }), M.armor2, 0, 0.06, 0.07, -0.05);
+  add(J.spine, H(0.06, 0.02, 0.08, { c: 0.004 }), M.gold, 0, 0.04, 0.06);
+  for (const sx of [1, -1]) add(J.spine, H(0.045, 0.11, 0.12, { c: 0.008 }), M.armor2, sx * 0.1, 0.07, 0);
 
-  // ---- chest ----
-  add(J.chest, H(0.34, 0.25, 0.22, { bx: 0.75 }), M.frame, 0, 0.1, 0);
-  add(J.chest, H(0.47, 0.18, 0.28, { bx: 0.76, bz: 0.9, c: 0.022 }), M.armor, 0, 0.16, 0.01);
+  // ---- chest: arc reactor + angular Gundam vents ----
+  add(J.chest, H(0.32, 0.24, 0.22, { bx: 0.7 }), M.frame, 0, 0.1, 0);
+  add(J.chest, H(0.46, 0.17, 0.26, { bx: 0.72, bz: 0.88, c: 0.02 }), M.armor, 0, 0.16, 0.01);
+  add(J.chest, new THREE.TorusGeometry(0.04, 0.012, 8, 16), M.eye, 0, 0.14, 0.155, Math.PI / 2);
+  add(J.chest, H(0.025, 0.025, 0.008, { c: 0.004 }), M.vent, 0, 0.14, 0.16);
   for (const sx of [1, -1]) {
-    add(J.chest, H(0.15, 0.13, 0.05, { bx: 0.7, c: 0.012 }), M.armor, sx * 0.085, 0.12, 0.135, -0.1, sx * 0.35);
-    add(J.chest, H(0.06, 0.035, 0.02, { c: 0.005 }), M.frame, sx * 0.1, 0.05, 0.12, 0, sx * 0.3);
-    add(J.chest, H(0.045, 0.01, 0.01, { c: 0.002 }), M.vent, sx * 0.1, 0.05, 0.132, 0, sx * 0.3);
-    add(J.chest, H(0.08, 0.09, 0.13, { tx: 0.6, c: 0.01 }), M.armor, sx * 0.12, 0.28, 0.0, 0, 0, sx * -0.35);   // collar flaps
+    add(J.chest, H(0.12, 0.1, 0.04, { bx: 0.6, c: 0.01 }), M.armor, sx * 0.1, 0.12, 0.13, -0.1, sx * 0.3);
+    add(J.chest, H(0.04, 0.04, 0.015, { c: 0.004 }), M.frame, sx * 0.1, 0.06, 0.12, 0, sx * 0.3);
+    add(J.chest, H(0.035, 0.008, 0.01, { c: 0.002 }), M.vent, sx * 0.1, 0.065, 0.132, 0, sx * 0.3);
+    add(J.chest, H(0.035, 0.006, 0.01, { c: 0.002 }), M.vent, sx * 0.1, 0.048, 0.132, 0, sx * 0.3);
+    add(J.chest, H(0.07, 0.08, 0.12, { tx: 0.55, c: 0.008 }), M.armor, sx * 0.13, 0.28, 0.0, 0, 0, sx * -0.35);
   }
-  add(J.chest, H(0.07, 0.07, 0.03, { bx: 0.4, c: 0.01 }), M.red, 0, 0.15, 0.15, -0.1);
-  add(J.chest, H(0.2, 0.05, 0.18, { c: 0.01 }), M.armor2, 0, 0.255, -0.01);
-  // backpack + binders
-  add(J.chest, H(0.28, 0.25, 0.12, { tx: 1.05, c: 0.02 }), M.armor2, 0, 0.13, -0.165);
-  add(J.chest, H(0.1, 0.14, 0.04, { c: 0.01 }), M.frame, 0, 0.11, -0.235);
+  add(J.chest, H(0.18, 0.04, 0.16, { c: 0.008 }), M.armor2, 0, 0.255, -0.01);
+  // backpack: angular thruster unit with wing binders
+  add(J.chest, H(0.26, 0.24, 0.14, { tx: 1.08, c: 0.018 }), M.armor2, 0, 0.13, -0.17);
+  add(J.chest, H(0.08, 0.12, 0.04, { c: 0.008 }), M.frame, 0, 0.11, -0.24);
+  add(J.chest, H(0.05, 0.04, 0.02, { c: 0.005 }), M.vent, 0, 0.11, -0.26);
   const nozzles = [];
   for (const sx of [1, -1]) {
     const pivot = new THREE.Object3D();
-    pivot.position.set(sx * 0.12, 0.17, -0.22);
-    pivot.rotation.set(-0.45, 0, sx * -0.42, 'YXZ');
+    pivot.position.set(sx * 0.13, 0.17, -0.22);
+    pivot.rotation.set(-0.4, 0, sx * -0.4, 'YXZ');
     J.chest.add(pivot);
-    add(pivot, H(0.08, 0.46, 0.1, { tx: 0.55, tz: 0.7, c: 0.015 }), M.armor, 0, 0.2, 0);
-    add(pivot, H(0.09, 0.18, 0.06, { c: 0.012 }), M.armor2, sx * 0.012, 0.08, -0.04);
-    add(pivot, H(0.012, 0.3, 0.02, { c: 0.003 }), M.red, sx * 0.045, 0.24, 0.0);
-    add(pivot, H(0.07, 0.07, 0.08, { bx: 1.2, bz: 1.2, c: 0.01 }), M.frame, 0, -0.05, -0.01);
+    add(pivot, H(0.09, 0.5, 0.11, { tx: 0.5, tz: 0.65, c: 0.013 }), M.armor, 0, 0.22, 0);
+    add(pivot, H(0.1, 0.2, 0.065, { c: 0.01 }), M.armor2, sx * 0.012, 0.08, -0.04);
+    add(pivot, H(0.01, 0.34, 0.02, { c: 0.002 }), M.red, sx * 0.05, 0.26, 0.0);
+    add(pivot, H(0.075, 0.075, 0.09, { bx: 1.2, bz: 1.2, c: 0.01 }), M.frame, 0, -0.05, -0.01);
+    add(pivot, H(0.04, 0.02, 0.04, { c: 0.003 }), M.vent, 0, -0.06, -0.05);
     const n = new THREE.Object3D();
     n.position.set(0, -0.09, -0.01);
     pivot.add(n);
     nozzles.push(n);
   }
 
-  // ---- head ----
-  add(J.neck, new THREE.CylinderGeometry(0.045, 0.055, 0.1, 8), M.frame, 0, 0.02, 0);
-  add(J.head, H(0.13, 0.12, 0.15, { tx: 0.85, tz: 0.85, c: 0.018 }), M.armor, 0, 0.08, -0.005);
-  add(J.head, H(0.1, 0.06, 0.05, { bx: 0.6, c: 0.01 }), M.frame, 0, 0.045, 0.06);         // face mask
-  add(J.head, H(0.09, 0.02, 0.02, { c: 0.004 }), M.eye, 0, 0.085, 0.075);
-  add(J.head, H(0.07, 0.03, 0.06, { bx: 0.6, c: 0.008 }), M.armor2, 0, 0.025, 0.065);    // chin guard
-  add(J.head, H(0.024, 0.06, 0.2, { tz: 0.5, sz: 0.04, c: 0.006 }), M.armor, 0, 0.165, 0.03, -0.25);  // crest
-  add(J.head, H(0.03, 0.03, 0.06, { c: 0.006 }), M.red, 0, 0.145, 0.07, -0.2);
+  // ---- head: Gundam V-fin + Iron Man faceplate ----
+  add(J.neck, new THREE.CylinderGeometry(0.04, 0.05, 0.09, 8), M.frame, 0, 0.02, 0);
+  add(J.head, H(0.12, 0.11, 0.14, { tx: 0.82, tz: 0.84, c: 0.016 }), M.armor, 0, 0.08, -0.005);
+  add(J.head, H(0.09, 0.05, 0.04, { bx: 0.55, c: 0.008 }), M.frame, 0, 0.05, 0.065);
+  add(J.head, H(0.1, 0.015, 0.015, { c: 0.003 }), M.eye, 0, 0.082, 0.078);
+  add(J.head, H(0.06, 0.025, 0.05, { bx: 0.5, c: 0.006 }), M.armor2, 0, 0.028, 0.065);
+  add(J.head, H(0.025, 0.025, 0.015, { c: 0.004 }), M.vent, 0, 0.12, 0.08);
   for (const sx of [1, -1]) {
-    add(J.head, H(0.03, 0.08, 0.09, { tz: 0.6, c: 0.008 }), M.armor2, sx * 0.075, 0.08, -0.01);
-    add(J.head, H(0.012, 0.03, 0.12, { tz: 0.3, c: 0.003 }), M.armor, sx * 0.08, 0.13, -0.03, -0.4, sx * 0.25);  // ear fins
+    add(J.head, H(0.008, 0.06, 0.14, { tz: 0.15, sz: 0.06, c: 0.002 }), M.gold, sx * 0.035, 0.155, 0.04, -0.35, sx * 0.5);
+    add(J.head, H(0.025, 0.07, 0.08, { tz: 0.55, c: 0.006 }), M.armor2, sx * 0.07, 0.075, -0.01);
+    add(J.head, H(0.008, 0.02, 0.06, { c: 0.002 }), M.vent, sx * 0.075, 0.06, 0.02);
   }
 
-  // ---- arms ----
+  // ---- arms: angular pauldrons + repulsor gauntlets ----
   for (const [s, sx] of [['L', 1], ['R', -1]]) {
     const sh = J['sh' + s], el = J['el' + s], ha = J['ha' + s];
-    add(sh, new THREE.SphereGeometry(0.06, 10, 8), M.frame);
-    add(sh, H(0.22, 0.2, 0.26, { tx: 0.85, c: 0.024 }), M.armor, sx * 0.07, 0.045, 0, 0, 0, sx * -0.12);
-    add(sh, H(0.24, 0.04, 0.28, { c: 0.01 }), M.armor2, sx * 0.07, 0.16, 0, 0, 0, sx * -0.22);
-    add(sh, H(0.035, 0.24, 0.25, { bz: 0.8, c: 0.01 }), M.armor, sx * 0.19, -0.01, 0, 0, 0, sx * 0.12);
-    add(sh, H(0.008, 0.05, 0.18, { c: 0.002 }), M.red, sx * 0.21, 0.05, 0, 0, 0, sx * 0.12);
-    add(sh, H(0.08, UA, 0.08, { c: 0.01 }), M.frame, 0, -UA / 2, 0);
-    add(sh, H(0.1, 0.13, 0.1, { c: 0.015 }), M.armor2, 0, -0.19, 0);
-    add(el, new THREE.SphereGeometry(0.052, 10, 8), M.frame);
-    add(el, H(0.12, 0.2, 0.13, { bx: 0.85, bz: 0.85, c: 0.018 }), M.armor, 0, -0.13, 0.005);
-    add(el, H(0.13, 0.04, 0.14, { c: 0.01 }), M.armor2, 0, -0.245, 0.005);
-    add(ha, H(0.075, 0.085, 0.085, { c: 0.012 }), M.frame, 0, -0.045, 0.012);
-    add(ha, H(0.08, 0.045, 0.06, { c: 0.008 }), M.armor2, 0, -0.065, 0.04);
+    add(sh, new THREE.SphereGeometry(0.055, 10, 8), M.frame);
+    add(sh, H(0.24, 0.18, 0.28, { tx: 0.8, c: 0.022 }), M.armor, sx * 0.07, 0.04, 0, 0, 0, sx * -0.1);
+    add(sh, H(0.26, 0.035, 0.3, { c: 0.008 }), M.red, sx * 0.07, 0.15, 0, 0, 0, sx * -0.2);
+    add(sh, H(0.03, 0.22, 0.26, { bz: 0.75, c: 0.008 }), M.armor, sx * 0.2, -0.01, 0, 0, 0, sx * 0.12);
+    add(sh, H(0.006, 0.04, 0.16, { c: 0.002 }), M.gold, sx * 0.215, 0.05, 0, 0, 0, sx * 0.12);
+    add(sh, H(0.075, UA, 0.075, { c: 0.008 }), M.frame, 0, -UA / 2, 0);
+    add(sh, H(0.095, 0.12, 0.095, { c: 0.012 }), M.armor2, 0, -0.19, 0);
+    add(el, new THREE.SphereGeometry(0.05, 10, 8), M.frame);
+    add(el, H(0.13, 0.2, 0.14, { bx: 0.82, bz: 0.82, c: 0.016 }), M.armor, 0, -0.13, 0.005);
+    add(el, H(0.14, 0.035, 0.15, { c: 0.008 }), M.armor2, 0, -0.245, 0.005);
+    add(ha, H(0.07, 0.08, 0.08, { c: 0.01 }), M.frame, 0, -0.045, 0.012);
+    add(ha, H(0.035, 0.015, 0.04, { c: 0.004 }), M.vent, 0, -0.09, 0.04);
+    add(ha, H(0.075, 0.04, 0.055, { c: 0.006 }), M.armor2, 0, -0.065, 0.035);
   }
 
-  // ---- legs ----
+  // ---- legs: streamlined thighs + angular knee guards ----
   for (const [s, sx] of [['L', 1], ['R', -1]]) {
     const th = J['th' + s], kn = J['kn' + s], an = J['an' + s];
-    add(th, new THREE.SphereGeometry(0.065, 10, 8), M.frame);
-    add(th, H(0.11, TH, 0.12, { bx: 0.85, c: 0.015 }), M.frame, 0, -TH / 2, 0);
-    add(th, H(0.17, 0.28, 0.09, { bx: 0.85, c: 0.015 }), M.armor, 0, -0.2, 0.055, -0.03);
-    add(th, H(0.03, 0.2, 0.13, { c: 0.01 }), M.armor2, sx * 0.07, -0.22, 0.0);
-    add(kn, new THREE.SphereGeometry(0.06, 10, 8), M.frame);
-    add(kn, H(0.13, 0.15, 0.1, { tx: 0.6, tz: 0.7, c: 0.02 }), M.armor, 0, 0.01, 0.075, -0.25);
-    add(kn, H(0.03, 0.05, 0.02, { c: 0.005 }), M.red, 0, -0.02, 0.13, -0.25);
-    add(kn, H(0.2, 0.37, 0.22, { bx: 0.78, bz: 0.8, sz: -0.015, c: 0.026 }), M.armor, 0, -0.23, -0.008);
-    add(kn, H(0.07, 0.28, 0.04, { c: 0.01 }), M.armor2, 0, -0.23, 0.108);
-    add(kn, H(0.13, 0.16, 0.06, { c: 0.012 }), M.armor2, 0, -0.27, -0.12, 0.12);
-    add(kn, H(0.08, 0.02, 0.012, { c: 0.003 }), M.vent, 0, -0.33, -0.152, 0.12);
-    add(kn, H(0.17, 0.07, 0.18, { c: 0.012 }), M.armor2, 0, -0.415, 0);
-    add(an, new THREE.SphereGeometry(0.05, 10, 8), M.frame);
-    add(an, H(0.17, 0.08, 0.33, { tx: 0.85, tz: 0.75, c: 0.015 }), M.armor, 0, -0.06, 0.06);
-    add(an, H(0.15, 0.05, 0.09, { tz: 0.6, c: 0.01 }), M.armor2, 0, -0.075, 0.25, 0.25);
-    add(an, H(0.12, 0.05, 0.07, { c: 0.01 }), M.frame, 0, -0.075, -0.1);
+    add(th, new THREE.SphereGeometry(0.06, 10, 8), M.frame);
+    add(th, H(0.1, TH, 0.11, { bx: 0.82, c: 0.013 }), M.frame, 0, -TH / 2, 0);
+    add(th, H(0.16, 0.26, 0.08, { bx: 0.82, c: 0.013 }), M.armor, 0, -0.2, 0.055, -0.03);
+    add(th, H(0.025, 0.18, 0.12, { c: 0.008 }), M.armor2, sx * 0.065, -0.22, 0.0);
+    add(th, H(0.004, 0.1, 0.08, { c: 0.002 }), M.gold, sx * 0.075, -0.2, 0.0);
+    add(kn, new THREE.SphereGeometry(0.055, 10, 8), M.frame);
+    add(kn, H(0.14, 0.16, 0.11, { tx: 0.55, tz: 0.65, c: 0.018 }), M.red, 0, 0.01, 0.08, -0.25);
+    add(kn, H(0.025, 0.04, 0.015, { c: 0.004 }), M.vent, 0, -0.02, 0.135, -0.25);
+    add(kn, H(0.19, 0.36, 0.21, { bx: 0.76, bz: 0.78, sz: -0.012, c: 0.024 }), M.armor, 0, -0.23, -0.008);
+    add(kn, H(0.065, 0.26, 0.035, { c: 0.008 }), M.armor2, 0, -0.23, 0.11);
+    add(kn, H(0.12, 0.15, 0.055, { c: 0.01 }), M.armor2, 0, -0.27, -0.12, 0.12);
+    add(kn, H(0.07, 0.02, 0.01, { c: 0.003 }), M.vent, 0, -0.33, -0.152, 0.12);
+    add(kn, H(0.16, 0.065, 0.17, { c: 0.01 }), M.armor2, 0, -0.415, 0);
+    add(an, new THREE.SphereGeometry(0.045, 10, 8), M.frame);
+    add(an, H(0.16, 0.075, 0.32, { tx: 0.82, tz: 0.72, c: 0.013 }), M.armor, 0, -0.06, 0.06);
+    add(an, H(0.14, 0.045, 0.08, { tz: 0.55, c: 0.008 }), M.gold, 0, -0.075, 0.24, 0.2);
+    add(an, H(0.11, 0.05, 0.07, { c: 0.008 }), M.frame, 0, -0.075, -0.1);
+    add(an, H(0.06, 0.01, 0.06, { c: 0.003 }), M.vent, 0, -0.11, 0.04);
   }
 
   // ---- sword socket ----
