@@ -1,15 +1,23 @@
 Playable characters (VRoid Hub; textures resized for the web, otherwise unmodified)
+Every model below allows modification, redistribution, commercial use and violent expression; credit is not required.
 
-Rachael (Vampire succubus) by Banjo Boi
-  https://hub.vroid.com/en/characters/6021412531852202647/models/1093884124607588575
-  Conditions: modification + redistribution allowed, commercial use allowed, credit not required, violent expression allowed
+Rachael by Banjo Boi  (https://hub.vroid.com/en/characters/6021412531852202647)
+  Goth            https://hub.vroid.com/en/characters/6021412531852202647/models/890820053711627425   (rachael.vrm)
+  Vampire Dress   https://hub.vroid.com/en/characters/6021412531852202647/models/3679427845364521740  (outfits/rachael_vampire.vrm)
+  Dream           https://hub.vroid.com/en/characters/6021412531852202647/models/3010372225331029242  (outfits/rachael_dream.vrm)
+  Christmas       https://hub.vroid.com/en/characters/6021412531852202647/models/5324114501373265115  (outfits/rachael_xmas.vrm)
 
-Ayame Remi / 文目 冷美 (ゆめかわ？純白ふわふわ水着ver.) by ゔぁんそこ
-  https://hub.vroid.com/en/characters/4309916781818836114/models/8067208466499209775
-  Conditions: modification + redistribution allowed, commercial use allowed, credit not required, violent expression allowed
+Ayame Remi / 文目 冷美 by ゔぁんそこ  (https://hub.vroid.com/en/characters/4309916781818836114)
+  Summer Swimsuit (ゆめかわ？純白ふわふわ水着ver.)  https://hub.vroid.com/en/characters/4309916781818836114/models/8067208466499209775  (remi.vrm)
+  Rider Suit (ライダースーツver.)                 https://hub.vroid.com/en/characters/4309916781818836114/models/3281562853600817199  (outfits/remi_rider.vrm)
+  Ninja (忍ver.)                                https://hub.vroid.com/en/characters/4309916781818836114/models/8727465052205561978  (outfits/remi_ninja.vrm)
+  Long Coat (ロングコートver.)                    https://hub.vroid.com/en/characters/4309916781818836114/models/4647953087477832269  (outfits/remi_coat.vrm)
+  Black Cat (黒猫ver.)                           https://hub.vroid.com/en/characters/4309916781818836114/models/4902091827527701484  (outfits/remi_cat.vrm)
+  Black Dress (ちょっぴり大人風な黒ワンピースver.)   https://hub.vroid.com/en/characters/4309916781818836114/models/8090222322408788873  (outfits/remi_dress.vrm)
+  Hoodie (普段着（パーカー）ver.)                 https://hub.vroid.com/en/characters/4309916781818836114/models/2516210660871954033  (outfits/remi_hoodie.vrm)
+  Yukata (浴衣ver.)                              https://hub.vroid.com/en/characters/4309916781818836114/models/4379838462620645523  (outfits/remi_yukata.vrm)
 
 "emo" (shown in game as Kuro) by Em0 MFXXX
-  https://hub.vroid.com/en/characters/6863584576599604529/models/3401553006779611336
-  Conditions: modification + redistribution allowed, commercial use allowed, credit not required, violent expression allowed
+  https://hub.vroid.com/en/characters/6863584576599604529/models/3401553006779611336  (emo.vrm)
 
 Animations: Mixamo (Adobe), retargeted at runtime onto the VRM humanoid.

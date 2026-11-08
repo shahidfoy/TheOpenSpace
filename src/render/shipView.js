@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { VrmChar, CHARACTERS } from './chars/vrmChar.js';
+import { VrmChar, CHARACTERS, SWATCHES, applyColours } from './chars/vrmChar.js';
 import { Parkour } from './chars/parkour.js';
 import { MechPilot } from './mech/mechPilot.js';
 import { S as MECH_S } from './mech/mechRig.js';
@@ -14,7 +14,7 @@ import { gridTexture, floorTexture, deckTexture, wallTexture, hexStoneTextures, 
 // Training sim: a holographic gray-box course for parkour, plus a mech yard with training dummies where you can
 // take the NEXORION mech out.
 
-const CHAR_KEY = 'openspace_char', MECH_KEY = 'openspace_sim_mech';
+const CHAR_KEY = 'openspace_char', MECH_KEY = 'openspace_sim_mech', LOOK_KEY = 'openspace_look';
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
 const _size = new THREE.Vector2();
 // deck-frame basis around NADIR (about 52° off straight down, toward the hangar windows and the bridge's front glass)
@@ -88,6 +88,7 @@ export class ShipView {
     this.char = null; this.ctrl = null; this.loading = null;
     this.mech = null; this.mechActive = false;
     this.simMech = store.get(MECH_KEY) === '1';
+    try { this.looks = JSON.parse(store.get(LOOK_KEY) || '{}') || {}; } catch { this.looks = {}; }
     this.helm = false;
     this.time = 0;
     this.hex = hexStoneTextures();
@@ -205,6 +206,7 @@ export class ShipView {
     const ring = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.04, 8, 48), pink);
     ring.rotation.x = Math.PI / 2; ring.position.set(PX, 0.32, PZ); S.add(ring);
     this.wardrobeRing = ring;
+    this.pedestal = new THREE.Vector3(PX, 0.3, PZ);
     const wl = label('WARDROBE', 'choose your character', '#ff9edb'); wl.position.set(PX, 3.4, PZ); S.add(wl);
     A.collider(PX - 1.3, 0, PZ - 1.3, 2.6, 0.3, 2.6);
     A.interact.push({ pos: new THREE.Vector3(PX, 0, PZ), r: 2.8, text: 'Change character', act: 'wardrobe' });
@@ -420,15 +422,25 @@ export class ShipView {
     if (area === this.sim && this.simMech) this.startMech();
   }
 
+  look(id) { return (this.looks[id] ||= { outfit: null, cloth: null, hair: null }); }
+  saveLooks() { store.set(LOOK_KEY, JSON.stringify(this.looks)); }
+
+  // load (or switch to) a character in its saved outfit and colours
   async ensureChar(id = null) {
     id = id || store.get(CHAR_KEY) || CHARACTERS[0].id;
     const def = CHARACTERS.find((c) => c.id === id) || CHARACTERS[0];
-    if (this.char?.def.id === def.id || this.loading === def.id) return;
-    this.loading = def.id;
+    const look = this.look(def.id);
+    const outfit = def.outfits.find((o) => o.id === look.outfit) || def.outfits[0];
+    const key = `${def.id}:${outfit.id}`;
+    if (this.char?.key === key) { applyColours(this.char.vrm, look); return; }
+    if (this.loading === key) return;
+    this.loading = key;
     this.$load.hidden = false; this.$load.textContent = `LOADING ${def.name.toUpperCase()}…`;
     try {
-      const c = await VrmChar.load(def, (k) => { this.$load.textContent = `LOADING ${def.name.toUpperCase()} · ${Math.round(k * 100)}%`; });
-      if (this.loading !== def.id) { c.dispose(); return; }
+      const c = await VrmChar.load(def, outfit, (k) => { this.$load.textContent = `LOADING ${def.name.toUpperCase()} · ${Math.round(k * 100)}%`; });
+      if (this.loading !== key) { c.dispose(); return; }
+      c.key = key;
+      applyColours(c.vrm, this.look(def.id));
       const keep = this.ctrl ? { pos: this.ctrl.pos.clone(), yaw: this.ctrl.yaw } : null;
       this.char?.dispose();
       this.char = c;
@@ -525,7 +537,13 @@ export class ShipView {
       <button class="sh-prompt" hidden></button>
       <div class="sh-load" hidden></div>
       <div class="sh-fade"></div>
-      <div class="sh-ward" hidden><div class="sh-card-wrap"><h3>WARDROBE</h3><div class="sh-cards"></div><button class="sh-close">CLOSE</button></div></div>`;
+      <div class="sh-ward" hidden><div class="sh-card-wrap"><h3>WARDROBE</h3>
+        <div class="sh-sec">CHARACTER</div><div class="sh-cards sh-chars"></div>
+        <div class="sh-look"><div class="sh-sec">OUTFIT</div><div class="sh-cards sh-outfits"></div>
+        <div class="sh-sec">OUTFIT COLOUR</div><div class="sh-sw" data-k="cloth"></div>
+        <div class="sh-sec">HAIR COLOUR</div><div class="sh-sw" data-k="hair"></div></div>
+        <div class="sh-mechnote" hidden>The NEXORION is piloted in the training sim's mech yard.</div>
+        <button class="sh-close">DONE</button></div></div>`;
     document.body.appendChild(el);
     this.hud = el;
     this.$title = el.querySelector('.sh-title');
@@ -535,21 +553,38 @@ export class ShipView {
     this.$fade = el.querySelector('.sh-fade');
     this.$ward = el.querySelector('.sh-ward');
     this.$btns = el.querySelector('.sh-btns');
-    el.querySelector('.sh-cards').innerHTML = CHARACTERS.map((c) => `
+    el.querySelector('.sh-chars').innerHTML = CHARACTERS.map((c) => `
       <button class="sh-card" data-id="${c.id}"><img src="/characters/${c.thumb}" alt=""><b>${c.name}</b><small>${c.blurb}</small></button>`).join('') + `
-      <button class="sh-card mech" data-id="mech"><div class="sh-mech-pic"><span>MECH</span></div><b>NEXORION</b><small>Training sim only · sword combat</small></button>`;
-    el.querySelector('.sh-cards').addEventListener('click', (e) => {
+      <button class="sh-card mech" data-id="mech"><div class="sh-mech-pic"><span>MECH</span></div><b>NEXORION</b><small>Training sim only</small></button>`;
+    const swatches = SWATCHES.map((h) => `<button class="sw${h ? '' : ' orig'}" data-c="${h || ''}" style="${h ? `background:${h}` : ''}" title="${h || 'Original'}"></button>`).join('');
+    el.querySelectorAll('.sh-sw').forEach((d) => (d.innerHTML = swatches));
+    el.querySelector('.sh-chars').addEventListener('click', (e) => {
       const b = e.target.closest('.sh-card');
       if (!b) return;
-      this.closeWardrobe();
       if (b.dataset.id === 'mech') {
         this.simMech = true; store.set(MECH_KEY, '1');
         this.app.hud?.toast('You\'ll pilot the NEXORION in the training sim · or board it at the MECH BAY there', 'good');
       } else {
         this.simMech = false; store.set(MECH_KEY, '0');
+        this.wardSel = b.dataset.id;
         this.ensureChar(b.dataset.id);
       }
+      this.renderWardrobe();
     });
+    el.querySelector('.sh-outfits').addEventListener('click', (e) => {
+      const b = e.target.closest('.sh-card');
+      if (!b || !this.wardSel) return;
+      this.look(this.wardSel).outfit = b.dataset.id; this.saveLooks();
+      this.ensureChar(this.wardSel);
+      this.renderWardrobe();
+    });
+    el.querySelectorAll('.sh-sw').forEach((d) => d.addEventListener('click', (e) => {
+      const b = e.target.closest('.sw');
+      if (!b || !this.wardSel) return;
+      this.look(this.wardSel)[d.dataset.k] = b.dataset.c || null; this.saveLooks();
+      if (this.char?.def.id === this.wardSel) applyColours(this.char.vrm, this.look(this.wardSel));
+      this.renderWardrobe();
+    }));
     el.querySelector('.sh-close').addEventListener('click', () => this.closeWardrobe());
     this.$prompt.addEventListener('click', () => { if (this.near) this.act(this.near.act); });
     this.$btns.addEventListener('click', (e) => { const b = e.target.closest('[data-act]'); if (b) this.act(b.dataset.act); });
@@ -570,10 +605,31 @@ export class ShipView {
   }
   openWardrobe() {
     this.$ward.hidden = false;
-    const cur = this.simMech ? 'mech' : this.char?.def.id;
-    this.$ward.querySelectorAll('.sh-card').forEach((b) => b.classList.toggle('on', b.dataset.id === cur));
+    this.wardSel = this.char?.def.id || CHARACTERS[0].id;
+    // step onto the pedestal, facing the camera, for a preview beside the panel
+    if (this.ctrl && this.area === this.deck) { this.ctrl.spawn(this.pedestal, Math.PI / 2); this.snapCam = true; }
+    this.renderWardrobe();
   }
-  closeWardrobe() { this.$ward.hidden = true; }
+  closeWardrobe() {
+    if (this.$ward.hidden) return;
+    this.$ward.hidden = true;
+    this.camYaw = Math.PI / 2; this.camPitch = 0.22; this.snapCam = true;
+  }
+  renderWardrobe() {
+    const W = this.$ward, mech = this.simMech;
+    W.querySelectorAll('.sh-chars .sh-card').forEach((b) => b.classList.toggle('on', mech ? b.dataset.id === 'mech' : b.dataset.id === this.wardSel));
+    W.querySelector('.sh-look').hidden = mech;
+    W.querySelector('.sh-mechnote').hidden = !mech;
+    if (mech) return;
+    const def = CHARACTERS.find((c) => c.id === this.wardSel) || CHARACTERS[0], look = this.look(def.id);
+    const cur = look.outfit || def.outfits[0].id;
+    W.querySelector('.sh-outfits').innerHTML = def.outfits.map((o) => `
+      <button class="sh-card sm${o.id === cur ? ' on' : ''}" data-id="${o.id}"><img src="/characters/${o.thumb}" alt=""><b>${o.name}</b></button>`).join('');
+    for (const d of W.querySelectorAll('.sh-sw')) {
+      const v = look[d.dataset.k] || '';
+      d.querySelectorAll('.sw').forEach((b) => b.classList.toggle('on', b.dataset.c === v));
+    }
+  }
 
   // ---------------- the view out of the windows ----------------
   renderSpace() {
@@ -635,14 +691,20 @@ export class ShipView {
       P.update(dt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
       // interaction prompt
       let near = null;
-      for (const it of this.area.interact) if (_v.copy(it.pos).setY(P.pos.y).distanceTo(P.pos) < it.r && Math.abs(P.pos.y - it.pos.y) < 2) near = it;
+      if (this.$ward.hidden) for (const it of this.area.interact) if (_v.copy(it.pos).setY(P.pos.y).distanceTo(P.pos) < it.r && Math.abs(P.pos.y - it.pos.y) < 2) near = it;
       if (near !== this.near) {
         this.near = near;
         this.$prompt.hidden = !near;
         if (near) this.$prompt.innerHTML = `<kbd>E</kbd> ${near.text}`;
       }
       if (near && I.dodge) this.act(near.act);
-      this.chaseCam(dt, _v.copy(P.pos).add(_v2.set(0, P.H * 0.88, 0)), this.camDist, true);
+      if (!this.$ward.hidden && this.area === this.deck) {
+        // wardrobe preview: face-on, framed to the left of the panel
+        this.camYaw = Math.PI / 2; this.camPitch = 0.1;
+        const head = _v.copy(P.pos).add(_v2.set(0, P.H * 0.62, 0));
+        head.addScaledVector(_v3.set(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw)), innerWidth > 700 ? 0.75 : 0);
+        this.chaseCam(dt, head, 3.4, true);
+      } else this.chaseCam(dt, _v.copy(P.pos).add(_v2.set(0, P.H * 0.88, 0)), this.camDist, true);
     }
 
     const zone = this.area.zoneTitle ? this.area.zoneTitle(P.pos) : this.area.title;
