@@ -4,11 +4,12 @@ import { MOVES } from './swordAnim.js';
 import { applyLivery, loadLivery } from './livery.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
-// The skinned player mech: "JSDF MECHA" by Kussa (Sketchfab, CC-BY 4.0), re-rigged as one rigidly skinned mesh with
-// a long sword, animated with katana-pack / Mixamo / Noir clips retargeted by blender/build_mech_player.py. Same
-// interface as MechBody (solve, recoil, hitFlash, setTint, bladeWorld, setVisible) so MechPilot drives either; the
-// pilot picks clips (play) instead of pose targets. mech_player.json holds every clip's detected blade swings (time
-// window, arc plane, reach), which become the hit windows and slash crescents of the clip moves built below.
+// Skinned mechs built by blender/build_mech_player.py: the player suit ("NEXORION // The Neon Vanguard" by Atahan3D)
+// and the arena enemies ("JSDF MECHA" by Kussa), both Sketchfab CC-BY 4.0, with a long sword and katana-pack / Mixamo
+// / Noir clips retargeted onto them. Same interface as MechBody (solve, recoil, hitFlash, setTint, bladeWorld,
+// setVisible) so MechPilot drives either; the pilot picks clips (play) instead of pose targets. The json beside each
+// glb holds every clip's detected blade swings (time window, arc plane, reach), which become the hit windows and
+// slash crescents of the clip moves built below.
 
 export const MECH_H = 1.95 * S;    // in-game height (binders included), a touch over the procedural frame
 
@@ -17,18 +18,35 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quater
 const _pv = new THREE.Vector3(), _pv2 = new THREE.Vector3();
 const _white = new THREE.Color(1, 1, 1);
 
-// Paint: the Blender export carries plain material names; the look is decided here and by the livery (livery.js):
-// three armour paint zones over a gunmetal frame, lamps, and a polished blade with a glowing edge inlay.
-// Returns [zone, material].
-function paint(name) {
-  const armour = () => new THREE.MeshPhysicalMaterial({ color: 0x86938b, metalness: 0.3, roughness: 0.48, clearcoat: 0.35, clearcoatRoughness: 0.3 });
+// The suit's glow is painted cyan into its colour texture (the trim lines) and its emissive texture (the crystals).
+// Both become one mask (cyan-ness of the colour, brightness of the emissive), the colour under it goes black, and the
+// livery's light colour (emissive) lights it, so the lines take any hue.
+const LUMA_GLOW = `float glowMask = smoothstep( 0.06, 0.3, min( diffuseColor.g, diffuseColor.b ) - diffuseColor.r ) * 0.8;
+#ifdef USE_EMISSIVEMAP
+  vec4 emissiveColor = texture2D( emissiveMap, vEmissiveMapUv );
+  glowMask = max( glowMask, smoothstep( 0.04, 0.6, dot( emissiveColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ) );
+#endif
+  diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.03 ), min( 1.0, glowMask * 1.25 ) );
+  totalEmissiveRadiance *= vec3( glowMask );`;
+
+// Paint: the JSDF export carries plain material names; the look is decided here and by the livery (livery.js):
+// three armour paint zones over a gunmetal frame, lamps, and a polished blade with a glowing edge inlay. The suit
+// keeps its textures; only its glow lines follow the livery. Returns [zone, material].
+function paint(name, src) {
+  if (/^suit/.test(name)) {
+    src.emissiveIntensity = 2.2;
+    src.envMapIntensity = 1.4;
+    src.userData.lumaGlow = true;
+    return ['glow', src];
+  }
+  const armour = () => new THREE.MeshPhysicalMaterial({ color: 0xd4d8de, metalness: 0.3, roughness: 0.38, clearcoat: 0.45, clearcoatRoughness: 0.2 });
   const z = /^paint_([abc])/.exec(name);
   if (z) return [z[1], armour()];
   if (/^Main_Color/.test(name)) return ['a', armour()];
-  if (/^Secondary_Color/.test(name)) return ['frame', new THREE.MeshStandardMaterial({ color: 0x2b3035, metalness: 0.78, roughness: 0.42, envMapIntensity: 1.0 })];
-  if (/^Light/.test(name)) return ['glow', new THREE.MeshStandardMaterial({ color: 0x0b1416, emissive: 0x4ef0d8, emissiveIntensity: 2.2 })];
-  if (/^mech_blade_edge/.test(name)) return ['edge', new THREE.MeshStandardMaterial({ color: 0x0a1418, emissive: 0x52d8ff, emissiveIntensity: 3.2 })];
-  if (/^mech_blade/.test(name)) return ['blade', new THREE.MeshPhysicalMaterial({ color: 0xc8ced4, metalness: 1, roughness: 0.2, clearcoat: 0.4, envMapIntensity: 1.7 })];
+  if (/^Secondary_Color/.test(name)) return ['frame', new THREE.MeshStandardMaterial({ color: 0x1c2028, metalness: 0.82, roughness: 0.4, envMapIntensity: 1.2 })];
+  if (/^Light/.test(name)) return ['glow', new THREE.MeshStandardMaterial({ color: 0x081218, emissive: 0x60e8ff, emissiveIntensity: 2.8 })];
+  if (/^mech_blade_edge/.test(name)) return ['edge', new THREE.MeshStandardMaterial({ color: 0x081418, emissive: 0x40d8ff, emissiveIntensity: 3.6 })];
+  if (/^mech_blade/.test(name)) return ['blade', new THREE.MeshPhysicalMaterial({ color: 0xc8ced4, metalness: 1, roughness: 0.18, clearcoat: 0.5, envMapIntensity: 1.9 })];
   return [null, null];
 }
 
@@ -55,21 +73,22 @@ export class SkinnedMechBody {
       o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
       const src = o.material;
       if (!made.has(src)) {
-        const [zone, pm] = paint(src.name);
+        const [zone, pm] = paint(src.name, src);
         const m = pm || src;
         if (zone && !this.zone[zone]) this.zone[zone] = m;
         m.name = src.name;
         const rim = new THREE.Color(0xdfe8ff).multiplyScalar(0.22);
+        const luma = !!m.userData.lumaGlow;
         m.onBeforeCompile = (sh) => {
           sh.uniforms.rimColor = { value: rim };
           sh.uniforms.hitFlash = this.flashU;
           sh.fragmentShader = sh.fragmentShader
             .replace('#include <common>', '#include <common>\nuniform vec3 rimColor;\nuniform vec3 hitFlash;')
-            .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+            .replace('#include <emissivemap_fragment>', `${luma ? LUMA_GLOW : '#include <emissivemap_fragment>'}
               float rimF = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
               totalEmissiveRadiance += rimColor * pow(rimF, 3.2) + hitFlash;`);
         };
-        m.customProgramCacheKey = () => 'mechskin';
+        m.customProgramCacheKey = () => (luma ? 'mechskin-luma' : 'mechskin');
         made.set(src, m);
         this.mats.push(m);
       }
@@ -78,11 +97,12 @@ export class SkinnedMechBody {
 
     const bone = (re) => { let b = null; model.traverse((o) => { if (!b && o.isBone && re.test(o.name)) b = o; }); return b; };
     this.grip = model.getObjectByName(san('katana_grip'));
-    this.hips = bone(/^Hip_/);
-    this.chest = bone(/^Chest_/);
+    // JSDF bone names, else the suit's Mixamo-style names
+    this.hips = bone(/^(Hip_|Hips$)/);
+    this.chest = bone(/^(Chest_|Spine2$)/);
     this.spine = this.chest;                       // the run lean / recoil bend the whole torso
-    this.knee = { L: bone(/^Lower_leg\.?L/), R: bone(/^Lower_leg\.?R/) };
-    this.ankle = { L: bone(/^Upper_Foot\.?L/), R: bone(/^Upper_Foot\.?R/) };
+    this.knee = { L: bone(/^(Lower_leg\.?L|LeftLeg$)/), R: bone(/^(Lower_leg\.?R|RightLeg$)/) };
+    this.ankle = { L: bone(/^(Upper_Foot\.?L|LeftFoot$)/), R: bone(/^(Upper_Foot\.?R|RightFoot$)/) };
     this.blade = asset.meta.blade;
 
     // clips first: the raw rest stance faces backwards, so the thrusters are placed on the idle pose

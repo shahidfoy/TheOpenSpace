@@ -1,10 +1,17 @@
-"""Player mech: "JSDF MECHA" by Kussa (Sketchfab, CC-BY 4.0), re-rigged as one rigidly skinned mesh, armed with a
-long sword, and animated with the katana-pack, Mixamo and Noir sword clips retargeted onto its skeleton.
-Writes public/models/mech_player.glb + mech_player.json.
+"""Skinned mechs, armed with a long sword and animated with the katana-pack, Mixamo and Noir sword clips retargeted
+onto their skeletons. Two source models (--src):
+  nexorion  the player suit (default): "NEXORION // The Neon Vanguard" by Atahan3D (Sketchfab, CC-BY 4.0). One
+            watertight sculpt with no skeleton: a skeleton is placed from measured joint positions and every vertex is
+            weighted by distance to the bones of the body region it is surface-connected to (see nexorion_weights).
+  jsdf      the arena enemies (default with --lod): "JSDF MECHA" by Kussa (Sketchfab, CC-BY 4.0), rigidly re-skinned.
+Writes public/models/mech_player.glb + mech_player.json (mech_enemy.* with --lod).
 
-Run:  blender --background --factory-startup --python blender/build_mech_player.py -- [out.glb] [--clips=a,b] [--preview=dir]
-Assets come from MECH_ASSETS (default D:\\TAMAMO\\game-assets): mech/sketchfab/jsdf, mech/katana, mech/mixamo,
-noir/arena/anims.
+Run:  blender --background --factory-startup --python blender/build_mech_player.py -- [out.glb] [--src=nexorion|jsdf]
+      [--clips=a,b] [--preview=dir]
+Assets come from MECH_ASSETS (default D:\\TAMAMO\\game-assets): mech/sketchfab/{nexorion,jsdf}, mech/katana,
+mech/mixamo, noir/arena/anims.
+
+The JSDF build:
 
 The model: 187 hard-surface parts hung on a skeleton through empties. Its armature rest pose is meaningless (every
 part collapses onto the spear); only the posed stance is valid. So the stance becomes the rest: each part's posed
@@ -24,6 +31,7 @@ character facing +Z), from which the game builds hit windows and slash crescents
 the sword's length; both in model units.
 """
 import bpy, bmesh, sys, os, json, re, math
+import numpy as np
 from mathutils import Matrix, Vector
 
 ROOT = os.environ.get('MECH_ASSETS', r'D:\TAMAMO\game-assets')
@@ -31,13 +39,14 @@ MECH = os.path.join(ROOT, 'mech')
 KC = os.path.join(MECH, 'katana', 'In_Place')
 MX = os.path.join(MECH, 'mixamo')
 NA = os.path.join(ROOT, 'noir', 'arena', 'anims')
-SRC = os.path.join(MECH, 'sketchfab', 'jsdf', 'jsdf.glb')
 
 argv = sys.argv[sys.argv.index('--') + 1:] if '--' in sys.argv else []
 opt = {a.split('=')[0][2:]: (a.split('=', 1)[1] if '=' in a else True) for a in argv if a.startswith('--')}
 pos = [a for a in argv if not a.startswith('--')]
 # --lod: the arena enemies' build (30k triangles, only the clips the enemy AI plays) -> mech_enemy.glb
 LOD = 'lod' in opt
+SRC_KIND = str(opt.get('src', 'jsdf' if LOD else 'nexorion'))
+SRC = os.path.join(MECH, 'sketchfab', SRC_KIND, f'{SRC_KIND}.glb')
 OUT = os.path.abspath(pos[0] if pos else ('public/models/mech_enemy.glb' if LOD else 'public/models/mech_player.glb'))
 ONLY = [c for c in str(opt.get('clips', '')).split(',') if c and c != 'True']
 PREVIEW = opt.get('preview')
@@ -243,6 +252,190 @@ def paint_zones(parts, H):
 
 
 def prep_target():
+    return prep_nexorion() if SRC_KIND == 'nexorion' else prep_jsdf()
+
+
+# ---------------------------------------------------------------- NEXORION
+# Joint heads in the source model's units (1.9 tall, facing -Y, left = +X), measured from horizontal slices of the
+# mesh (limb cross-section centres) and its front / side silhouettes. Bone names follow Mixamo so resolve() maps them.
+NX_CORE = {'Hips': ((0, 0, 0.04), None), 'Spine1': ((0, 0, 0.22), 'Hips'), 'Spine2': ((0, -0.01, 0.42), 'Spine1'),
+           'Neck': ((0, 0, 0.68), 'Spine2'), 'Head': ((0, -0.01, 0.76), 'Neck')}
+NX_SIDE = {'Shoulder': ((0.05, -0.01, 0.62), 'Spine2'), 'Arm': ((0.27, -0.03, 0.59), 'Shoulder'),
+           'ForeArm': ((0.36, -0.03, 0.30), 'Arm'), 'Hand': ((0.385, -0.115, 0.125), 'ForeArm'),
+           'UpLeg': ((0.12, 0, -0.02), 'Hips'), 'Leg': ((0.20, -0.03, -0.40), 'UpLeg'),
+           'Foot': ((0.24, 0, -0.82), 'Leg'), 'ToeBase': ((0.25, -0.13, -0.92), 'Foot')}
+NX_CHILD = {'Hips': 'Spine1', 'Spine1': 'Spine2', 'Spine2': 'Neck', 'Neck': 'Head', 'Shoulder': 'Arm', 'Arm': 'ForeArm',
+            'ForeArm': 'Hand', 'UpLeg': 'Leg', 'Leg': 'Foot', 'Foot': 'ToeBase'}
+NX_TIP = {'Head': (0, -0.01, 0.93), 'Hand': (0.39, -0.15, -0.05), 'ToeBase': (0.25, -0.235, -0.93)}
+
+
+def nexorion_weights(ob, bones):
+    """Per-vertex skin weights in source units. Each vertex gets a body region and may only follow that region's
+    bones: an arm is everything surface-connected to its hand beyond the armpit plane (so the hip plates the hands
+    hang beside stay on the hips), legs are below the hip joints, the front tabard and the back crystal shards are
+    pinned to the hips, the rest is torso. Within a region the weights fall off with distance to each bone segment,
+    then get two passes of neighbour smoothing so the joints bend instead of tearing."""
+    me = ob.data
+    n = len(me.vertices)
+    co = np.empty(n * 3); me.vertices.foreach_get('co', co); co = co.reshape(-1, 3)
+    ev = np.empty(len(me.edges) * 2, np.int64); me.edges.foreach_get('vertices', ev); ev = ev.reshape(-1, 2)
+    names = list(bones)
+    ix = {b: i for i, b in enumerate(names)}
+    D = np.empty((n, len(names)))
+    for i, b in enumerate(names):
+        a, t = (np.array(v[:]) for v in bones[b])
+        ab = t - a
+        u = np.clip(((co - a) @ ab) / (ab @ ab), 0, 1)
+        D[:, i] = np.linalg.norm(co - (a + u[:, None] * ab), axis=1)
+    x, y, z = co.T
+    src, dst = np.concatenate([ev[:, 0], ev[:, 1]]), np.concatenate([ev[:, 1], ev[:, 0]])
+    o = np.argsort(src, kind='stable'); src, dst = src[o], dst[o]
+    start = np.searchsorted(src, np.arange(n + 1))
+
+    allow = np.zeros((n, len(names)), bool)
+    arm_any = np.zeros(n, bool)
+    for s, sg in (('Left', 1), ('Right', -1)):
+        ok = (sg * x > 0.235) & (z > -0.13)
+        seen = ok & (sg * x > 0.3) & (D[:, ix[s + 'Hand']] < 0.06)
+        stack = list(np.nonzero(seen)[0])
+        while stack:
+            v = stack.pop()
+            for w in dst[start[v]:start[v + 1]]:
+                if ok[w] and not seen[w]: seen[w] = True; stack.append(w)
+        for b in ('Shoulder', 'Arm', 'ForeArm', 'Hand'): allow[seen, ix[s + b]] = True
+        allow[seen, ix['Spine2']] = True
+        arm_any |= seen
+    rigid = ((np.abs(x) < 0.09) & (y < -0.12) & (z > -0.36) & (z < 0.05)) | ((y > 0.14) & (z > -0.6) & (z < 0.0))
+    rigid &= ~arm_any
+    leg = (z < -0.02) & ~arm_any & ~rigid
+    torso = ~arm_any & ~rigid & ~leg
+    for s, sg in (('Left', 1), ('Right', -1)):
+        m = leg & (sg * x >= 0)
+        for b in ('UpLeg', 'Leg', 'Foot', 'ToeBase'): allow[m, ix[s + b]] = True
+        allow[m, ix['Hips']] = True
+        allow[torso & (sg * x > 0.12), ix[s + 'Shoulder']] = True
+    for b in ('Hips', 'Spine1', 'Spine2', 'Neck', 'Head'): allow[torso, ix[b]] = True
+    allow[rigid, ix['Hips']] = True
+
+    Dm = np.where(allow, D, np.inf)
+    W = np.exp(-(Dm - Dm.min(axis=1, keepdims=True)) / 0.025)
+    for _ in range(2):
+        acc = np.zeros_like(W); cnt = np.zeros(n)
+        np.add.at(acc, ev[:, 0], W[ev[:, 1]]); np.add.at(acc, ev[:, 1], W[ev[:, 0]])
+        np.add.at(cnt, ev[:, 0], 1); np.add.at(cnt, ev[:, 1], 1)
+        W = 0.5 * W + 0.5 * acc / np.maximum(cnt, 1)[:, None]
+    W[rigid] = 0; W[rigid, ix['Hips']] = 1
+    keep = np.argsort(-W, axis=1)[:, :4]
+    Wk = np.take_along_axis(W, keep, axis=1)
+    Wk[Wk < 0.02] = 0
+    Wk /= Wk.sum(axis=1, keepdims=True)
+    groups = {b: ob.vertex_groups.new(name=b) for b in names}
+    for v in range(n):
+        for k in range(4):
+            if Wk[v, k] > 0: groups[names[keep[v, k]]].add([v], float(Wk[v, k]), 'REPLACE')
+    print(f'[weights] arms {arm_any.sum()} legs {leg.sum()} torso {torso.sum()} pinned {rigid.sum()} of {n}')
+
+
+def prep_nexorion():
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.context.scene.render.fps = FPS
+    bpy.ops.import_scene.gltf(filepath=SRC)
+    ms = [o for o in bpy.data.objects if o.type == 'MESH']
+    for o in ms:
+        mw = o.matrix_world.copy(); o.parent = None; o.matrix_world = mw
+    for o in [o for o in bpy.data.objects if o.type != 'MESH']: bpy.data.objects.remove(o, do_unlink=True)
+    bpy.ops.object.select_all(action='DESELECT')
+    for o in ms: o.select_set(True)
+    body = ms[0]
+    bpy.context.view_layer.objects.active = body
+    bpy.ops.object.join()
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    body.name = 'mech_body'
+    body.material_slots[0].material.name = 'suit'
+
+    # weld the glTF seam splits, then collapse the 1M-triangle sculpt to the budget (the normal map keeps the detail)
+    bm = bmesh.new(); bm.from_mesh(body.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-4)
+    bm.to_mesh(body.data); bm.free()
+    if body.data.has_custom_normals:
+        with bpy.context.temp_override(object=body, active_object=body):
+            bpy.ops.mesh.customdata_custom_splitnormals_clear()
+    f0 = sum(len(p.vertices) - 2 for p in body.data.polygons)
+    budget = 40000 if LOD else 120000
+    d = body.modifiers.new('collapse', 'DECIMATE'); d.decimate_type = 'COLLAPSE'; d.ratio = min(1.0, budget / f0)
+    d.use_collapse_triangulate = True
+    bpy.ops.object.modifier_apply(modifier='collapse')
+    body.data.shade_smooth()
+    print(f'[decimate] {f0} -> {sum(len(p.vertices) - 2 for p in body.data.polygons)} tris')
+
+    # skeleton
+    arm = bpy.data.objects.new('rig', bpy.data.armatures.new('rig'))
+    bpy.context.scene.collection.objects.link(arm)
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='EDIT')
+    heads, parents = {}, {}
+    for nm, (h, p) in NX_CORE.items(): heads[nm], parents[nm] = Vector(h), p
+    for s, sg in (('Left', 1), ('Right', -1)):
+        for nm, (h, p) in NX_SIDE.items():
+            heads[s + nm] = Vector((sg * h[0], h[1], h[2]))
+            parents[s + nm] = s + p if p in NX_SIDE else p
+    eb = arm.data.edit_bones
+    for nm, h in heads.items():
+        s = 'Left' if nm.startswith('Left') else 'Right' if nm.startswith('Right') else ''
+        base = nm[len(s):]
+        b = eb.new(nm); b.head = h
+        if base in NX_CHILD: b.tail = heads[s + NX_CHILD[base]]
+        else: t = NX_TIP[base]; b.tail = Vector(((-1 if s == 'Right' else 1) * t[0], t[1], t[2]))
+    for nm, p in parents.items():
+        if p: eb[nm].parent = eb[p]
+    bpy.ops.object.mode_set(mode='OBJECT')
+    nexorion_weights(body, {b.name: (b.head_local.copy(), b.tail_local.copy()) for b in arm.data.bones})
+
+    # stand it on the ground, centred on the hips, scaled to 6 units like the JSDF build
+    lo = min((body.matrix_world @ Vector(c)).z for c in body.bound_box)
+    hi = max((body.matrix_world @ Vector(c)).z for c in body.bound_box)
+    hips0 = heads['Hips']
+    fix = Matrix.Scale(6.0 / (hi - lo), 4) @ Matrix.Translation(Vector((-hips0.x, -hips0.y, -lo)))
+    for o in (arm, body): o.matrix_world = fix @ o.matrix_world
+    bpy.ops.object.select_all(action='DESELECT')
+    arm.select_set(True); body.select_set(True)
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    H = 6.0
+
+    # sword grip in the right palm: +Y along the blade, pointing forward out of the hanging hand
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = arm.data.edit_bones
+    hand = eb['RightHand']
+    fwd = (hand.tail - hand.head).normalized()
+    blade = Vector((0, -1, 0)); blade = (blade - fwd * blade.dot(fwd)).normalized()
+    grip = eb.new('katana_grip')
+    grip.head = hand.head.lerp(hand.tail, 0.45)
+    grip.tail = grip.head + blade * (hand.tail - hand.head).length * 0.5
+    grip.align_roll(fwd)
+    grip.parent = hand
+    grip.use_deform = False
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    sword, L = build_sword(arm, 'katana_grip', 'RightHand', H)
+    bpy.ops.object.select_all(action='DESELECT')
+    sword.select_set(True); bpy.context.view_layer.objects.active = sword
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    sword.vertex_groups.new(name='RightHand').add(list(range(len(sword.data.vertices))), 1.0, 'REPLACE')
+    body.select_set(True); bpy.context.view_layer.objects.active = body
+    bpy.ops.object.join()
+    mod = body.modifiers.new('Armature', 'ARMATURE'); mod.object = arm
+    body.parent = arm
+
+    meta = {'height': round(H, 3), 'blade': round(L, 3)}
+    print(f'[target] nexorion: {len(body.data.polygons)} faces, {len(arm.data.bones)} bones, mats {[s.material.name for s in body.material_slots]}, blade {L:.2f}')
+    return arm, meta
+
+
+# ---------------------------------------------------------------- JSDF
+def prep_jsdf():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scn = bpy.context.scene
     scn.render.fps = FPS
@@ -605,7 +798,7 @@ def export(tgt):
         filepath=OUT, export_format='GLB', use_selection=True,
         export_animations=True, export_animation_mode='NLA_TRACKS', export_force_sampling=True,
         export_optimize_animation_size=True, export_skins=True, export_def_bones=False,
-        export_yup=True, export_apply=False,
+        export_yup=True, export_apply=False, export_image_format='WEBP', export_image_quality=85,
         export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=6)
 
 
