@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { S, makeThruster } from './mechRig.js';
 import { MOVES } from './swordAnim.js';
 import { applyLivery, loadLivery } from './livery.js';
+import { SUIT_GLOW } from '../materials.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 // Skinned mechs built by blender/build_mech_player.py: the player suit ("NEXORION // The Neon Vanguard" by Atahan3D)
@@ -17,17 +18,6 @@ const san = (n) => THREE.PropertyBinding.sanitizeNodeName(n);
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 const _pv = new THREE.Vector3(), _pv2 = new THREE.Vector3();
 const _white = new THREE.Color(1, 1, 1);
-
-// The suit's glow is painted cyan into its colour texture (the trim lines) and its emissive texture (the crystals).
-// Both become one mask (cyan-ness of the colour, brightness of the emissive), the colour under it goes black, and the
-// livery's light colour (emissive) lights it, so the lines take any hue.
-const LUMA_GLOW = `float glowMask = smoothstep( 0.06, 0.3, min( diffuseColor.g, diffuseColor.b ) - diffuseColor.r ) * 0.8;
-#ifdef USE_EMISSIVEMAP
-  vec4 emissiveColor = texture2D( emissiveMap, vEmissiveMapUv );
-  glowMask = max( glowMask, smoothstep( 0.04, 0.6, dot( emissiveColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) ) ) );
-#endif
-  diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.03 ), min( 1.0, glowMask * 1.25 ) );
-  totalEmissiveRadiance *= vec3( glowMask );`;
 
 // Paint: the JSDF export carries plain material names; the look is decided here and by the livery (livery.js):
 // three armour paint zones over a gunmetal frame, lamps, and a polished blade with a glowing edge inlay. The suit
@@ -84,7 +74,7 @@ export class SkinnedMechBody {
           sh.uniforms.hitFlash = this.flashU;
           sh.fragmentShader = sh.fragmentShader
             .replace('#include <common>', '#include <common>\nuniform vec3 rimColor;\nuniform vec3 hitFlash;')
-            .replace('#include <emissivemap_fragment>', `${luma ? LUMA_GLOW : '#include <emissivemap_fragment>'}
+            .replace('#include <emissivemap_fragment>', `${luma ? SUIT_GLOW : '#include <emissivemap_fragment>'}
               float rimF = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
               totalEmissiveRadiance += rimColor * pow(rimF, 3.2) + hitFlash;`);
         };

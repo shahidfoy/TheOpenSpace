@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { glowSprite } from './shaders.js';
-import { instance, instanceChild, anchors, part } from './assets.js';
-import { PBR, ROCK_NORMAL } from './materials.js';
+import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { instance, instanceChild, anchors, part, skinned } from './assets.js';
+import { PBR, ROCK_NORMAL, SUIT_GLOW } from './materials.js';
 import { buildMechRig, applyPose } from './mech/mechRig.js';
 import { locoPose, newPose } from './mech/swordAnim.js';
+import { loadLivery } from './mech/livery.js';
 
 // Hero assets come from Blender GLBs (blender/build_models.py); the procedural
 // builders below are fallbacks with the same conventions (forward = +Z, up = +Y).
@@ -174,17 +176,124 @@ export function makeSkiff() {
   return g;
 }
 
-// ---------------- player craft: the Vesper flight frame or the Kestrel skiff ----------------
-export const CRAFTS = { frame: 'Vesper Exosuit', skiff: 'Kestrel Mk II' };
+// ---------------- player craft: the flight suit or the Kestrel skiff ----------------
+export const CRAFTS = { frame: 'Nexorion Suit', skiff: 'Kestrel Mk II' };
 export function makeCraft(type) {
   return (type === 'skiff' ? null : makeFrame()) || makeSkiff();
 }
 
-// The Vesper exosuit: a pressure suit over a real human body (Blender Studio base mesh), split into
+// The flight suit: the NEXORION armour (the player mech's rigged model) at human scale, else the Vesper.
+export function makeFrame() {
+  return makeSuitFrame() || makeVesper();
+}
+
+// NEXORION as a flight suit: a clone of mech_player.glb in its rest pose, scaled to SUIT_H. poseFrame drives proxy
+// parts whose rotations are in the suit frame (x left, y up, z forward); drive() turns each into its bone's own axes
+// (rest * restWorld^-1 * delta * restWorld). Jets: two back pods that swivel like MMU thrusters, the boot soles and
+// the palms, on anchors aligned to the suit frame at rest. The sword stays with the on-foot mech. Pivot at the hips.
+const SUIT_H = 2.1;
+const SUIT_BONES = { torso: 'Spine2', head: 'Head', arm_L: 'LeftArm', arm_R: 'RightArm', forearm_L: 'LeftForeArm', forearm_R: 'RightForeArm',
+  thigh_L: 'LeftUpLeg', thigh_R: 'RightUpLeg', shin_L: 'LeftLeg', shin_R: 'RightLeg', foot_L: 'LeftFoot', foot_R: 'RightFoot' };
+const _qe = new THREE.Quaternion();
+function makeSuitFrame() {
+  const asset = skinned('mech_player');
+  if (!asset) return null;
+  const m = SkeletonUtils.clone(asset.gltf.scene);
+  const bones = {};
+  let skel = null;
+  m.traverse((o) => { if (o.isBone) bones[o.name] = o; if (o.isSkinnedMesh) skel = o.skeleton; });
+  if (!skel || !Object.values(SUIT_BONES).every((n) => bones[n])) return null;
+  skel.pose();
+  m.updateMatrixWorld(true);
+  const k = SUIT_H / asset.meta.height;
+  const restWorld = (b) => new THREE.Quaternion().setFromRotationMatrix(b.matrixWorld);
+
+  // an Object3D on a bone, at a model-space point, axes along the suit frame at rest, sized in metres
+  const anchorOn = (name, x, y, z) => {
+    const b = bones[name], a = new THREE.Object3D();
+    a.position.set(x, y, z).applyMatrix4(b.matrixWorld.clone().invert());
+    a.quaternion.copy(restWorld(b)).invert();
+    a.scale.setScalar(1 / k);
+    b.add(a);
+    return a;
+  };
+  const ex = [], jets = { pods: [], boots: [], palms: [] };
+  const jet = (parent, grp, dir, r, len) => {
+    const e = new THREE.Object3D();
+    e.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), new THREE.Vector3(...dir).normalize());
+    const p = plume(r, len);
+    e.add(p);
+    parent.add(e);
+    ex.push(p);
+    jets[grp].push(p);
+  };
+  const parts = {}, drv = [];
+  for (const [key, name] of Object.entries(SUIT_BONES)) {
+    const b = bones[name], rw = restWorld(b);
+    parts[key] = new THREE.Object3D();
+    drv.push({ proxy: parts[key], bone: b, rest: b.quaternion.clone(), rw, rwInv: rw.clone().invert() });
+  }
+  let muzzle = null;
+  for (const [s, sg] of [['L', 1], ['R', -1]]) {
+    const side = s === 'L' ? 'Left' : 'Right';
+    jet(anchorOn(`${side}Foot`, sg * 0.76, 0.03, 0.19), 'boots', [0, -1, 0], 0.06, 1.2);
+    const palm = anchorOn(`${side}Hand`, sg * 1.23, 3.0, 0.44);
+    jet(palm, 'palms', [0, -1, 0.2], 0.035, 0.6);
+    if (s === 'R') muzzle = palm;
+    // pod pivot turned half round so poseFrame's booster angles (hover ~0.6, dash -1.3) swing the exhaust from
+    // straight down to straight back
+    const flip = anchorOn('Spine2', sg * 0.41, 4.42, -0.63);
+    flip.rotation.y = Math.PI;
+    parts[`booster_${s}`] = new THREE.Object3D();
+    flip.add(parts[`booster_${s}`]);
+    jet(parts[`booster_${s}`], 'pods', [0, -0.96, 0.27], 0.07, 1.1);
+  }
+
+  // looks: the suit's own textures with livery-coloured glow lines; the sword's primitives are hidden
+  const glow = new THREE.Color(loadLivery().glow), made = new Map();
+  m.traverse((o) => {
+    if (!o.isMesh) return;
+    o.frustumCulled = false; o.castShadow = true; o.receiveShadow = true;
+    const name = o.material.name || '';
+    if (/^(mech_blade|Secondary_Color)/.test(name)) { o.visible = false; return; }
+    if (!/^suit/.test(name)) return;
+    if (!made.has(o.material)) {
+      const mat = o.material.clone();
+      // dimmer than the on-foot mech: the chase camera sits behind the back crystals, against black space
+      mat.emissive.copy(glow); mat.emissiveIntensity = 0.9; mat.envMapIntensity = 1.4;
+      mat.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', SUIT_GLOW); };
+      mat.customProgramCacheKey = () => 'suitglow';
+      made.set(o.material, mat);
+    }
+    o.material = made.get(o.material);
+  });
+
+  const hip = bones.Hips.getWorldPosition(new THREE.Vector3()).y * k;
+  m.scale.setScalar(k);
+  m.position.y = -hip;
+  const g = new THREE.Group(), body = new THREE.Group();
+  body.add(m);
+  g.add(body);
+  g.userData.exhaust = ex;
+  g.userData.jets = jets;
+  g.userData.muzzle = muzzle;
+  g.userData.body = body;
+  g.userData.size = hip;
+  g.userData.parts = parts;
+  g.userData.drive = () => {
+    for (const d of drv) d.bone.quaternion.copy(d.rwInv).multiply(_qe.setFromEuler(d.proxy.rotation)).multiply(d.rw).premultiply(d.rest);
+  };
+  const l = new THREE.PointLight(0x9fd4ff, 0.5, 3, 2); // thruster glow on the legs, clear of the back
+  l.position.set(0, -0.6, -1.2);
+  g.add(l);
+  return g;
+}
+
+// The Vesper exosuit (fallback): a pressure suit over a real human body (Blender Studio base mesh), split into
 // rigid segments at the joints like a hard suit (pelvis > thigh > shin > foot, torso > head / arm >
 // forearm) plus MMU thruster pods that swing off its life-support pack. Jets fire from the pods, the
 // boot soles and the palms. Its pivot sits at the hips so it banks like a ship.
-export function makeFrame() {
+function makeVesper() {
   const m = instance('frame');
   if (!m) return null;
   const g = new THREE.Group(), body = new THREE.Group();
@@ -303,6 +412,7 @@ export function poseFrame(g, c, dt, time) {
   setJets(j.boots, C(0.4 * wh + 0.35 * C(c.lift, 0, 1) + 0.6 * wc * Math.max(0, c.input.y) + dash, 0.15, 1.1), time);
   setJets(j.palms, C(0.12 + Math.abs(push) * 0.7 + brake * 0.9 + dash * 0.6, 0, 1), time);
   setJets(j.pods, C(0.08 + 0.7 * cruise * Math.max(0, c.input.y) + dash + 0.4 * C(c.lift, 0, 1) * wh, 0, 1.1), time);
+  g.userData.drive?.();
 }
 
 // Procedural-fallback helpers: a surface of revolution along +Z from [radius, z] points, and a flat
