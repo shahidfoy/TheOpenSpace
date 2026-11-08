@@ -1,0 +1,15 @@
+Playable characters (VRoid Hub; textures resized for the web, otherwise unmodified)
+
+Rachael (Vampire succubus) by Banjo Boi
+  https://hub.vroid.com/en/characters/6021412531852202647/models/1093884124607588575
+  Conditions: modification + redistribution allowed, commercial use allowed, credit not required, violent expression allowed
+
+Ayame Remi / 文目 冷美 (ゆめかわ？純白ふわふわ水着ver.) by ゔぁんそこ
+  https://hub.vroid.com/en/characters/4309916781818836114/models/8067208466499209775
+  Conditions: modification + redistribution allowed, commercial use allowed, credit not required, violent expression allowed
+
+"emo" (shown in game as Kuro) by Em0 MFXXX
+  https://hub.vroid.com/en/characters/6863584576599604529/models/3401553006779611336
+  Conditions: modification + redistribution allowed, commercial use allowed, credit not required, violent expression allowed
+
+Animations: Mixamo (Adobe), retargeted at runtime onto the VRM humanoid.
