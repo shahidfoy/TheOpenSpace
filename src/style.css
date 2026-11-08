@@ -660,3 +660,10 @@ b, strong { font-weight: 600; }
 .sh-card:hover { background: rgba(127,212,255,0.12); }
 .sh-close { margin-top: 14px; padding: 8px 18px; font-family: var(--mono); letter-spacing: 0.2em; color: var(--text); background: transparent; border: 1px solid var(--line-2); cursor: pointer; }
 @media (max-width: 640px) { .sh-help { display: none; } .sh-card { width: 120px; } .enter-ship { bottom: 230px; } }
+.sh-btns { position: absolute; top: calc(var(--top) + 118px); right: 12px; display: grid; gap: 8px; pointer-events: auto; }
+.sh-btn { padding: 8px 12px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; color: var(--text); background: rgba(10,14,22,0.7); border: 1px solid var(--line-2); border-left: 2px solid var(--ice); clip-path: var(--cut); cursor: pointer; }
+.sh-btn[hidden] { display: none; }
+.sh-btn kbd { margin-left: 6px; padding: 0 5px; font-size: 10.5px; border: 1px solid var(--line-2); border-radius: 3px; }
+.sh-mech-pic { width: 100%; aspect-ratio: 1; display: grid; place-items: center; background: radial-gradient(circle at 50% 40%, #2a5a7a, #0a121c 70%); }
+.sh-mech-pic span { font-size: 22px; letter-spacing: 0.3em; color: var(--ice); text-shadow: 0 0 14px rgba(127,212,255,0.8); }
+.sh-card.mech.on { border-color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
