@@ -428,6 +428,7 @@ export class Hud {
       if (canEnter) setHtml(es, `<small>DOCKING RANGE</small>⬢ ENTER ${BODY[s.presence].base.toUpperCase()}${isTouch() ? '' : ' <kbd>G</kbd>'}`);
     }
     if (this.app.mode === 'surface') this.arenaHud.update(this.app.surfaceView, this.keyboard);
+    else if (this.app.mode === 'ship' && this.app.shipView.mechActive && this.app.shipView.arenaView) this.arenaHud.update(this.app.shipView.arenaView, this.keyboard);
     else this.arenaHud.hide();
     if (s.won && !this.winShown) this.showWin();
   }

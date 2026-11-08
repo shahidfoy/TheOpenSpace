@@ -687,3 +687,5 @@ b, strong { font-weight: 600; }
 .sh-sw .sw.on { border-color: #fff; box-shadow: 0 0 0 2px var(--ice); }
 .sh-ward .sh-close { display: block; margin: 16px auto 0; }
 @media (max-width: 700px) { .sh-ward { place-items: end center; padding: 0 0 70px; background: linear-gradient(180deg, transparent 45%, rgba(4,6,10,0.6)); } .sh-ward .sh-card-wrap { max-height: 52vh; } }
+.sh-impact { position: absolute; inset: 0; opacity: 0; pointer-events: none; mix-blend-mode: screen; }
+.sh-btn.spar { border-left-color: var(--amber); color: var(--amber); }

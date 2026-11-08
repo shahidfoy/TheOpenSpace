@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { VrmChar, CHARACTERS, SWATCHES, applyColours } from './chars/vrmChar.js';
 import { Parkour } from './chars/parkour.js';
 import { MechPilot } from './mech/mechPilot.js';
+import { SwordFx } from './mech/swordFx.js';
+import { HumanSword } from './chars/katana.js';
+import { LunarArena, ARENA } from './arena.js';
 import { S as MECH_S } from './mech/mechRig.js';
 import { gridTexture, floorTexture, deckTexture, wallTexture, hexStoneTextures, worldBox } from './chars/simTextures.js';
 
@@ -54,6 +57,17 @@ function screenTexture(seed, tint = '#58e4ff') {
   g.globalAlpha = 0.5; g.strokeRect(4, 4, 248, 120);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
   return t;
+}
+
+// Holographic sparring for the mech yard: the lunar arena's enemy waves (lancers, gunners, brutes with telegraphed
+// attacks, parries and dodges) projected by the sim. Nothing here pays out or counts toward your arena record.
+class HoloArena extends LunarArena {
+  pay() {}
+  end(reason) {
+    const st = this.view.app.state.stats, best = st.arenaBest;
+    super.end(reason);
+    st.arenaBest = best;
+  }
 }
 
 class Area {
@@ -355,9 +369,7 @@ export class ShipView {
     this.bayPos = new THREE.Vector3(-12, 0, -3.5);
     const YC = new THREE.Vector3(110, 0, 10);
     this.yard = { center: YC, R: 46 };
-    const yardRing = new THREE.Mesh(new THREE.RingGeometry(46, 47, 96), new THREE.MeshBasicMaterial({ color: 0xffa030, toneMapped: false, side: THREE.DoubleSide }));
-    yardRing.rotation.x = -Math.PI / 2; yardRing.position.set(YC.x, 0.03, YC.z); S.add(yardRing);
-    const yl = label('MECH YARD', 'training dummies', '#ffc46a'); yl.position.set(YC.x - 40, 8, YC.z); yl.scale.set(12, 3, 1); S.add(yl);
+    const yl = label('MECH YARD', 'dummies · Enter: holo sparring', '#ffc46a'); yl.position.set(YC.x - 40, 8, YC.z); yl.scale.set(12, 3, 1); S.add(yl);
     // giant blocks around the yard for scale (outside the fence)
     for (let i = 0; i < 10; i++) {
       const a = (i / 10) * Math.PI * 2 + 0.3, r = 58 + (i % 3) * 6, h = 14 + (i % 4) * 8;
@@ -378,6 +390,30 @@ export class ShipView {
       g.rotation.y = -a;
       S.add(g);
       this.dummies.push({ group: g, pos: g.position, radius: 2, height: 6, alive: true, hp: 60, maxHp: 60, wobble: 0, respawnAt: 0 });
+    }
+
+    // ===== dojo: human-scale dummies for katana practice =====
+    this.simFx = new SwordFx(S);
+    this.dojo = [];
+    const dl = label('DOJO', 'katana practice · J / click slash · K heavy'); dl.position.set(30, 3.2, -14); S.add(dl);
+    const dojoPad = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 0.05, 48), new THREE.MeshStandardMaterial({ color: 0x8c6a48, roughness: 0.85 }));
+    dojoPad.position.set(30, 0.025, -6); dojoPad.receiveShadow = true; S.add(dojoPad);
+    const wood = new THREE.MeshStandardMaterial({ color: 0xb08356, roughness: 0.8 });
+    const straw = new THREE.MeshStandardMaterial({ color: 0xd6c08a, roughness: 0.95 });
+    for (let i = 0; i < 5; i++) {
+      const a = -0.9 + i * 0.45, r = 4.5;
+      const g = new THREE.Group();
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 1.9, 10), wood); post.position.y = 0.95;
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.9, 12), straw); body.position.y = 1.25;
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 8), straw); head.position.y = 1.9;
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.1, 8), wood); arm.rotation.z = Math.PI / 2; arm.position.y = 1.45;
+      for (const m of [post, body, head, arm]) { m.castShadow = true; g.add(m); }
+      g.position.set(30 + Math.sin(a) * r, 0, -6 + Math.cos(a) * r);
+      g.rotation.y = a + Math.PI;
+      S.add(g);
+      const d = { group: g, pos: g.position, radius: 0.35, height: 2, alive: true, hp: 60, maxHp: 60, wobble: 0, respawnAt: 0, small: true };
+      d.hit = (dmg, dir) => this.damageDummy(d, dmg, this.simFx, dir);
+      this.dojo.push(d);
     }
 
     S.add(new THREE.HemisphereLight(0xcfe6ff, 0x8a8f96, 1.1));
@@ -445,6 +481,8 @@ export class ShipView {
       this.char?.dispose();
       this.char = c;
       this.ctrl = new Parkour(c);
+      if (this.sword) { this.sword.katana.removeFromParent(); this.sword.trail.mesh.visible = false; this.sword.trail.on = false; }
+      this.sword = c.katana ? new HumanSword(c, this.simFx) : null;
       this.area.scene.add(c.root);
       c.root.visible = !this.mechActive && !this.helm;
       if (keep) this.ctrl.spawn(keep.pos, keep.yaw); else this.ctrl.spawn(this.area.spawn.pos, this.area.spawn.yaw);
@@ -461,12 +499,27 @@ export class ShipView {
   startMech() {
     if (!this.mech) {
       this.mech = new MechPilot(this.sim.scene, { clone: true });
+      const A = (this.arena = new HoloArena({
+        scene: this.sim.scene, pilot: this.mech, terrain: { height: () => 0 }, app: this.app,
+        puff: () => {}, cfg: { g: 9.81 }, ctx: null,
+      }));
+      A.center.copy(this.yard.center); A.R = this.yard.R;
+      A.build(this.sim.scene, () => 0);
       this.mechCtx = {
-        g: 9.81, height: () => 0, bound: this.yard.R - 2, center: this.yard.center, camYaw: 0,
+        g: 9.81, height: () => 0, bound: this.yard.R - 2, center: A.center, camYaw: 0,
         targets: this.dummies, enemies: this.dummies,
-        onHit: (t, mv) => this.hitDummy(t, mv),
-        onDeath: () => {}, onSpend: () => {},
+        onHit: (t, mv, p) => {
+          const c = t.isEnemy ? A.hitEnemy(t, mv, p) : this.hitDummy(t, mv);
+          this.punch(mv.heavy || mv.finisher || mv.launch ? 1 : 0.35);
+          if (mv.finisher || mv.heavy) this.flash('#ffffff', 0.18);
+          return c;
+        },
+        onDeath: () => A.onPlayerDeath(),
+        onPerfect: () => { A.banner('PERFECT DODGE', 'witch time', 0.8); this.flash('#7fd4ff', 0.22); },
+        onSpend: () => {},
       };
+      A.view.ctx = this.mechCtx;
+      this.arenaView = { info: { arena: A.info }, pilot: this.mech, camera: this.camera, arena: A };
     }
     const M = this.mech;
     M.reset();
@@ -481,24 +534,35 @@ export class ShipView {
   }
   stopMech(placeHuman = true) {
     if (!this.mechActive) return;
+    if (this.arena?.fighting || this.arena?.state === 'down') this.arena.end('leave');
     this.mechActive = false;
+    this.camera.fov = 60; this.camera.updateProjectionMatrix();
     this.mech?.setVisible(false);
     if (this.char) this.char.root.visible = true;
     if (placeHuman && this.ctrl) { this.ctrl.spawn(this.bayPos, 0); this.camYaw = Math.PI; this.snapCam = true; }
     this.syncButtons();
   }
-  hitDummy(t, mv) {
-    t.hp -= mv.dmg || 10;
+  hitDummy(t, mv) { return this.damageDummy(t, mv.dmg || 10, this.mech.fx); }
+  // a dummy takes a hit: wobble away from the blow, burst when broken, come back after a few seconds
+  damageDummy(t, dmg, fx, dir = null) {
+    t.hp -= dmg;
     t.wobble = 1;
+    t.wobbleDir = dir ? Math.atan2(dir.x, dir.z) : 0;
     if (t.hp <= 0 && t.alive) {
       t.alive = false;
       t.group.visible = false;
       t.respawnAt = this.time + 4;
-      const fx = this.mech.fx;
-      fx.sparksAt(_v.copy(t.pos).setY(5), 70, { color: 0xffb040, speed: 24, life: 0.9, floor: 0 });
-      fx.ring(_v.copy(t.pos).setY(0.4), 9, { color: 0xffa030, life: 0.6 });
+      const s = t.small ? 0.25 : 1;
+      fx.sparksAt(_v.copy(t.pos).setY(5 * s), t.small ? 40 : 70, { color: 0xffb040, speed: 24 * s + 4, life: 0.9, floor: 0, width: t.small ? 0.035 : 0.07 });
+      fx.ring(_v.copy(t.pos).setY(0.2), 9 * s + 1, { color: 0xffa030, life: 0.6 });
     }
     return 0xffc46a;
+  }
+  punch(k) { this.fovKick = Math.max(this.fovKick || 0, k); }
+  flash(color, a) {
+    const f = this.$impact;
+    f.style.transition = 'none'; f.style.background = color; f.style.opacity = a;
+    requestAnimationFrame(() => { f.style.transition = 'opacity 0.22s ease-out'; f.style.opacity = 0; });
   }
 
   // ---------------- helm (seated, looking out of the command deck) ----------------
@@ -518,6 +582,7 @@ export class ShipView {
     else if (a === 'exit') this.fade(() => this.app.setMode('local'));
     else if (a === 'mech') this.fade(() => this.startMech());
     else if (a === 'leaveMech') this.fade(() => this.stopMech(true));
+    else if (a === 'spar') { if (this.arena && !this.arena.fighting && this.mech?.alive) this.arena.start(); }
     else if (a === 'helm') this.setHelm(!this.helm);
   }
 
@@ -532,11 +597,12 @@ export class ShipView {
     el.className = 'ship-hud'; el.hidden = true;
     el.innerHTML = `
       <div class="sh-title"></div>
-      <div class="sh-btns"><button class="sh-btn" data-act="leaveMech" hidden>⏏ LEAVE MECH <kbd>X</kbd></button><button class="sh-btn" data-act="deck" hidden>⟲ EXIT SIM</button><button class="sh-btn" data-act="helm" hidden>STAND UP <kbd>E</kbd></button></div>
+      <div class="sh-btns"><button class="sh-btn" data-act="leaveMech" hidden>⏏ LEAVE MECH <kbd>X</kbd></button><button class="sh-btn" data-act="deck" hidden>⟲ EXIT SIM</button><button class="sh-btn" data-act="helm" hidden>STAND UP <kbd>E</kbd></button><button class="sh-btn spar" data-act="spar" hidden>⚔ START SPARRING <kbd>Enter</kbd></button></div>
       <div class="sh-help"></div>
       <button class="sh-prompt" hidden></button>
       <div class="sh-load" hidden></div>
       <div class="sh-fade"></div>
+      <div class="sh-impact"></div>
       <div class="sh-ward" hidden><div class="sh-card-wrap"><h3>WARDROBE</h3>
         <div class="sh-sec">CHARACTER</div><div class="sh-cards sh-chars"></div>
         <div class="sh-look"><div class="sh-sec">OUTFIT</div><div class="sh-cards sh-outfits"></div>
@@ -553,6 +619,7 @@ export class ShipView {
     this.$fade = el.querySelector('.sh-fade');
     this.$ward = el.querySelector('.sh-ward');
     this.$btns = el.querySelector('.sh-btns');
+    this.$impact = el.querySelector('.sh-impact');
     el.querySelector('.sh-chars').innerHTML = CHARACTERS.map((c) => `
       <button class="sh-card" data-id="${c.id}"><img src="/characters/${c.thumb}" alt=""><b>${c.name}</b><small>${c.blurb}</small></button>`).join('') + `
       <button class="sh-card mech" data-id="mech"><div class="sh-mech-pic"><span>MECH</span></div><b>NEXORION</b><small>Training sim only</small></button>`;
@@ -597,9 +664,12 @@ export class ShipView {
     this.$btns.querySelector('[data-act="leaveMech"]').hidden = !this.mechActive;
     this.$btns.querySelector('[data-act="deck"]').hidden = !inSim;
     this.$btns.querySelector('[data-act="helm"]').hidden = !this.helm;
+    this.$btns.querySelector('[data-act="spar"]').hidden = !this.mechActive || !!this.arena?.fighting;
+    this.$help.hidden = this.mechActive;             // the arena HUD shows the mech's controls
     this.$help.textContent = this.mechActive
       ? 'WASD move · Space jump/fly · J/click slash · K heavy · L launch · Q arc · F guard · E dodge · X leave'
       : this.helm ? 'Drag to look around · E to stand up'
+      : this.area === this.sim ? 'WASD move · Shift sprint · Space jump · J/click slash · K/right-click heavy (in the air: plunge) · E interact'
       : 'WASD move · Shift sprint · Space jump (again in the air) · drag to look · E interact';
     if (this.helm || this.mechActive) { this.near = null; this.$prompt.hidden = true; }
   }
@@ -671,7 +741,7 @@ export class ShipView {
     else this.camDist = THREE.MathUtils.clamp(this.camDist * I.zoom, 1.8, 9);
     if (this.wardrobeRing) this.wardrobeRing.scale.setScalar(1 + Math.sin(this.time * 3) * 0.03);
 
-    if (this.area === this.sim) this.updateDummies(dt);
+    if (this.area === this.sim) { this.updateDummies(dt); this.simFx.update(dt); }
     if (this.mechActive) { this.updateMech(dt, I); return; }
 
     const P = this.ctrl;
@@ -688,7 +758,9 @@ export class ShipView {
       this.camera.position.copy(this.helmSeat);
       this.camera.lookAt(_v.copy(this.helmSeat).sub(dir));
     } else {
-      P.update(dt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
+      // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
+      const pdt = this.sword ? this.sword.update(dt, I, P, this.dojo, this.area === this.sim && this.$ward.hidden) : dt;
+      P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
       // interaction prompt
       let near = null;
       if (this.$ward.hidden) for (const it of this.area.interact) if (_v.copy(it.pos).setY(P.pos.y).distanceTo(P.pos) < it.r && Math.abs(P.pos.y - it.pos.y) < 2) near = it;
@@ -705,6 +777,8 @@ export class ShipView {
         head.addScaledVector(_v3.set(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw)), innerWidth > 700 ? 0.75 : 0);
         this.chaseCam(dt, head, 3.4, true);
       } else this.chaseCam(dt, _v.copy(P.pos).add(_v2.set(0, P.H * 0.88, 0)), this.camDist, true);
+      const sk = this.sword?.shake || 0;
+      if (sk > 0) { const k = sk * sk * 0.12; this.camera.position.x += (Math.random() - 0.5) * k; this.camera.position.y += (Math.random() - 0.5) * k; }
     }
 
     const zone = this.area.zoneTitle ? this.area.zoneTitle(P.pos) : this.area.title;
@@ -714,18 +788,42 @@ export class ShipView {
   }
 
   updateMech(dt, I) {
-    const M = this.mech, ctx = this.mechCtx;
+    const M = this.mech, ctx = this.mechCtx, A = this.arena;
+    const fight = A.fighting || A.state === 'down';
+    // inside a sparring round: 1 g plating, the holo wall, the projected enemies as the only targets
+    ctx.g = fight ? ARENA.G : 9.81;
+    ctx.targets = ctx.enemies = fight ? A.targets : this.dummies;
+    ctx.bound = fight ? A.R - 1.5 : this.yard.R - 2;
     ctx.camYaw = this.camYaw;
+    if (I.arena && !A.fighting && M.alive) A.start();
+    for (const d of this.dummies) d.group.visible = d.alive && !fight;
     M.update(dt, I, ctx);
+    A.update(dt, dt);
+    const wasFighting = this.sparBtnState;
+    if (wasFighting !== A.fighting) { this.sparBtnState = A.fighting; this.syncButtons(); }
+
+    // lock-on: swing the camera behind you, facing the locked target (a drag overrides it for a moment)
+    if (I.lookX) this.lockYawHold = 1.2;
+    this.lockYawHold = Math.max(0, (this.lockYawHold || 0) - dt);
+    const L = M.lock && M.lock.alive ? M.lock : null;
+    if (L && this.lockYawHold <= 0 && M.alive) {
+      const want = Math.atan2(M.pos.x - L.pos.x, M.pos.z - L.pos.z);
+      this.camYaw += Math.atan2(Math.sin(want - this.camYaw), Math.cos(want - this.camYaw)) * Math.min(1, dt * 2.2);
+    }
     const head = _v.copy(M.pos).add(_v2.set(0, 1.4 * MECH_S, 0));
-    this.chaseCam(dt, head, this.mechDist, false);
+    if (L) { head.x += (L.pos.x - M.pos.x) * 0.3; head.z += (L.pos.z - M.pos.z) * 0.3; head.y += THREE.MathUtils.clamp(L.pos.y - M.pos.y, -3, 6) * 0.3; }
+    this.chaseCam(dt, head, this.mechDist * (fight ? 1.15 : 1), false);
+    // impact zoom on big hits, a wider lens while dashing
+    this.fovKick = Math.max(0, (this.fovKick || 0) - dt * 3.5);
+    const fov = 60 - 7 * this.fovKick + (M.state === 'dodge' ? 5 : 0);
+    if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov += (fov - this.camera.fov) * Math.min(1, dt * 18); this.camera.updateProjectionMatrix(); }
     if (M.shake > 0) { const k = M.shake * M.shake * 0.6; this.camera.position.x += (Math.random() - 0.5) * k; this.camera.position.y += (Math.random() - 0.5) * k; }
     if (this.zone !== 'MECH YARD') { this.zone = 'MECH YARD'; this.$title.textContent = `${this.baseName} · TRAINING SIM · MECH YARD`; }
     this.sun.position.set(M.pos.x + 30, 80, M.pos.z - 20); this.sun.target.position.copy(M.pos);
   }
 
   updateDummies(dt) {
-    for (const d of this.dummies) {
+    for (const d of [...this.dummies, ...this.dojo]) {
       if (!d.alive) {
         if (this.time > d.respawnAt) { d.alive = true; d.hp = d.maxHp; d.group.visible = true; d.group.scale.setScalar(0.01); d.grow = 0; }
         continue;
@@ -733,7 +831,9 @@ export class ShipView {
       if (d.grow !== undefined) { d.grow = Math.min(1, d.grow + dt * 2); d.group.scale.setScalar(Math.max(0.01, d.grow)); if (d.grow >= 1) delete d.grow; }
       if (d.wobble > 0) {
         d.wobble = Math.max(0, d.wobble - dt * 2.5);
-        d.group.rotation.z = Math.sin(this.time * 30) * 0.12 * d.wobble;
+        // rock away from the blow and spring back
+        const k = Math.sin(this.time * 22) * 0.18 * d.wobble * d.wobble;
+        d.group.rotation.x = Math.cos(d.wobbleDir || 0) * k; d.group.rotation.z = -Math.sin(d.wobbleDir || 0) * k;
       }
     }
   }

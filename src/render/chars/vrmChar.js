@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { retargetKatana } from './katana.js';
 
 // Playable VRM characters (VRoid Hub models, see public/characters/CREDITS.txt) animated with Mixamo clips retargeted
 // at load time onto the VRM humanoid. The retarget follows three-vrm's Mixamo example: every Mixamo bone's rotation
@@ -161,6 +162,11 @@ export class VrmChar {
     const c = new VrmChar(def, vrm);
     c.outfit = outfit;
     Object.keys(CLIPS).forEach((name, i) => c.addClip(name, retarget(assets[i], vrm, name, CLIPS[name][1])));
+    // katana moves retargeted from the mech's anime katana clips (needs the rest pose, so before anything plays)
+    try {
+      const kat = retargetKatana(vrm);
+      if (kat) { c.katana = kat; for (const clip of kat.clips) c.addClip(clip.name, clip); }
+    } catch (e) { console.warn('katana retarget failed', e); }
     c.play('idle', { fade: 0 });
     c.mixer.update(0);
     return c;
@@ -194,10 +200,13 @@ export class VrmChar {
     else if (fade > 0 && this.current !== a) a.fadeIn(fade);
     this.current = a; this.currentName = name;
   }
+  // drive the playing clip by time (sword moves follow a time-warp curve)
+  scrub(t) { const a = this.current; if (!a) return; a.timeScale = 0; a.paused = false; a.time = t; }
   done() { const a = this.current; return !a || (a.loop === THREE.LoopOnce && a.time >= a.getClip().duration - 1e-3); }
 
   update(dt) {
     this.mixer.update(dt);
+    this.onPose?.(dt);                // overrides on the normalized bones (sword grip) before they reach the mesh
     this.vrm.update(dt);              // humanoid -> raw bones, spring-bone hair and cloth, expressions
   }
 

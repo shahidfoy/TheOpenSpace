@@ -345,7 +345,7 @@ export class SkinnedMechBody {
 // lands exactly where the blade moves fastest. Ranges are converted to the procedural moves' units (multiples of S).
 const BASE = { path: 'clip', R: 0.5, c: [0, 1.3, 0.14], roll: 0, a0: 0, a1: 0, pull: 0, cone: 1.25, range: 2.3, lunge: 2.4, hitstop: 0.06, dmg: 12, chain: 0.6 };
 
-function groups(meta, clip, { minPeak = 22, gap = 0.09, limit = 99 } = {}) {
+export function groups(meta, clip, { minPeak = 22, gap = 0.09, limit = 99 } = {}) {
   const sw = (meta.clips[clip]?.swings ?? []).filter((s) => s.peak >= minPeak);
   const out = [];
   for (const s of sw) {
@@ -402,7 +402,7 @@ function moveFrom(k, clip, g, start, end, speed, extra) {
   }, start);
 }
 
-function chain(k, meta, clip, { speed = 1, minPeak, gap, limit = 99, lead = 0.2, tail = 0.45, base = {}, last = {} } = {}) {
+export function chain(k, meta, clip, { speed = 1, minPeak, gap, limit = 99, lead = 0.2, tail = 0.45, base = {}, last = {} } = {}) {
   const gs = groups(meta, clip, { minPeak, gap, limit });
   const dur = meta.clips[clip]?.dur ?? 1;
   return gs.map((g, i) => {
@@ -423,7 +423,7 @@ export function clipSegment(meta, clip, which = 'max', { lead = 0.3, tail = 0.45
 }
 
 // the strongest swing of a clip as one move (or a hand-picked window)
-function single(k, meta, clip, { t0, t1, lead = 0.25, tail = 0.5, speed = 1, extra = {} } = {}) {
+export function single(k, meta, clip, { t0, t1, lead = 0.25, tail = 0.5, speed = 1, extra = {} } = {}) {
   const gs = groups(meta, clip, { minPeak: 0 });
   let g = t0 != null ? gs.find((x) => x.t1 >= t0 && x.t0 <= t1) : gs.slice().sort((a, b) => b.peak - a.peak)[0];
   if (t0 != null) g = g ? { ...g, t0, t1 } : { t0, t1, reach: 1.4, h0: -0.6, h1: 0.6, parts: [] };

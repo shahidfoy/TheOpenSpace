@@ -20,10 +20,10 @@ export function createInput(app) {
       else if (e.code === 'KeyQ') taps.spin++;
       else if (e.code === 'KeyE') taps.dodge++;
       else if (e.code === 'KeyL') taps.launch++;
-      else if (e.code === 'Tab' && app.mode === 'surface') taps.lock++;
-      else if (e.code === 'Enter' && app.mode === 'surface') taps.arena++;
+      else if (e.code === 'Tab' && (app.mode === 'surface' || app.mode === 'ship')) taps.lock++;
+      else if (e.code === 'Enter' && (app.mode === 'surface' || app.mode === 'ship')) taps.arena++;
     }
-    if (e.code === 'Tab' && app.mode === 'surface') e.preventDefault();
+    if (e.code === 'Tab' && (app.mode === 'surface' || app.mode === 'ship')) e.preventDefault();
     keys[e.code] = true;
     if (e.code === 'Space' && app.mode !== 'map') e.preventDefault();
   });
@@ -62,7 +62,7 @@ export function createInput(app) {
   canvas.addEventListener('pointerup', (e) => {
     // a quick mouse click (not a drag) is a sword strike on the surface: left = slash, right = heavy
     const p = drags.get(e.pointerId);
-    if (p && e.pointerType === 'mouse' && (app.mode === 'surface' || app.shipView?.mechActive) && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) < 6 && performance.now() - p.t0 < 350) {
+    if (p && e.pointerType === 'mouse' && (app.mode === 'surface' || app.mode === 'ship') && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) < 6 && performance.now() - p.t0 < 350) {
       if (p.button === 2) taps.heavy++;
       else if (p.button === 1) taps.launch++;
       else if (p.button === 0) taps.attack++;
