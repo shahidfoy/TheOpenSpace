@@ -7,6 +7,15 @@ import {
 } from './swordAnim.js';
 import { SwordFx } from './swordFx.js';
 import { SkinnedMechBody, buildSkinCombos, makeWarp, clipTime, clipRate } from './mechSkin.js';
+import { rmAt } from '../chars/katanaPack.js';
+// sword dash (hold heavy): the Rush clip's phases and the dash per charge level
+const RUSH = { crouch: 0.6, holdA: 0.85, holdB: 2.2, dash0: 2.45, dash1: 4.15, end: 4.9 };
+const RUSH_LV = [0.4, 0.9, 1.5], RUSH_DIST = [16, 24, 32], RUSH_DUR = [0.45, 0.55, 0.65];
+const distSeg = (p, a, b) => {
+  const abx = b.x - a.x, abz = b.z - a.z, l2 = abx * abx + abz * abz;
+  const t = l2 > 1e-6 ? Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.z - a.z) * abz) / l2)) : 0;
+  return Math.hypot(p.x - (a.x + abx * t), p.z - (a.z + abz * t));
+};
 import { skinned } from '../assets.js';
 
 // Surface mech controller: run / sprint, jump + double jump (thruster burst), rocket flight (hold jump in the air
@@ -44,6 +53,8 @@ export class MechPilot {
     this.body = asset ? new SkinnedMechBody(scene, this.fx, asset, { saber: true, clone: !!opts.clone }) : new MechBody(scene, this.fx, { scheme: 'player' });
     this.skin = asset ? this.body : null;
     this.C = asset ? buildSkinCombos(this.body) : COMBO;
+    // once the katana pack is on the body, rebuild the moves on its clips (root motion, true grip, new launcher)
+    if (asset) this.body.onPack = () => { this.C = buildSkinCombos(this.body); };
     this.rig = this.body.rig;
     this.root = this.body.root;
     this.pos = new THREE.Vector3();   // feet; the rig root is offset from it when leaning
@@ -107,7 +118,7 @@ export class MechPilot {
     if (this.iframe > 0) this.iframe -= dt;
     // the blade only exists while fighting: it ignites on an attack or guard and stays lit just long enough for the
     // next press of a combo, then retracts (the saber suit keeps it out for less time than the procedural frame)
-    const fighting = this.state === 'attack' || this.state === 'spin' || this.guarding;
+    const fighting = this.state === 'attack' || this.state === 'spin' || this.state === 'charge' || this.state === 'rush' || this.state === 'rushEnd' || this.guarding;
     if (fighting) this.swordHold = this.skin ? 0.55 : 1.4; else this.swordHold = Math.max(0, this.swordHold - rawDt);
 
     const g = (this.g = ctx.g);
@@ -189,7 +200,13 @@ export class MechPilot {
     this.slashHeldPrev = I.slashHold;
     if (I.slashHold) this.slashHoldT += rawDt; else this.slashHoldT = 0;
     if (I.attack || heldSlash || (this.slashHoldT > 0.3 && !this.buf)) { this.buf = 'attack'; this.bufT = 0.35; }
-    if (I.heavy) { this.buf = 'heavy'; this.bufT = 0.35; }
+    // heavy: a tap; holding it (frame with the katana pack) charges the sword dash instead
+    if (this.C.rush) {
+      const held = !!I.heavyHold;
+      if (held) this.heavyT = (this.wasHeavy ? this.heavyT : 0) + rawDt;
+      if (!held && this.wasHeavy && this.heavyT < 0.28 && this.state !== 'charge') { this.buf = 'heavy'; this.bufT = 0.35; }
+      this.wasHeavy = held;
+    } else if (I.heavy) { this.buf = 'heavy'; this.bufT = 0.35; }
     if (I.launch) { this.buf = 'launch'; this.bufT = 0.35; }
     if (I.spin) { this.buf = 'spin'; this.bufT = 0.35; }
     if (I.dodge) { this.buf = 'dodge'; this.bufT = 0.3; }
@@ -215,6 +232,10 @@ export class MechPilot {
         if (this.state !== 'dodge' && (this.grounded || this.fuel >= AIR_DODGE_COST)) { this.startDodge(wish, ctx); this.buf = null; }
       } else { this.startAttack(b, wish, ctx); this.buf = null; }
     } else if (this.buf === 'dodge' && this.guarding) { this.guarding = false; this.startDodge(wish, ctx); this.buf = null; }
+    if (this.C.rush) {
+      if (I.heavyHold && this.heavyT > 0.28 && canAct && this.grounded && !this.guarding && this.state !== 'charge') this.startCharge();
+      if (this.state === 'charge' && !I.heavyHold) this.startRush(ctx);
+    }
 
     // ---- jumping (jump-cancels the launcher and attack recovery, so you can chase a launched target) ----
     if (jumpEdge && this.state !== 'spin' && !(this.move?.plunge)) {
@@ -224,6 +245,8 @@ export class MechPilot {
 
     // ---- horizontal motion ----
     if (this.state === 'attack') this.updateAttack(dt, ctx);
+    else if (this.state === 'charge') this.updateCharge(dt, wish);
+    else if (this.state === 'rush' || this.state === 'rushEnd') this.updateRush(dt, ctx);
     else if (this.state === 'spin') this.updateSpin(dt, ctx);
     else if (this.state === 'dodge') this.updateDodge(dt);
     else {
@@ -520,6 +543,14 @@ export class MechPilot {
     this.state = 'attack';
     this.comboGap = 0;
     this.playMoveClip(prev, prevE);
+    // root-motion warp toward the target: stretch / shorten the clip's travel so the cut lands at reach
+    this.rmWarp = 1;
+    const mvr = this.move, tg = this.attackTarget;
+    if (mvr.rm && mvr.warp && tg && !mvr.air && this.skin) {
+      const need = Math.hypot(tg.pos.x - this.pos.x, tg.pos.z - this.pos.z) - tg.radius - mvr.range * S * 0.55;
+      const avail = (rmAt(mvr.rm, 'fwd', mvr.seg[2]) - rmAt(mvr.rm, 'fwd', mvr.warp.C[0])) * this.skin.k;
+      this.rmWarp = avail > 0.5 ? clamp(need / avail, 0, 2.2) : 1;
+    }
   }
 
   // skinned body: start the move's clip, or flow straight into it. Combo hits are consecutive slices of one clip, so
@@ -570,6 +601,15 @@ export class MechPilot {
     if (mv.plunge) {
       if (this.moveE > tw && !this.grounded) this.vel.y = -32;
       this.vel.x *= Math.exp(-dt * 6); this.vel.z *= Math.exp(-dt * 6);
+    } else if (mv.rm && !mv.air) {
+      // the clip's own footwork (root motion, model units -> metres), warped so the cut lands at reach
+      const tc = clipTime(mv, this.moveE), rate = clipRate(mv, this.moveE), k = this.skin.k;
+      const f = (rmAt(mv.rm, 'fwd', tc + 0.01) - rmAt(mv.rm, 'fwd', tc - 0.01)) / 0.02 * rate * k * this.rmWarp;
+      const l = (rmAt(mv.rm, 'left', tc + 0.01) - rmAt(mv.rm, 'left', tc - 0.01)) / 0.02 * rate * k * Math.min(1, this.rmWarp);
+      const t = this.attackTarget;
+      if (t && t.alive && this.moveE < tw + ts * 0.6) this.faceTarget(t, dt, 20);
+      const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw), kk = 1 - Math.exp(-30 * dt);
+      this.vel.x += (sy * f + cy * l - this.vel.x) * kk; this.vel.z += (cy * f - sy * l - this.vel.z) * kk;
     } else if (this.moveE < tw + ts * 0.6) {
       let want = mv.lunge * 9;
       const t = this.attackTarget;
@@ -603,6 +643,74 @@ export class MechPilot {
       this.shockwave(ctx, p, mv.shock * S, mv);
     }
     if (this.moveE >= tw + ts + mv.t[2]) this.endMove();
+  }
+
+  // ---------------- sword dash: hold heavy to charge, release to cut through everything in a line ----------------
+  startCharge() {
+    this.state = 'charge'; this.moveE = 0; this.rushLv = 0; this.move = null;
+    this.skin.play('rush', { fade: 0.12, time: 0, speed: 0, restart: true });
+  }
+  updateCharge(dt, wish) {
+    this.moveE += dt;
+    if (wish.lengthSq() > 0.05) this.yaw += angDiff(this.yaw, Math.atan2(wish.x, wish.z)) * Math.min(1, dt * 6);
+    this.vel.x *= Math.exp(-dt * 12); this.vel.z *= Math.exp(-dt * 12);
+    const lv = this.moveE > RUSH_LV[2] ? 3 : this.moveE > RUSH_LV[1] ? 2 : this.moveE > RUSH_LV[0] ? 1 : 0;
+    if (lv > this.rushLv) {
+      this.rushLv = lv;
+      this.fx.ring(_v.copy(this.pos).setY(this.pos.y + 0.3), (1.2 + lv * 0.8) * S, { life: 0.4, color: [0, 0x9fe8ff, 0xd8f4ff, 0xffd27a][lv] });
+      this.shake = Math.max(this.shake, 0.12 * lv);
+    }
+    this.skin.charge = lv;
+    const tc = this.moveE < RUSH.crouch ? this.moveE : RUSH.holdA + (Math.sin((this.moveE - RUSH.crouch) * 1.4) * 0.5 + 0.5) * (RUSH.holdB - RUSH.holdA) * 0.6;
+    this.skin.pose('rush', tc, 0.12);
+    if (Math.random() < dt * (6 + lv * 8)) {
+      const a = Math.random() * Math.PI * 2, r = 1.3 * S;
+      this.fx.sparksAt(_v.set(this.pos.x + Math.cos(a) * r, this.pos.y + (0.2 + Math.random() * 1.2) * S, this.pos.z + Math.sin(a) * r), 2,
+        { speed: 14, dir: _v2.set(-Math.cos(a), 0.2, -Math.sin(a)), spread: 0.2, life: 0.35, width: 0.06, grav: 0, color: lv >= 3 ? 0xffd27a : 0xbfe6ff });
+    }
+  }
+  startRush(ctx) {
+    const lv = Math.max(1, this.rushLv);
+    const rm = this.skin.rm.rush;
+    const span = (rmAt(rm, 'fwd', RUSH.dash1) - rmAt(rm, 'fwd', RUSH.dash0)) * this.skin.k;
+    this.state = 'rush'; this.moveE = 0; this.moveHit.clear();
+    this.rush = { lv, from: this.pos.clone(), warp: RUSH_DIST[lv - 1] / Math.max(1, span), dur: RUSH_DUR[lv - 1] };
+    this.iframe = this.rush.dur + 0.15;
+    this.skin.charge = 0;
+    this.fx.ring(_v.copy(this.pos).setY(this.pos.y + 0.3), (2 + lv) * S, { life: 0.35 });
+    this.fx.sparksAt(_v.copy(this.pos).setY(this.pos.y + 1), 20 + lv * 10, { speed: 16, dir: UP, spread: 1.6, floor: this.pos.y });
+    this.shake = Math.max(this.shake, 0.25 + lv * 0.1);
+    ctx.haptic?.('heavy');
+  }
+  updateRush(dt, ctx) {
+    const R = this.rush;
+    this.moveE += dt;
+    if (this.state === 'rushEnd') {
+      this.vel.x *= Math.exp(-dt * 10); this.vel.z *= Math.exp(-dt * 10);
+      this.skin.pose('rush', RUSH.dash1 + Math.min(1, this.moveE / 0.5) * (RUSH.end - RUSH.dash1), 0.05);
+      if (this.moveE > 0.5) { this.state = 'idle'; this.comboGap = 0; }
+      return;
+    }
+    const k = Math.min(1, this.moveE / R.dur);
+    const tc = RUSH.dash0 + (RUSH.dash1 - RUSH.dash0) * k;
+    this.skin.pose('rush', tc, 0.04);
+    const rate = (RUSH.dash1 - RUSH.dash0) / R.dur, rm = this.skin.rm.rush;
+    const f = (rmAt(rm, 'fwd', tc + 0.01) - rmAt(rm, 'fwd', tc - 0.01)) / 0.02 * rate * this.skin.k * R.warp;
+    const fw = this.forward(_v);
+    this.vel.x = fw.x * f; this.vel.z = fw.z * f;
+    for (const t of ctx.targets) {
+      if (!t.alive || this.moveHit.has(t)) continue;
+      if (distSeg(t.pos, R.from, this.pos) < t.radius + 1.1 * S && Math.abs(t.pos.y - this.pos.y) < 3 * S) {
+        this.moveHit.add(t);
+        this.hit(t, { dmg: 30 + R.lv * 20, heavy: true, finisher: true, hitstop: 0.1 + R.lv * 0.03, cone: Math.PI, range: 3 }, ctx);
+      }
+    }
+    if (k >= 1) {
+      const right = _v2.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+      this.fx.crescent(_C.copy(this.pos).setY(this.pos.y + 1.2 * S), right, fw, -1.2, 1.2, 0.08, { radius: (2.2 + R.lv * 0.4) * S, innerFrac: 0.6, life: 0.3, color: R.lv >= 3 ? 0xffe2a8 : 0xd8f0ff });
+      this.slowmo = Math.max(this.slowmo, this.moveHit.size ? 0.35 : 0);
+      this.state = 'rushEnd'; this.moveE = 0;
+    }
   }
 
   shockwave(ctx, p, r, mv) {
@@ -807,7 +915,9 @@ export class MechPilot {
     let wantPitch = 0, wantRoll = 0, pivot = PIVOT;
     const cur = B.currentName;
     const done = !B.current || (B.current.loop === THREE.LoopOnce && B.current.time >= B.current.getClip().duration - 1e-3);
-    if (st === 'attack') {
+    if (st === 'charge' || st === 'rush' || st === 'rushEnd') {
+      // posed by the rush (updateCharge / updateRush)
+    } else if (st === 'attack') {
       // the move's clip was started in startAttack; its time follows the move's warp curve
       if (this.move?.warp && cur === this.move.clip) B.scrub(clipTime(this.move, this.moveE));
     } else if (st === 'spin') {
@@ -872,9 +982,10 @@ export class MechPilot {
     this.prevPitch = this.pitch;
     const want = thrustFor({ boost: this.boostK, climb: this.climb, burst, steer });
     if (st === 'dodge') { want.back = Math.max(want.back, 1.2); want.sh = Math.max(want.sh, 0.9); }
-    const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'spin';
-    const lit = (st === 'attack' || st === 'spin' || this.swordHold > 0 || this.guardK > 0.3) && !REACT.has(st);
-    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean });
+    const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'spin' || st === 'rush';
+    const lit = (st === 'attack' || st === 'spin' || st === 'charge' || st === 'rush' || st === 'rushEnd' || this.swordHold > 0 || this.guardK > 0.3) && !REACT.has(st);
+    const grounded = this.grounded && !this.flying && (st === 'idle' || st === 'attack' || st === 'charge' || st === 'rushEnd') && !this.move?.air;
+    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean, grounded });
   }
 
   // sword low and forward at idle (run = 0), trailing behind while running (run = 1); w = arm IK weight

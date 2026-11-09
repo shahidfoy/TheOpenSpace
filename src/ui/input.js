@@ -125,6 +125,10 @@ export function createInput(app) {
     out.heavy = taps.heavy + (held.down && !prevDown ? 1 : 0);
     out.spin = taps.spin + (held.arc && !prevArc ? 1 : 0);
     out.guard = !!held.guard || !!keys.KeyF;
+    // held heavy (K, the right mouse button, or the HEAVY button): characters charge a sword dash with it
+    let rmb = false;
+    for (const d of drags.values()) if (d.button === 2) rmb = true;
+    out.heavyHold = !!keys.KeyK || rmb || !!held.down;
     out.dodge = taps.dodge + (held.dodge && !prevDodge ? 1 : 0);
     out.launch = taps.launch + (held.launch && !prevLaunch ? 1 : 0);
     out.lockSwitch = taps.lock;
