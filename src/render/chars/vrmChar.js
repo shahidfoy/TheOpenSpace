@@ -76,7 +76,7 @@ function patchRecolor(m) {
 const CLIPS = {
   idle: ['idle', 'loop'], run: ['run', 'loop'], sprint: ['sprint', 'loop'], jump: ['jump', 'xz'], fall: ['fall', 'loop'],
   land: ['land', 'xz'], climb_up: ['climb_up', 'loop'], climb_down: ['climb_down', 'loop'], wallrun: ['wallrun', 'loop'],
-  wall_start: ['wall_start', 'xz'],
+  wall_start: ['wall_start', 'curve'],
 };
 const ONCE = new Set(['jump', 'land', 'wall_start']);
 
@@ -105,6 +105,7 @@ const loadFbx = (name) => {
 const _q = new THREE.Quaternion(), _restInv = new THREE.Quaternion(), _parentRest = new THREE.Quaternion(), _v = new THREE.Vector3();
 
 function retarget(asset, vrm, name, mode) {
+  let curve = null;
   const src = THREE.AnimationClip.findByName(asset.animations, 'mixamo.com') || asset.animations[0];
   const tracks = [];
   const motionHips = asset.getObjectByName('mixamorigHips').position.y;
@@ -132,8 +133,15 @@ function retarget(asset, vrm, name, mode) {
       // root motion: the controller owns translation. Remove the clip's drift so it plays in place
       const x0 = vals[0], y0 = vals[1], z0 = vals[2];
       const dx = vals[(n - 1) * 3] - x0, dy = vals[(n - 1) * 3 + 1] - y0, dz = vals[(n - 1) * 3 + 2] - z0;
+      // 'curve': keep the clip's rise and forward travel as data (the controller moves the body along it) and play
+      // the clip itself fully in place
+      if (mode === 'curve') {
+        curve = { times: Array.from(track.times), rise: [], fwd: [] };
+        for (let k = 0; k < n; k++) { curve.rise.push(vals[k * 3 + 1] - y0); curve.fwd.push(Math.hypot(vals[k * 3] - x0, vals[k * 3 + 2] - z0)); }
+      }
       for (let k = 0; k < n; k++) {
         const f = n > 1 ? k / (n - 1) : 0;
+        if (mode === 'curve') { vals[k * 3] = x0; vals[k * 3 + 1] = y0; vals[k * 3 + 2] = z0; continue; }
         if (mode === 'xz') { vals[k * 3] = x0; vals[k * 3 + 2] = z0; }
         else { vals[k * 3] -= dx * f; vals[k * 3 + 2] -= dz * f; }
         if (mode === 'loop') vals[k * 3 + 1] -= dy * f;
@@ -141,7 +149,28 @@ function retarget(asset, vrm, name, mode) {
       tracks.push(new THREE.VectorKeyframeTrack(`${node.name}.${prop}`, track.times, vals));
     }
   }
-  return new THREE.AnimationClip(name, src.duration, tracks);
+  const clip = new THREE.AnimationClip(name, src.duration, tracks);
+  if (curve) clip.rootCurve = curve;
+  return clip;
+}
+
+// mirror a clip left <-> right on the normalized humanoid (the wall run clip has the wall on one side only)
+function mirrorClip(clip, vrm, name) {
+  const H = vrm.humanoid, byNode = {};
+  for (const b of Object.keys(H.humanBones)) { const n = H.getNormalizedBoneNode(b); if (n) byNode[n.name] = b; }
+  const swap = (b) => (b.startsWith('left') ? 'right' + b.slice(4) : b.startsWith('right') ? 'left' + b.slice(5) : b);
+  const tracks = [];
+  for (const t of clip.tracks) {
+    const [node, prop] = t.name.split('.');
+    const b = byNode[node];
+    const m = b && H.getNormalizedBoneNode(swap(b));
+    if (!m) continue;
+    const vals = Float32Array.from(t.values);
+    if (prop === 'quaternion') for (let i = 0; i < vals.length; i += 4) { vals[i + 1] = -vals[i + 1]; vals[i + 2] = -vals[i + 2]; }
+    else if (prop === 'position') for (let i = 0; i < vals.length; i += 3) vals[i] = -vals[i];
+    tracks.push(new t.constructor(`${m.name}.${prop}`, t.times, vals));
+  }
+  return new THREE.AnimationClip(name, clip.duration, tracks);
 }
 
 export class VrmChar {
@@ -162,6 +191,7 @@ export class VrmChar {
     const c = new VrmChar(def, vrm);
     c.outfit = outfit;
     Object.keys(CLIPS).forEach((name, i) => c.addClip(name, retarget(assets[i], vrm, name, CLIPS[name][1])));
+    c.addClip('wallrun_m', mirrorClip(c.actions.wallrun.getClip(), vrm, 'wallrun_m'));
     // katana moves retargeted from the mech's anime katana clips (needs the rest pose, so before anything plays)
     try {
       const kat = retargetKatana(vrm);

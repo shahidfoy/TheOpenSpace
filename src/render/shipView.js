@@ -361,6 +361,18 @@ export class ShipView {
     const hint = label('CLIMB', 'push into the glowing wall'); hint.position.set(0, 3.2, 16.8); S.add(hint);
     const hint2 = label('WALL RUN', 'sprint beside it · jump at it'); hint2.position.set(6.5, 3.4, 4); S.add(hint2);
 
+    // ===== wall-run gauntlet: alternating glowing walls between two raised platforms; wall-jump from one to the next =====
+    for (let i = 0; i < 3; i++) A.box(44, 0, 3 + i * 1.6, 4, 1 + i, 1.6, orange, { tile: T });     // stairs up
+    A.box(40, 0, 7.8, 12, 4, 5, orange, { tile: T });                                                // start platform (top 4 m)
+    A.box(40, 0, 14, 1, 9, 12, orange, { tile: T }); A.box(40.8, 2.4, 15, 0.25, 5, 10, hexMat, { kind: 'run', tile: 2 });   // left
+    A.box(47, 0, 22, 1, 9, 12, orange, { tile: T }); A.box(46.95, 2.4, 23, 0.25, 5, 10, hexMat, { kind: 'run', tile: 2 });  // right
+    A.box(40, 0, 30, 1, 9, 12, orange, { tile: T }); A.box(40.8, 2.4, 31, 0.25, 5, 10, hexMat, { kind: 'run', tile: 2 });   // left
+    A.box(40, 0, 44, 12, 4, 5, orange, { tile: T });                                                 // finish platform
+    const gl = label('WALL RUN GAUNTLET', 'run the right wall · jump across to the next'); gl.position.set(46, 6.4, 9); gl.scale.set(6, 1.5, 1); S.add(gl);
+    const gl2 = label('FINISH', ''); gl2.position.set(46, 6, 46.5); S.add(gl2);
+    A.box(-3, 0, 8, 6, 2.2, 1, orange, { tile: T });                                                // a 2.2 m wall to run up and over
+    const hint3 = label('LEDGE', 'sprint into it to run up and climb over'); hint3.position.set(0, 3.4, 7.6); S.add(hint3);
+
     // ===== mech bay and the mech yard =====
     const bayPad = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 0.08, 40), amberPad);
     bayPad.position.set(-12, 0.04, -6); S.add(bayPad);
@@ -777,6 +789,13 @@ export class ShipView {
         head.addScaledVector(_v3.set(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw)), innerWidth > 700 ? 0.75 : 0);
         this.chaseCam(dt, head, 3.4, true);
       } else this.chaseCam(dt, _v.copy(P.pos).add(_v2.set(0, P.H * 0.88, 0)), this.camDist, true);
+      // wall-run camera: tilt the horizon away from the wall, widen the lens with speed
+      const wr = P.state === 'wallrun';
+      this.camRoll = (this.camRoll || 0) + ((wr ? -0.09 * (P.wallSide || 1) : 0) - (this.camRoll || 0)) * Math.min(1, dt * 6);
+      if (Math.abs(this.camRoll) > 1e-3) this.camera.rotateZ(this.camRoll);
+      const hs = Math.hypot(P.vel.x, P.vel.z);
+      const fovWant = this.area === this.sim ? 60 + (wr ? 7 : THREE.MathUtils.clamp((hs - 6.5) * 1.2, 0, 4)) : 60;
+      if (Math.abs(this.camera.fov - fovWant) > 0.05) { this.camera.fov += (fovWant - this.camera.fov) * Math.min(1, dt * 5); this.camera.updateProjectionMatrix(); }
       const sk = this.sword?.shake || 0;
       if (sk > 0) { const k = sk * sk * 0.12; this.camera.position.x += (Math.random() - 0.5) * k; this.camera.position.y += (Math.random() - 0.5) * k; }
     }

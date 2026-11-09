@@ -155,8 +155,12 @@ export function retargetKatana(vrm) {
   }
   // the sword grip, relative to the normalized right hand
   const grip = R.katana_grip, hand = R.RightHand;
-  const gq = align.rightHand.clone().invert().multiply(grip.q);
+  // The mech's grip bone points its +Y out of the pinky side of the fist (a reverse grip: the tip ends up pointing
+  // at the ground through the katana moves). Turn the sword 180° about its edge axis so the blade leaves the thumb
+  // side, then slide it so the fist closes on the handle just below the guard instead of on the guard itself.
+  const gq = align.rightHand.clone().invert().multiply(grip.q).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI));
   const gp = grip.p.clone().sub(hand.p).multiplyScalar(scale).applyQuaternion(align.rightHand.clone().invert());
+  gp.addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(gq), 0.07);
   const height = tPos.head.y + 0.15;
   return { clips, grip: { q: gq, p: gp }, scale, meta: S.meta, height };
 }
