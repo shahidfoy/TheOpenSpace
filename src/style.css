@@ -689,3 +689,14 @@ b, strong { font-weight: 600; }
 @media (max-width: 700px) { .sh-ward { place-items: end center; padding: 0 0 70px; background: linear-gradient(180deg, transparent 45%, rgba(4,6,10,0.6)); } .sh-ward .sh-card-wrap { max-height: 52vh; } }
 .sh-impact { position: absolute; inset: 0; opacity: 0; pointer-events: none; mix-blend-mode: screen; }
 .sh-btn.spar { border-left-color: var(--amber); color: var(--amber); }
+/* climbing stamina and sword-dash charge */
+.sh-meters { position: absolute; left: 50%; bottom: calc(var(--bot) + 170px); transform: translateX(-50%); display: grid; gap: 8px; justify-items: center; }
+.sh-stam { width: 160px; height: 6px; background: rgba(10,14,22,0.6); border: 1px solid var(--line-2); opacity: 0; transition: opacity 0.25s; }
+.sh-stam.on { opacity: 1; }
+.sh-stam i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #7fd4ff, #c8f0ff); transition: width 0.1s linear; }
+.sh-stam.low i { background: linear-gradient(90deg, #ff6a4f, #ffb347); }
+.sh-charge { display: flex; gap: 6px; opacity: 0; transition: opacity 0.15s; }
+.sh-charge.on { opacity: 1; }
+.sh-charge b { width: 22px; height: 8px; background: rgba(10,14,22,0.6); border: 1px solid var(--line-2); transform: skewX(-20deg); }
+.sh-charge b.lit { background: linear-gradient(90deg, #9fe8ff, #fff); box-shadow: 0 0 10px rgba(159,232,255,0.9); }
+.sh-charge b.lit:nth-child(3) { background: linear-gradient(90deg, #ffd27a, #fff3d0); box-shadow: 0 0 12px rgba(255,210,122,0.9); }

@@ -4,6 +4,36 @@ import { MOVES } from './swordAnim.js';
 import { applyLivery, loadLivery } from './livery.js';
 import { SUIT_GLOW } from '../materials.js';
 import { Saber } from './saber.js';
+import { loadKatanaPack, retargetPack } from '../chars/katanaPack.js';
+import { makeKatana } from '../chars/katana.js';
+
+// The katana pack (see chars/katanaPack.js) retargeted onto a mech's own skeleton: clips, swings, root motion and
+// the sword grip, computed once per asset on a bind-posed clone and shared by every body made from it.
+const MECH_BONES = {
+  hips: 'Hips', spine: 'Spine1', chest: 'Spine2', neck: 'Neck', head: 'Head',
+  leftShoulder: 'LeftShoulder', leftUpperArm: 'LeftArm', leftLowerArm: 'LeftForeArm', leftHand: 'LeftHand',
+  rightShoulder: 'RightShoulder', rightUpperArm: 'RightArm', rightLowerArm: 'RightForeArm', rightHand: 'RightHand',
+  leftUpperLeg: 'LeftUpLeg', leftLowerLeg: 'LeftLeg', leftFoot: 'LeftFoot', leftToes: 'LeftToeBase',
+  rightUpperLeg: 'RightUpLeg', rightLowerLeg: 'RightLeg', rightFoot: 'RightFoot', rightToes: 'RightToeBase',
+};
+// pack clips that replace the baked ones (same names) and the new ones the mech gains
+const PACK_CLIPS = ['idle', 'run', 'dash', 'dodge', 'dodge2', 'block', 'block_hit', 'hit', 'hit2', 'circle', 'combo1', 'charge', 'aerial',
+  'combo_down', 'rush', 'jump_attack', 'double_slash', 'strikes', 'run_attack', 'thrust'];
+function mechKatana(asset, pack) {
+  if (asset._katana) return asset._katana;
+  const clone = SkeletonUtils.clone(asset.gltf.scene);
+  clone.traverse((o) => { if (o.isSkinnedMesh) o.skeleton.pose(); });
+  clone.updateMatrixWorld(true);
+  const bones = {};
+  clone.traverse((o) => { if (o.isBone) bones[o.name] = o; });
+  if (!Object.values(MECH_BONES).every((n) => bones[n])) return (asset._katana = null);
+  const r = retargetPack(pack, { root: clone, node: (b) => bones[MECH_BONES[b]] || null }, PACK_CLIPS);
+  // the bind-pose height of the lowest foot (model units), for keeping feet on the ground
+  let foot = Infinity;
+  for (const n of ['LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase']) foot = Math.min(foot, new THREE.Vector3().setFromMatrixPosition(bones[n].matrixWorld).y);
+  r.footRest = foot;
+  return (asset._katana = r);
+}
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 // Skinned mechs built by blender/build_mech_player.py: the player suit ("NEXORION // The Neon Vanguard" by Atahan3D)
@@ -44,7 +74,7 @@ function paint(name, src) {
 export class SkinnedMechBody {
   // opts: { livery (defaults to the saved player livery), clone (own copy of the model: arena enemies), size, plume,
   //         saber (swap the modelled sword for an energy saber that only ignites in a fight: the player) }
-  constructor(scene, fx, asset, { livery = null, clone = false, size = 1, plume = 0x7fc8ff, saber = false } = {}) {
+  constructor(scene, fx, asset, { livery = null, clone = false, size = 1, plume = 0x7fc8ff, saber = false, katana = false } = {}) {
     this.skinned = true;
     this.meta = asset.meta;
     this.root = new THREE.Group();
@@ -155,12 +185,29 @@ export class SkinnedMechBody {
       this.saber = new Saber(this.blade * this.k * 1.04, H * 0.165);
       this.grip.getWorldScale(ws);
       this.saber.group.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
+      this.saber.group.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
       this.grip.add(this.saber.group);
       this.saber.group.add(this.light);
       this.light.position.set(0, this.saber.base + this.saber.length * 0.45, 0);
     }
+    // enemy frames: their modelled sword is skinned to the hand pointing out of the pinky side; swap it for a katana
+    // held the right way round on the grip bone
+    if (katana && this.grip) {
+      model.traverse((o) => { if (o.isMesh && /^mech_blade/.test(o.material.name)) o.visible = false; });
+      const kt = makeKatana(this.blade * this.k * 0.95);
+      kt.traverse((o) => { if (o.isMesh) { o.castShadow = true; } });
+      this.grip.getWorldScale(ws);
+      kt.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
+      kt.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+      this.grip.add(kt);
+      this.katanaMesh = kt;
+    }
     this.trail = fx.makeTrail(0x6fdcff);
     this.slashColor = 0xbff4ff;
+    this.rm = {};
+    this.charge = 0;
+    // the player frame takes the anime katana pack: clean retargeted clips, root motion, the true grip
+    if (saber) loadKatanaPack().then((pack) => this.applyPack(pack, asset)).catch((e) => console.warn('katana pack failed', e));
 
     this.thr = { back: 0, wing: 0, sh: 0, calf: 0, foot: 0 };
     this.tintColor = new THREE.Color(); this.tintK = 0; this.tintWant = 0; this.flash = 0;
@@ -177,6 +224,42 @@ export class SkinnedMechBody {
     this.light.color.set(l.blade).lerp(new THREE.Color(0xffffff), 0.3);
     this.trail.mesh.material.uniforms.color.value.set(l.blade).multiplyScalar(this.saber ? 2.6 : 2);
     this.saber?.setColor(l.blade);
+  }
+
+  applyPack(pack, asset) {
+    const r = mechKatana(asset, pack);
+    if (!r) return;
+    const loops = new Set(asset.meta.loops || []);
+    for (const [name, clip] of Object.entries(r.clips)) {
+      const old = this.actions[name];
+      const a = this.mixer.clipAction(clip);
+      if (!loops.has(name)) { a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; }
+      this.actions[name] = a;
+      delete this.alt[name];
+      if (old) {
+        if (this.current === old || this.currentName === name) { a.play(); a.time = Math.min(old.time, clip.duration); a.setEffectiveWeight(old.getEffectiveWeight()); this.current = a; }
+        old.stop();
+        this.mixer.uncacheAction(old.getClip());
+      }
+      this.meta.clips[name] = r.meta.clips[name];
+      this.rm[name] = r.rm[name];
+    }
+    this.footRest = r.footRest;
+    this.feet = ['LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase'].map((n) => this.model.getObjectByName(n)).filter(Boolean);
+    this.hipsBone = this.model.getObjectByName('Hips');
+    // the saber moves from the grip bone to the hand, on the grip the pack's two-handed frames agree on
+    const hand = this.model.getObjectByName('RightHand');
+    if (this.saber && hand) {
+      const g = this.saber.group, ws = new THREE.Vector3();
+      hand.add(g);
+      g.position.copy(r.grip.p);
+      g.quaternion.copy(r.grip.q);
+      hand.getWorldScale(ws);
+      g.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
+      this.saberOnHand = true;
+    }
+    this.packed = true;
+    this.onPack?.();
   }
 
   has(name) { return !!this.actions[name]; }
@@ -255,6 +338,7 @@ export class SkinnedMechBody {
     root.position.copy(o.pos).add(_pv).sub(_pv2);
     if (o.lift) root.position.y += o.lift;
     this.mixer.update(dt);
+    if (o.grounded && this.feet && this.hipsBone) this.groundFeet();
 
     // recoil spring + run lean on the spine, on top of the clip
     const kk = 170, c = 2 * 0.55 * 13;
@@ -273,6 +357,21 @@ export class SkinnedMechBody {
     this.updateThrusters(dt, o.thr);
     this.updateSword(dt, o.swinging, o.lit);
     this.updateTint(dt);
+  }
+
+  // keep the lowest foot on the ground plane: move the hips up / down by the difference to the bind-pose foot height
+  groundFeet() {
+    this.root.updateMatrixWorld(true);
+    let y = Infinity;
+    for (const f of this.feet) y = Math.min(y, _v.setFromMatrixPosition(f.matrixWorld).y);
+    const want = this.root.position.y + this.footRest * this.k;
+    const dy = THREE.MathUtils.clamp(want - y, -0.25 * MECH_H, 0.2 * MECH_H);
+    if (Math.abs(dy) < 1e-4) return;
+    const par = this.hipsBone.parent;
+    const inv = _q.copy(par.getWorldQuaternion(_q)).invert();
+    const sc = par.getWorldScale(_v2);
+    this.hipsBone.position.add(_v.set(0, dy, 0).applyQuaternion(inv).divide(sc));
+    this.hipsBone.updateMatrixWorld(true);
   }
 
   updateThrusters(dt, want) {
@@ -295,12 +394,12 @@ export class SkinnedMechBody {
   updateSword(dt, swinging, lit) {
     const flick = 0.92 + Math.sin(this.time * 61) * 0.04 + Math.sin(this.time * 37) * 0.04;
     if (this.saber) {
-      if (this.saber.update(dt, lit, swinging)) {
+      if (this.saber.update(dt, lit || this.charge > 0, swinging || this.charge > 0)) {
         // ignition crackle at the emitter
         const p = this.saber.group.localToWorld(_v.set(0, this.saber.base, 0));
         this.fx.sparksAt(p, 8, { color: this.light.color.getHex(), speed: 6, life: 0.22, width: 0.04, grav: 0 });
       }
-      this.light.intensity = this.saber.k * (swinging ? 24 : 10) * flick;
+      this.light.intensity = this.saber.k * (swinging ? 24 : 10) * flick * (1 + this.charge * 0.9);
     } else this.light.intensity = (swinging ? 22 : 0) * flick;
     const b = _v, t = _v2;
     this.bladeWorld(b, t);
@@ -323,9 +422,17 @@ export class SkinnedMechBody {
     const dir = outTip.set(0, 1, 0).applyQuaternion(ax).normalize();
     const p = this.grip.getWorldPosition(outBase);
     if (this.saber) {
-      const s = this.saber;
-      outTip.copy(p).addScaledVector(dir, s.reach);
-      outBase.copy(p).addScaledVector(dir, s.base + s.length * s.k * 0.12);
+      const s = this.saber, g = s.group;
+      g.updateMatrixWorld(true);
+      outTip.set(0, s.reach, 0).applyMatrix4(g.matrixWorld);
+      outBase.set(0, s.base + s.length * s.k * 0.12, 0).applyMatrix4(g.matrixWorld);
+      return;
+    }
+    if (this.katanaMesh) {
+      const g = this.katanaMesh, L = g.userData.length;
+      g.updateMatrixWorld(true);
+      outTip.set(0, L, 0).applyMatrix4(g.matrixWorld);
+      outBase.set(0, L * 0.3, 0).applyMatrix4(g.matrixWorld);
       return;
     }
     const L = this.blade * this.k;
@@ -435,7 +542,7 @@ export function single(k, meta, clip, { t0, t1, lead = 0.25, tail = 0.5, speed =
 // registers the clip moves into MOVES and returns a combo table shaped like swordAnim's COMBO
 export function buildSkinCombos(body) {
   const { meta, k } = body;
-  const reg = (prefix, list) => list.map((m, i) => { const id = `${prefix}${i}`; MOVES[id] = m; return id; });
+  const reg = (prefix, list) => list.map((m, i) => { const id = `${prefix}${i}`; m.rm = body.rm?.[m.clip] || null; MOVES[id] = m; return id; });
   const has = (c) => !!meta.clips[c];
   const K = { dmg: 14 };
   // every cut of the katana combo clip, back to back: picking only its two biggest swings left a second-long dead
@@ -444,7 +551,9 @@ export function buildSkinCombos(body) {
   return {
     ground: ground.length ? ground : ['k1', 'k2', 'k3', 'k4'],
     heavy: has('charge') ? reg('sh', [single(k, meta, 'charge', { speed: 1.05, extra: { dmg: 32, hitstop: 0.12, shock: 3.2, heavy: true } })])[0] : 'kH',
-    launch: has('gs_slash') ? reg('sl', [single(k, meta, 'gs_slash', { speed: 1.3, extra: { dmg: 16, hitstop: 0.09, launch: true, lunge: 1.8 } })])[0] : 'kL',
+    launch: body.packed && has('jump_attack') ? reg('sl', [single(k, meta, 'jump_attack', { t0: meta.clips.jump_attack.swings[0].t0, t1: meta.clips.jump_attack.swings[0].t1, lead: 0.2, tail: 0.3, speed: 1.1, extra: { dmg: 16, hitstop: 0.09, launch: true, lunge: 1.8 } })])[0]
+      : has('gs_slash') ? reg('sl', [single(k, meta, 'gs_slash', { speed: 1.3, extra: { dmg: 16, hitstop: 0.09, launch: true, lunge: 1.8 } })])[0] : 'kL',
+    rush: body.packed && has('rush'),
     air: has('aerial') ? reg('sa', chain(k, meta, 'aerial', { speed: 1.25, minPeak: 30, limit: 3, base: { dmg: 12, air: true, lunge: 1.2 }, last: { dmg: 20, slam: true, heavy: true, hitstop: 0.1 } })) : ['kA1', 'kA2', 'kA3'],
     plunge: has('combo_down') ? reg('sp', [single(k, meta, 'combo_down', { speed: 1.25, extra: { dmg: 28, shock: 3.6, plunge: true, heavy: true, hitstop: 0.1 } })])[0] : 'kP',
   };

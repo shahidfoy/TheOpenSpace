@@ -493,8 +493,9 @@ export class ShipView {
       this.char?.dispose();
       this.char = c;
       this.ctrl = new Parkour(c);
-      if (this.sword) { this.sword.katana.removeFromParent(); this.sword.trail.mesh.visible = false; this.sword.trail.on = false; }
-      this.sword = c.katana ? new HumanSword(c, this.simFx) : null;
+      this.sword?.dispose();
+      this.sword = c.katana ? new HumanSword(c, this.simFx, this.sim.scene) : null;
+      if (this.sword) { this.sword.flashCb = (col, a) => this.flash(col, a); this.sword.punchCb = (k) => this.punch(k); }
       this.area.scene.add(c.root);
       c.root.visible = !this.mechActive && !this.helm;
       if (keep) this.ctrl.spawn(keep.pos, keep.yaw); else this.ctrl.spawn(this.area.spawn.pos, this.area.spawn.yaw);
@@ -571,6 +572,18 @@ export class ShipView {
     return 0xffc46a;
   }
   punch(k) { this.fovKick = Math.max(this.fovKick || 0, k); }
+  // climbing stamina (shown while it's not full) and the sword-dash charge pips
+  updateMeters(P) {
+    const st = P.stamina ?? 1, showS = st < 0.995 || (P.state === 'climb' && P.wall?.box.kind !== 'climb');
+    if (this.$stam.classList.contains('on') !== showS) this.$stam.classList.toggle('on', showS);
+    if (showS) { this.$stamBar.style.width = `${Math.round(st * 100)}%`; this.$stam.classList.toggle('low', st < 0.25); }
+    const lv = this.sword?.act?.kind === 'charge' ? this.sword.level : -1;
+    if (this.chargeShown !== lv) {
+      this.chargeShown = lv;
+      this.$charge.classList.toggle('on', lv >= 0);
+      this.$charge.querySelectorAll('b').forEach((b, i) => b.classList.toggle('lit', i < lv));
+    }
+  }
   flash(color, a) {
     const f = this.$impact;
     f.style.transition = 'none'; f.style.background = color; f.style.opacity = a;
@@ -615,6 +628,7 @@ export class ShipView {
       <div class="sh-load" hidden></div>
       <div class="sh-fade"></div>
       <div class="sh-impact"></div>
+      <div class="sh-meters"><div class="sh-stam"><i></i></div><div class="sh-charge"><b></b><b></b><b></b></div></div>
       <div class="sh-ward" hidden><div class="sh-card-wrap"><h3>WARDROBE</h3>
         <div class="sh-sec">CHARACTER</div><div class="sh-cards sh-chars"></div>
         <div class="sh-look"><div class="sh-sec">OUTFIT</div><div class="sh-cards sh-outfits"></div>
@@ -632,6 +646,8 @@ export class ShipView {
     this.$ward = el.querySelector('.sh-ward');
     this.$btns = el.querySelector('.sh-btns');
     this.$impact = el.querySelector('.sh-impact');
+    this.$stam = el.querySelector('.sh-stam'); this.$stamBar = el.querySelector('.sh-stam i');
+    this.$charge = el.querySelector('.sh-charge');
     el.querySelector('.sh-chars').innerHTML = CHARACTERS.map((c) => `
       <button class="sh-card" data-id="${c.id}"><img src="/characters/${c.thumb}" alt=""><b>${c.name}</b><small>${c.blurb}</small></button>`).join('') + `
       <button class="sh-card mech" data-id="mech"><div class="sh-mech-pic"><span>MECH</span></div><b>NEXORION</b><small>Training sim only</small></button>`;
@@ -681,7 +697,7 @@ export class ShipView {
     this.$help.textContent = this.mechActive
       ? 'WASD move · Space jump/fly · J/click slash · K heavy · L launch · Q arc · F guard · E dodge · X leave'
       : this.helm ? 'Drag to look around · E to stand up'
-      : this.area === this.sim ? 'WASD move · Shift sprint · Space jump · J/click slash · K/right-click heavy (in the air: plunge) · E interact'
+      : this.area === this.sim ? 'J slash · K heavy · hold K: charge dash · L launcher · Q spin · E dodge / interact · F guard · Space jump, wall kick, climb leap'
       : 'WASD move · Shift sprint · Space jump (again in the air) · drag to look · E interact';
     if (this.helm || this.mechActive) { this.near = null; this.$prompt.hidden = true; }
   }
@@ -770,10 +786,7 @@ export class ShipView {
       this.camera.position.copy(this.helmSeat);
       this.camera.lookAt(_v.copy(this.helmSeat).sub(dir));
     } else {
-      // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
-      const pdt = this.sword ? this.sword.update(dt, I, P, this.dojo, this.area === this.sim && this.$ward.hidden) : dt;
-      P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
-      // interaction prompt
+      // interaction prompt first: E interacts when something is in reach, otherwise it's the dodge
       let near = null;
       if (this.$ward.hidden) for (const it of this.area.interact) if (_v.copy(it.pos).setY(P.pos.y).distanceTo(P.pos) < it.r && Math.abs(P.pos.y - it.pos.y) < 2) near = it;
       if (near !== this.near) {
@@ -781,7 +794,12 @@ export class ShipView {
         this.$prompt.hidden = !near;
         if (near) this.$prompt.innerHTML = `<kbd>E</kbd> ${near.text}`;
       }
-      if (near && I.dodge) this.act(near.act);
+      if (near && I.dodge) { this.act(near.act); I.dodge = 0; }
+      // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
+      if (this.sword) this.sword.camYaw = this.camYaw;
+      const pdt = this.sword ? this.sword.update(dt, I, P, this.dojo, this.area === this.sim && this.$ward.hidden) : dt;
+      P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
+      this.updateMeters(P);
       if (!this.$ward.hidden && this.area === this.deck) {
         // wardrobe preview: face-on, framed to the left of the panel
         this.camYaw = Math.PI / 2; this.camPitch = 0.1;

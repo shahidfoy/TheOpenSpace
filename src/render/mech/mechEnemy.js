@@ -63,7 +63,7 @@ export class MechEnemy {
     const asset = skinned('mech_enemy');
     const L = HOSTILE[type];
     this.body = asset
-      ? new SkinnedMechBody(scene, fx, asset, { clone: true, livery: L, size: this.cfg.size, plume: L.plume })
+      ? new SkinnedMechBody(scene, fx, asset, { clone: true, livery: L, size: this.cfg.size, plume: L.plume, katana: true })
       : new MechBody(scene, fx, { scheme: type, lod: true, size: this.cfg.size });
     this.skin = asset ? this.body : null;
     if (asset) this.segs = segments(asset.meta);

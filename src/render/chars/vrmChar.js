@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
-import { retargetKatana } from './katana.js';
+import { retargetKatanaVrm } from './katana.js';
 
 // Playable VRM characters (VRoid Hub models, see public/characters/CREDITS.txt) animated with Mixamo clips retargeted
 // at load time onto the VRM humanoid. The retarget follows three-vrm's Mixamo example: every Mixamo bone's rotation
@@ -192,9 +192,9 @@ export class VrmChar {
     c.outfit = outfit;
     Object.keys(CLIPS).forEach((name, i) => c.addClip(name, retarget(assets[i], vrm, name, CLIPS[name][1])));
     c.addClip('wallrun_m', mirrorClip(c.actions.wallrun.getClip(), vrm, 'wallrun_m'));
-    // katana moves retargeted from the mech's anime katana clips (needs the rest pose, so before anything plays)
+    // the anime katana pack, retargeted onto this body (needs the rest pose, so before anything plays)
     try {
-      const kat = retargetKatana(vrm);
+      const kat = await retargetKatanaVrm(vrm);
       if (kat) { c.katana = kat; for (const clip of kat.clips) c.addClip(clip.name, clip); }
     } catch (e) { console.warn('katana retarget failed', e); }
     c.play('idle', { fade: 0 });
