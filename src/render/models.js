@@ -240,8 +240,8 @@ function makeSuitFrame() {
     const palm = anchorOn(`${side}Hand`, sg * 1.23, 3.0, 0.44);
     jet(palm, 'palms', [0, -1, 0.2], 0.035, 0.6);
     if (s === 'R') muzzle = palm;
-    // pod pivot turned half round so poseFrame's booster angles (hover ~0.6, dash -1.3) swing the exhaust from
-    // straight down to straight back
+    // pod pivot turned half round so poseFrame's booster angles (hover ~0.6, dash 0) swing the exhaust from
+    // straight down to raked ~15° back along the body
     const flip = anchorOn('Spine2', sg * 0.41, 4.42, -0.63);
     flip.rotation.y = Math.PI;
     parts[`booster_${s}`] = new THREE.Object3D();
@@ -386,8 +386,9 @@ export function poseFrame(g, c, dt, time) {
     set(p[`thigh_${s}`], 'z', `tz${s}`, sg * (0.05 * wh + 0.01 * (1 - wh)) + lagZ, 1.6, 0.45);
     set(p[`shin_${s}`], 'x', `sx${s}`, (0.25 + idle * 0.6) * wh + 0.1 * wc + 0.05 * dash + 0.9 * tuck + 0.3 * brake - 0.15 * reach * wh, 1.8, 0.5);
     set(p[`foot_${s}`], 'x', `fx${s}`, 0.2 * wh + 0.55 * wc + 0.8 * dash, 1.8, 0.6);
-    // pods: against the push in a hover, swung to fire along the body at speed
-    set(p[`booster_${s}`], 'x', `bx${s}`, L(L(C(0.61 - c.lift * 0.8, -0.6, 1.2), 0.15, cruise), -1.3, dash), 2, 0.7);
+    // pods: against the push in a hover, swung to fire along the body at speed; in a dash the exhaust trails
+    // toward the feet ~15° off the body line (0 = the plume's own 15.7° rake), not straight out of the back
+    set(p[`booster_${s}`], 'x', `bx${s}`, L(L(C(0.61 - c.lift * 0.8, -0.6, 1.2), 0.15, cruise), 0, dash), 2, 0.7);
     set(p[`booster_${s}`], 'z', `bz${s}`, -push * sg * 0.3, 2, 0.7);
     if (s === 'R' && c.aim) continue;
     // arms: stabilisers. Out with palms down in a hover, back along the sides at speed, forward to
