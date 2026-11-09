@@ -5,11 +5,17 @@ import * as THREE from 'three';
 // aligned boxes ({ min, max, kind: 'solid' | 'run' | 'climb' }); the character is a vertical cylinder (feet at pos).
 
 const G = 24, RUN = 6.2, SPRINT = 9.6, JUMP_V = 8.2, AIR_JUMP_V = 7.4;
-const WALLRUN_T = 1.5, WALLRUN_V = 8.5, CLIMB_V = 2.6, CLIMB_SIDE = 1.6, MANTLE_T = 0.5;
+const WALLRUN_T = 1.6, WALLRUN_V = 9, CLIMB_V = 2.6, CLIMB_SIDE = 1.6, MANTLE_T = 0.5;
 const UP = new THREE.Vector3(0, 1, 0);
 const _w = new THREE.Vector3(), _f = new THREE.Vector3(), _r = new THREE.Vector3(), _t = new THREE.Vector3(), _c = new THREE.Vector3();
 const lerp = THREE.MathUtils.lerp, clamp = THREE.MathUtils.clamp;
 const angDiff = (a, b) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
+// linear sample of a keyed curve
+function sampleCurve(T, V, t) {
+  if (t <= T[0]) return V[0];
+  for (let i = 1; i < T.length; i++) if (t <= T[i]) { const k = (t - T[i - 1]) / (T[i] - T[i - 1] || 1); return V[i - 1] + (V[i] - V[i - 1]) * k; }
+  return V[V.length - 1];
+}
 
 export class Parkour {
   constructor(ch) {
@@ -67,16 +73,22 @@ export class Parkour {
       _t.crossVectors(UP, n);
       const s = Math.sign(v.dot(_t)) || 1;
       this.runDir = s;
-      v.x = _t.x * s * WALLRUN_V - n.x * 1.5; v.z = _t.z * s * WALLRUN_V - n.z * 1.5;
-      v.y -= G * 0.28 * dt;
+      const sp = (this.wrSpeed = Math.min(11.5, (this.wrSpeed || WALLRUN_V) + dt * 1.2));
+      v.x = _t.x * s * sp - n.x * 1.5; v.z = _t.z * s * sp - n.z * 1.5;
+      // light gravity at first, heavier toward the end: you rise along the wall and arc over, Titanfall-style
+      v.y -= G * (0.16 + 0.6 * clamp(this.wallT / WALLRUN_T, 0, 1)) * dt;
+      // stay on the glowing strip: no running up past its top edge
+      if (this.pos.y + this.H * 0.55 > this.wall.box.max.y) v.y = Math.min(v.y, 0);
       this.wallT += dt;
       this.yaw = Math.atan2(_t.x * s, _t.z * s);
       if (jumpEdge) {
-        v.x = n.x * 7 + _t.x * s * 6; v.z = n.z * 7 + _t.z * s * 6; v.y = JUMP_V;
+        // kick off away from the wall carrying your speed, with the air jump back: chain wall to wall
+        const on = Math.max(sp, 8);
+        v.x = n.x * 6.5 + _t.x * s * on; v.z = n.z * 6.5 + _t.z * s * on; v.y = 7.8;
         this.airJumps = 1;
         this.leaveWall('air');
         this.ch.play('jump', { time: 0.25, fade: 0.1, restart: true });
-      } else if (this.wallT > WALLRUN_T || v.y < -7) this.leaveWall('air');
+      } else if (this.wallT > WALLRUN_T || v.y < -6) this.leaveWall('air');
     } else {
       // ground / air locomotion
       const top = this.grounded ? (I.boost ? SPRINT : RUN) : Math.max(RUN, Math.hypot(v.x, v.z));
@@ -105,8 +117,8 @@ export class Parkour {
           this.ch.play('climb_up', { fade: 0.15 });
         } else if (w.box.kind === 'run' && !this.grounded && along > 3 && into > -0.2) {
           this.state = 'wallrun'; this.wallT = 0;
-          v.y = Math.max(v.y, 3.2);
-          this.ch.play('wallrun', { fade: 0.15 });
+          this.wrSpeed = clamp(along, WALLRUN_V, 11);
+          v.y = Math.max(v.y, 3.4);
         }
       }
       // ledge grab: reach the top of any wall while pushing into it (jumping, falling, or a low wall on foot)
@@ -115,11 +127,14 @@ export class Parkour {
       if (L && this.state !== 'climb' && this.state !== 'wallrun') {
         const into = -wish.dot(L.n), reach = L.box.max.y - this.pos.y;
         const air = !this.grounded && v.y < 4.5 && reach > this.H * 0.35 && reach < this.H * 1.3;
+        const runUp = this.grounded && this.runMemo > 4.5 && wish.lengthSq() > 0.5 && reach > 0.45 && reach < this.climbRise() * 0.98;
         const low = this.grounded && reach > 0.45 && reach < this.H * 0.95;
-        if (into > 0.3 && (air || low) && this.tryMantle(L.box, L.n)) return;
+        if ((into > 0.3 && (air || low)) || (into > 0.7 && runUp)) { if (this.tryMantle(L.box, L.n)) return; }
       }
     }
 
+    // remember how fast you were running a moment ago (a wall you run into stops you dead, but you still ran at it)
+    this.runMemo = Math.max(this.grounded ? Math.hypot(v.x, v.z) : 0, (this.runMemo || 0) - dt * 10);
     this.integrate(dt, ctx.boxes);
     if (this.pos.y < ctx.killY) this.spawn(ctx.spawn.pos, ctx.spawn.yaw);
     // climbing off the side of the panel or wall-running past its end
@@ -150,16 +165,49 @@ export class Parkour {
     const h = end.y - this.pos.y;
     // catch the edge (hands at the ledge), then haul up and step over: longer for a higher pull
     const from = this.pos.clone();
-    this.mantle = { t: 0, dur: MANTLE_T * clamp(h / 1.3, 0.55, 1.25) + 0.1, from, to: end.clone(), yaw: Math.atan2(-n.x, -n.z) };
+    const m = (this.mantle = { t: 0, dur: MANTLE_T * clamp(h / 1.3, 0.55, 1.25) + 0.1, from, to: end.clone(), h, yaw: Math.atan2(-n.x, -n.z) });
     this.state = 'mantle';
     this.vel.set(0, 0, 0);
-    this.yaw = this.mantle.yaw;
-    this.ch.play('climb_up', { fade: 0.08, speed: 2.4 });
+    this.yaw = m.yaw;
+    // The climb clip runs up a wall and hauls itself over the top. Start it at the point where the rise still to go
+    // matches this ledge, play to the top, and move the body along the clip's own rise and travel
+    const cv = this.ch.actions.wall_start?.getClip().rootCurve;
+    if (cv) {
+      const T = cv.times, R = cv.rise, F = cv.fwd, N = T.length;
+      let ie = 0; for (let i = 0; i < N; i++) if (R[i] > R[ie]) ie = i;
+      let i0 = 0; while (i0 < ie && R[i0 + 1] - R[i0] < 0.004) i0++;          // skip the run-up
+      let is = i0; for (let i = ie; i >= i0; i--) if (R[ie] - R[i] >= h) { is = i; break; }
+      Object.assign(m, { curve: cv, ts: T[is], te: T[ie], r0: R[is], r1: R[ie], f0: F[is], f1: F[ie] });
+      m.dur = (m.te - m.ts) / 1.45 + 0.04;
+      this.ch.play('wall_start', { fade: 0.1, time: m.ts, restart: true });
+      this.ch.scrub(m.ts);
+    } else this.ch.play('climb_up', { fade: 0.08, speed: 2.4 });
     return true;
+  }
+
+  // how high the climb clip can carry you from a run (its full rise on this character)
+  climbRise() {
+    const cv = this.ch.actions.wall_start?.getClip().rootCurve;
+    return cv ? Math.max(...cv.rise) : this.H * 0.95;
   }
 
   updateMantle(dt) {
     const m = this.mantle;
+    if (m.curve) {
+      m.t = Math.min(1, m.t + dt / m.dur);
+      const tc = m.ts + (m.te - m.ts) * m.t;
+      const cv = m.curve;
+      const up = clamp((sampleCurve(cv.times, cv.rise, tc) - m.r0) / Math.max(1e-3, m.r1 - m.r0), 0, 1);
+      // travel over the lip: the clip's own forward motion where it has some, else a late step
+      const fr = m.f1 - m.f0 > 0.05 ? clamp((sampleCurve(cv.times, cv.fwd, tc) - m.f0) / (m.f1 - m.f0), 0, 1) : Math.max(0, (m.t - 0.6) / 0.4);
+      const fw = Math.max(fr, Math.max(0, (up - 0.85) / 0.15) * 0.6);
+      const e = (x) => x * x * (3 - 2 * x);
+      this.pos.set(lerp(m.from.x, m.to.x, e(fw)), m.from.y + m.h * up, lerp(m.from.z, m.to.z, e(fw)));
+      this.ch.scrub(tc);
+      if (m.t >= 1) { this.pos.copy(m.to); this.state = 'ground'; this.grounded = true; this.mantle = null; this.airJumps = 1; this.lastWall = null; this.ch.play(this.idleClip || 'idle', { fade: 0.2 }); }
+      this.animate(dt);
+      return;
+    }
     m.t = Math.min(1, m.t + dt / (m.dur || MANTLE_T));
     // a short catch at the edge, the haul (rises fast), then the step over the lip
     const hauling = Math.max(0, (m.t - 0.12) / 0.88);
@@ -186,7 +234,8 @@ export class Parkour {
         let dx = p.x - cx, dz = p.z - cz;
         const d = Math.hypot(dx, dz);
         if (d >= this.R) continue;
-        if (prevY >= b.max.y - 0.06 && v.y <= 0.01) { p.y = b.max.y; v.y = 0; ground = true; continue; }        // landed on top
+        const thin = b.kind !== 'solid' && Math.min(b.max.x - b.min.x, b.max.z - b.min.z) < 0.3;   // panel lips are not floors
+        if (!thin && prevY >= b.max.y - 0.06 && v.y <= 0.01) { p.y = b.max.y; v.y = 0; ground = true; continue; }        // landed on top
         if (prevY + this.H <= b.min.y + 0.06 && v.y > 0) { p.y = b.min.y - this.H; v.y = 0; continue; }         // head bump
         if (b.max.y - p.y < 0.45 && (wasGrounded || ground) && this.state !== 'climb') { p.y = b.max.y; v.y = Math.max(0, v.y); ground = true; continue; }   // step up
         let nx, nz, pen;
@@ -206,6 +255,7 @@ export class Parkour {
     if (!ground && v.y <= 0) {
       for (const b of boxes) {
         if (Math.abs(p.y - b.max.y) > 0.05) continue;
+        if (b.kind !== 'solid' && Math.min(b.max.x - b.min.x, b.max.z - b.min.z) < 0.3) continue;
         const cx = clamp(p.x, b.min.x, b.max.x), cz = clamp(p.z, b.min.z, b.max.z);
         if (Math.hypot(p.x - cx, p.z - cz) < this.R * 0.6) { ground = true; p.y = b.max.y; v.y = 0; break; }
       }
@@ -242,7 +292,7 @@ export class Parkour {
       const mv = v.y;
       c.play(mv < -0.1 ? 'climb_down' : 'climb_up', { fade: 0.15, speed: Math.abs(mv) > 0.1 || Math.abs(hs) > 0.1 ? 1 : 0 });
     } else if (st === 'wallrun') {
-      c.play('wallrun', { fade: 0.12 });
+      c.play(this.wallSide >= 0 ? 'wallrun' : 'wallrun_m', { fade: 0.12, speed: clamp((this.wrSpeed || WALLRUN_V) / WALLRUN_V, 0.9, 1.3) });
     } else if (st === 'mantle') {
       // the climb clip at speed sells the pull-up
     } else if (this.grounded) {
@@ -257,13 +307,16 @@ export class Parkour {
     // wall-run lean: tilt away from the wall
     let wantRoll = 0;
     if (st === 'wallrun' && this.wall) {
-      // head away from the wall: positive roll tips the head toward the character's right (local -X)
+      // which side the wall is on (+1 left); lean the head away from it with the feet planted on the wall
+      // (positive roll tips the head toward the character's right, local -X)
       const n = this.wall.n, leftX = Math.cos(this.yaw), leftZ = -Math.sin(this.yaw);
-      wantRoll = 0.38 * Math.sign(-(n.x * leftX + n.z * leftZ));
+      this.wallSide = Math.sign(-(n.x * leftX + n.z * leftZ)) || 1;
+      wantRoll = 0.35 * this.wallSide;          // on top of the clip's own lean
     }
-    this.roll += (wantRoll - this.roll) * Math.min(1, dt * 10);
+    this.roll += (wantRoll - this.roll) * Math.min(1, dt * 12);
     const root = c.root;
     root.position.copy(this.pos);
+    if (st === 'wallrun' && this.wall) root.position.addScaledVector(this.wall.n, -0.14 * Math.abs(this.roll) / 0.35);
     root.rotation.set(0, this.yaw, this.roll, 'YXZ');
     c.update(dt);
   }
