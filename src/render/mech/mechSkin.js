@@ -333,7 +333,7 @@ export class SkinnedMechBody {
       this.armR = ['rightUpperArm', 'rightLowerArm', 'rightHand'].map(N);
       this.twoK = 0;
       // the shotgun, sized to the claw; mounts: in the right hand / stowed on the thigh
-      const gun = (this.gun = makeShotgun(0.31 * asset.meta.height * this.k, { metal: 0x2a2f38, trim: 0x16191f, glow: 0xff5a3a }));
+      const gun = (this.gun = makeShotgun(0.31 * asset.meta.height * this.k, { metal: 0x2a2f38, trim: 0x16191f }));
       gun.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
       this.gunScale = gun.scale.clone();
       // the gun in the fist: barrels the way the fingers point, its grip down through the knuckle row
@@ -349,9 +349,9 @@ export class SkinnedMechBody {
   }
 
   // first person: the gun leaves the fist for the camera (a view model) while aim is held
-  setFps(camera, recoil = 0) {
+  setFps(camera, recoil = 0, vm = null) {
     if (!this.gun) return;
-    if (camera && this.weapon === 'gun') { this.fps = true; mountFps(this.gun, camera, this.root.parent, recoil); }
+    if (camera && this.weapon === 'gun') { this.fps = true; mountFps(this.gun, camera, this.root.parent, recoil, vm); }
     else if (this.fps) { this.fps = false; const w = this.weapon; this.weapon = null; this.setWeapon(w); }
   }
   // which weapon is in the right hand: 'sword' (the saber hilt) or 'gun'; the other rides on a thigh
@@ -387,11 +387,12 @@ export class SkinnedMechBody {
     this.rage = on;
     if (on) {
       this.saber?.setColor(RAGE_COLOR);
+      this.gun?.userData.setGlow(RAGE_COLOR);
       this.light.color.set(RAGE_COLOR);
       this.trail.mesh.material.uniforms.color.value.set(RAGE_COLOR).multiplyScalar(2.6);
       this.slashColor = 0xff6a6a;
       this.setTint(RAGE_COLOR, 0.1);
-    } else { this.setLivery(this.livery); this.setTint(0x000000, 0); }
+    } else { this.setLivery(this.livery); this.setTint(0x000000, 0); this.gun?.userData.setGlow(0x39d8ff); }
   }
 
   has(name) { return !!this.actions[name]; }

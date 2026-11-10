@@ -299,7 +299,10 @@ export class MechPilot {
       this.vel.z = lerp(this.vel.z, dir.z * top, k);
       this.accelX = (this.vel.x - prevX) / Math.max(dt, 1e-4); this.accelZ = (this.vel.z - prevZ) / Math.max(dt, 1e-4);
       const hs = Math.hypot(this.vel.x, this.vel.z);
-      if (K.gun && ctx.aim) { K.aimT = Math.max(K.aimT, 0.35); d0.copy(ctx.aim.d); }      // facing follows the crosshair
+      if (K.gun && ctx.aim) {                        // facing follows the crosshair
+        K.aimT = Math.max(K.aimT, 0.35); d0.copy(ctx.aim.d);
+        this.aimOn = shotgun(ctx.aim.o, ctx.aim.d, ctx.targets, { range: 200, spread: 0, pellets: 1, tall: 1.9 * S }).hits.size > 0;
+      } else this.aimOn = false;
       if (K.gun && K.aimT > 0.3) this.yaw += angDiff(this.yaw, Math.atan2(this.aimDir.x, this.aimDir.z)) * (1 - Math.exp(-18 * dt));   // onto the aim
       else if (this.guarding && this.lock) this.faceTarget(this.lock, dt, 12);
       else if (hs > 0.6 && (wish.lengthSq() > 0.01 || boosting)) this.yaw += angDiff(this.yaw, Math.atan2(this.vel.x, this.vel.z)) * (1 - Math.exp(-(this.grounded ? 10 : boosting ? 5 : 3) * dt));
@@ -743,7 +746,7 @@ export class MechPilot {
     }
     if (t) { d.copy(t.pos); d.y += (t.height || 1.9 * S) * 0.55; d.sub(o).normalize(); }
     const origin = o.clone().addScaledVector(d, A?.fps ? 1.2 : 1.6 * S);
-    const res = shotgun(origin, d, ctx.targets, wide ? { range: 11 * S, spread: 0.3, pellets: 14, tall: 1.9 * S } : { range: GUN_RANGE, tall: 1.9 * S });
+    const res = shotgun(origin, d, ctx.targets, wide ? { range: 11 * S, spread: 0.3, pellets: 14, tall: 1.9 * S } : { range: GUN_RANGE, tall: 1.9 * S, spread: A?.fps ? 0.05 : A ? 0.085 : KIT.spread });
     for (const [tg, n] of res.hits) {
       const dist = Math.hypot(tg.pos.x - this.pos.x, tg.pos.z - this.pos.z);
       const fall = wide ? 1 : clamp(1.25 - dist / GUN_RANGE * 1.1, 0.4, 1);
@@ -752,7 +755,7 @@ export class MechPilot {
     }
     for (const e of res.ends) {
       _v.copy(e).sub(origin); const L = _v.length(); _v.multiplyScalar(1 / Math.max(L, 1e-3));
-      this.fx.sparksAt(origin, 1, { dir: _v, spread: 0, speed: Math.min(600, L / 0.07), life: 0.09, width: 0.07, grav: 0, color: K.raging ? 0xff8a7a : 0xffd9a0, intensity: 5 });
+      this.fx.sparksAt(origin, 1, { dir: _v, spread: 0, speed: Math.min(600, L / 0.07), life: 0.09, width: 0.07, grav: 0, color: K.raging ? 0xff8a7a : 0x9fe8ff, intensity: 5 });
       if (L < (wide ? 11 * S : GUN_RANGE) - 0.2) this.fx.sparksAt(e, 2, { speed: 10, life: 0.2, width: 0.05, color: 0xffe2a8 });
     }
     this.fx.sparksAt(origin, wide ? 18 : 10, { dir: d, spread: 0.5, speed: 26, life: 0.14, width: 0.08, grav: 0, color: 0xffc080 });
@@ -913,7 +916,7 @@ export class MechPilot {
     if (K.raging) { this.hp = Math.min(MAX_HP, this.hp + dmg * KIT.lifesteal * 0.25); color = 0xff6a5a; }
     if (!mv.zone) K.dealt(dmg);
     if (!mv.zone && !mv.gun) K.swordHit();
-    if (mv.gun) K.mark('gunHit');
+    if (mv.gun) { K.mark('gunHit'); ctx.onGunHit?.(!t.alive); }
     if (mv.finisher && !mv.zone) K.mark('finisher');
     if (mv.light) this.fx.sparksAt(p, 8, { color: 0xff6a5a, speed: 14, life: 0.35, floor: t.pos.y - 0.5 });
     else {
@@ -1123,7 +1126,7 @@ export class MechPilot {
     const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'rush' || cutDash;
     const lit = (st === 'attack' || st === 'aim' || st === 'rush' || st === 'rushEnd' || cutDash || this.swordHold > 0 || this.guardK > 0.3) && !REACT.has(st) && !K.gun;
     const grounded = this.grounded && !this.flying && (st === 'idle' || st === 'attack' || st === 'aim' || st === 'rushEnd') && !this.move?.air;
-    B.setFps(K.gun && this.fpsCam ? this.fpsCam : null, this.recoil);
+    B.setFps(K.gun && this.fpsCam ? this.fpsCam : null, this.recoil, this.vm);
     B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean, grounded,
       afterPose: this.aimK > 0.01 ? (b) => b.aimGun(this.aimDir, this.aimK, this.recoil) : null });
   }

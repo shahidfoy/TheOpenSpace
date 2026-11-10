@@ -44,14 +44,18 @@ export function createInput(app) {
   const locked = () => document.pointerLockElement === canvas;
   addEventListener('mousemove', (e) => { if (locked()) { look.x += e.movementX; look.y += e.movementY; } });
   addEventListener('mouseup', (e) => { if (e.button in mouse) mouse[e.button] = false; });
+  // gun mode reads the buttons here: with one button held (aiming), pressing another raises no pointerdown at all
+  canvas.addEventListener('mousedown', (e) => {
+    if (!aim || app.mode === 'map') return;
+    if (e.button in mouse) mouse[e.button] = true;
+    if (e.button === 0) taps.attack++; else if (e.button === 1) taps.swap++;
+  });
   document.addEventListener('pointerlockchange', () => { if (!locked()) mouse[0] = mouse[2] = false; });
   canvas.addEventListener('pointerdown', (e) => {
     if (app.mode === 'map') return;
-    if (aim && e.pointerType === 'mouse') {
-      // captured: the buttons act at once (no click-or-drag guessing)
-      if (locked()) { if (e.button in mouse) mouse[e.button] = true; if (e.button === 0) taps.attack++; else if (e.button === 1) taps.swap++; return; }
-      try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* not available: drag to aim instead */ }
-    }
+    // gun mode: capture the mouse (where the browser allows it); until then a drag still steers
+    if (aim && e.pointerType === 'mouse' && !locked()) { try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* drag to aim instead */ } }
+    if (aim && e.pointerType === 'mouse' && locked()) return;
     drags.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), button: e.button, mouse: e.pointerType === 'mouse', still: true });
     canvas.setPointerCapture?.(e.pointerId);
   });
@@ -59,7 +63,7 @@ export function createInput(app) {
   canvas.addEventListener('pointermove', (e) => {
     const p = drags.get(e.pointerId);
     if (!p) return;
-    if (drags.size === 2) {
+    if (drags.size === 2 && e.pointerType !== 'mouse') {
       // two fingers: pinch to zoom the camera in and out
       const d0 = spread();
       p.x = e.clientX; p.y = e.clientY;
@@ -83,7 +87,7 @@ export function createInput(app) {
   canvas.addEventListener('pointerup', (e) => {
     // a quick mouse click (not a drag) on the surface: left = attack, middle = swap weapons (right is held: block)
     const p = drags.get(e.pointerId);
-    if (p && e.pointerType === 'mouse' && (app.mode === 'surface' || app.mode === 'ship') && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) < 6 && performance.now() - p.t0 < 350) {
+    if (p && !aim && e.pointerType === 'mouse' && (app.mode === 'surface' || app.mode === 'ship') && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) < 6 && performance.now() - p.t0 < 350) {
       if (p.button === 1) taps.swap++;
       else if (p.button === 0) taps.attack++;
     }
@@ -177,6 +181,7 @@ export function createInput(app) {
   function setAim(on) {
     if (aim === on) return;
     aim = on;
+    mouse[0] = mouse[2] = false;
     if (!on && locked()) document.exitPointerLock?.();
   }
   return { bindJoystick, bindHold, sample, setAim };

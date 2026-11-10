@@ -394,7 +394,8 @@ export class SurfaceView {
     if (I.wheel) { I.swap = (I.swap || 0) + 1; I.zoom = 1; }
     if (kit.gun) { ads = !!I.rmb; I.guard = !!I.guardKey; }
     input.setAim?.(kit.gun);
-    const adsK = this.gunView.update(dt, kit.gun, ads), sens = 1 - adsK * 0.45;
+    const adsK = this.gunView.update(dt, kit.gun, ads, { lookX: I.lookX, lookY: I.lookY, kit, on: P.aimOn, speed: Math.hypot(P.vel.x, P.vel.z) / (MECH_S * 4) }), sens = 1 - adsK * 0.5;
+    this.gunView.begin(this.camera);
     this.camYaw -= I.lookX * 0.006 * sens;
     if (I.lookX) this.lockYawHold = 1.2;
     this.camPitch = THREE.MathUtils.clamp(this.camPitch + I.lookY * 0.004 * sens, kit.gun ? -0.9 : -0.15, 1.1);
@@ -423,7 +424,7 @@ export class SurfaceView {
     this.ctx.center = fight ? A.center : null;
     this.ctx.bound = fight ? A.R - 1.5 : BOUND;
     this.ctx.camYaw = this.camYaw;
-    this.ctx.aim = this.gunView.ray(); this.ctx.onFire = () => this.gunView.fired();
+    this.ctx.aim = this.gunView.ray(); this.ctx.onFire = () => this.gunView.fired(); this.ctx.onGunHit = (k) => this.gunView.hit(k); P.vm = this.gunView.vm;
     P.fpsCam = adsK > 0.6 ? this.camera : null;
     if (I.arena && this.hasArena && A.info.inside && !A.fighting && P.alive) A.start();
     P.update(dt, I, this.ctx);

@@ -758,3 +758,15 @@ b, strong { font-weight: 600; }
 .crosshair i:nth-child(3) { right: var(--gap); } .crosshair i:nth-child(4) { left: var(--gap); }
 .crosshair b { position: absolute; left: -1.5px; top: -1.5px; width: 3px; height: 3px; border-radius: 50%; background: #ff7a4a; box-shadow: 0 0 0 1px rgba(0,0,0,0.55); }
 .crosshair.ads i { background: #ffb080; }
+/* crosshair: over a target, hit marker, shell count */
+.crosshair.on i, .crosshair.on b { background: #ff5a4a; }
+.crosshair u { position: absolute; left: -9px; top: -9px; width: 18px; height: 18px; opacity: 0; transform: rotate(45deg) scale(0.6); transition: opacity 0.12s, transform 0.12s; }
+.crosshair u::before, .crosshair u::after { content: ''; position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.crosshair u::before { left: 8px; top: 0; width: 2px; height: 18px; clip-path: polygon(0 0, 100% 0, 100% 30%, 0 30%, 0 70%, 100% 70%, 100% 100%, 0 100%); }
+.crosshair u::after { top: 8px; left: 0; height: 2px; width: 18px; clip-path: polygon(0 0, 30% 0, 30% 100%, 0 100%, 70% 100%, 70% 0, 100% 0, 100% 100%, 70% 100%); }
+.crosshair.hit u { opacity: 1; transform: rotate(45deg) scale(1); transition: none; }
+.crosshair.kill u::before, .crosshair.kill u::after { background: #ff3a2a; }
+.crosshair em { position: absolute; left: 22px; top: 14px; font: 600 11px var(--mono); font-style: normal; letter-spacing: 0.08em; color: #dff6ff; text-shadow: 0 0 4px #000, 0 0 8px rgba(57,216,255,0.7); white-space: nowrap; }
+.crosshair em.low { color: #ff8a6a; }
+.kit-weapon[data-w="gun"] { border-left-color: #39d8ff; }
+.kit-shells i.on { background: #39d8ff; box-shadow: 0 0 5px rgba(57,216,255,0.7); }

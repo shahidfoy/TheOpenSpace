@@ -824,7 +824,10 @@ export class ShipView {
       if (kit.gun) { ads = !!I.rmb; I.guard = !!I.guardKey; }
     }
     input.setAim?.(!!kit?.gun);
-    const adsK = this.gunView.update(dt, !!kit?.gun, ads), sens = 1 - adsK * 0.45;
+    const body = this.mechActive ? this.mech : this.ctrl;
+    const adsK = this.gunView.update(dt, !!kit?.gun, ads, { lookX: I.lookX, lookY: I.lookY, kit, on: this.mechActive ? this.mech.aimOn : this.sword?.aimOn,
+      speed: body ? Math.hypot(body.vel.x, body.vel.z) / (this.mechActive ? MECH_S * 4 : 4) : 0 }), sens = 1 - adsK * 0.5;
+    this.gunView.begin(this.camera);
     this.camYaw -= I.lookX * 0.006 * sens;
     this.camPitch = THREE.MathUtils.clamp(this.camPitch + I.lookY * 0.004 * sens, kit?.gun ? -1.1 : -0.6, 1.2);
     if (this.mechActive) this.mechDist = THREE.MathUtils.clamp(this.mechDist * I.zoom, 10, 45);
@@ -860,7 +863,7 @@ export class ShipView {
       // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
       if (this.sword) this.sword.camYaw = this.camYaw;
       const fighting = this.area === this.sim && this.$ward.hidden;
-      if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.onFire = () => this.gunView.fired(); }
+      if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.onFire = () => this.gunView.fired(); this.sword.onGunHit = (k) => this.gunView.hit(k); this.sword.vm = this.gunView.vm; }
       const pdt = this.sword ? this.sword.update(dt, I, P, this.simTargets, fighting) : dt;
       if (this.sword && this.area === this.sim) this.bots.update(pdt, P, this.sword, fighting);
       P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
@@ -902,7 +905,7 @@ export class ShipView {
     ctx.targets = ctx.enemies = fight ? A.targets : this.dummies;
     ctx.bound = fight ? A.R - 1.5 : this.yard.R - 2;
     ctx.camYaw = this.camYaw;
-    ctx.aim = this.gunView.ray(); ctx.onFire = () => this.gunView.fired();
+    ctx.aim = this.gunView.ray(); ctx.onFire = () => this.gunView.fired(); ctx.onGunHit = (k) => this.gunView.hit(k); M.vm = this.gunView.vm;
     M.fpsCam = adsK > 0.6 ? this.camera : null;
     if (I.arena && !A.fighting && M.alive) A.start();
     for (const d of this.dummies) d.group.visible = d.alive && !fight;

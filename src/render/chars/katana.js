@@ -358,7 +358,9 @@ export class HumanSword {
     // first person (aim held): the gun rides the camera as a view model
     const fps = K.gun && this.aim?.fps && this.cam;
     this.hold(K.gun ? (fps ? 'gunfps' : 'gun') : sword ? 'sword' : '');
-    if (fps) mountFps(this.gun, this.cam, this.ch.root.parent, this.recoil);
+    if (fps) mountFps(this.gun, this.cam, this.ch.root.parent, this.recoil, this.vm);
+    // is the crosshair on something?
+    this.aimOn = !!(K.gun && this.aim) && shotgun(this.aim.o, this.aim.d, targets, { range: 60, spread: 0, pellets: 1 }).hits.size > 0;
     P.idleClip = sword ? 'k_idle' : 'idle';
     P.runClip = sword ? 'k_run' : 'run';
     // the gun arm: up while a shot is fresh, the body turned onto the aim
@@ -430,7 +432,8 @@ export class HumanSword {
     }
     o.addScaledVector(d, A?.fps ? 0.5 : 0.45);
     const origin = o.clone();
-    const res = shotgun(origin, d, targets, wide ? { range: 11, spread: 0.3, pellets: 14 } : { range: GUN_RANGE });
+    // down the sights the pattern is tighter
+    const res = shotgun(origin, d, targets, wide ? { range: 11, spread: 0.3, pellets: 14 } : { range: GUN_RANGE, spread: A?.fps ? 0.05 : A ? 0.085 : KIT.spread });
     for (const [tg, n] of res.hits) {
       const dist = Math.hypot(tg.pos.x - P.pos.x, tg.pos.z - P.pos.z);
       const fall = wide ? 1 : clamp(1.25 - dist / GUN_RANGE * 1.1, 0.4, 1);
@@ -439,10 +442,10 @@ export class HumanSword {
     }
     for (const e of res.ends) {
       _b.copy(e).sub(origin); const L = _b.length(); _b.multiplyScalar(1 / Math.max(L, 1e-3));
-      this.fx.sparksAt(origin, 1, { dir: _b, spread: 0, speed: Math.min(200, L / 0.07), life: 0.09, width: 0.022, grav: 0, color: K.raging ? 0xff8a7a : 0xffd9a0, intensity: 5 });
+      this.fx.sparksAt(origin, 1, { dir: _b, spread: 0, speed: Math.min(200, L / 0.07), life: 0.09, width: 0.022, grav: 0, color: K.raging ? 0xff8a7a : 0x9fe8ff, intensity: 5 });
       if (L < (wide ? 10.9 : GUN_RANGE - 0.1)) this.fx.sparksAt(e, 2, { speed: 4, life: 0.2, width: 0.02, color: 0xffe2a8 });
     }
-    this.fx.sparksAt(origin, wide ? 16 : 9, { dir: d, spread: 0.5, speed: 9, life: 0.14, width: 0.03, grav: 0, color: 0xffc080 });
+    this.fx.sparksAt(origin, wide ? 16 : 9, { dir: d, spread: 0.5, speed: 9, life: 0.14, width: 0.03, grav: 0, color: 0x7fdcff });
     this.gun.userData.fire();
     this.recoil = 1; this.aimK = Math.max(this.aimK, 0.55);
     this.shake = Math.max(this.shake, wide ? 0.45 : 0.28);
@@ -468,6 +471,7 @@ export class HumanSword {
       this.rageLook = rage;
       this.edgeMat.emissive.setHex(rage ? RAGE_COLOR : STEEL);
       this.edgeMat.emissiveIntensity = rage ? 3.2 : 0.25;
+      this.gun.userData.setGlow(rage ? RAGE_COLOR : 0x39d8ff);
       this.trail.mesh.material.uniforms.color.value.set(rage ? RAGE_COLOR : 0xcfe9ff).multiplyScalar(2);
     }
     if (rage && Math.random() < dt * 14) {
@@ -802,7 +806,7 @@ export class HumanSword {
     t.hit?.(dmg, dir ? _s.copy(dir) : _s.set(Math.sin(P.yaw), 0, Math.cos(P.yaw)), { ...mv, dmg });
     if (!mv.zone) K.dealt(dmg);
     if (!mv.zone && !mv.gun) K.swordHit();
-    if (mv.gun) K.mark('gunHit');
+    if (mv.gun) { K.mark('gunHit'); this.onGunHit?.(!t.alive); }
     if (mv.finisher && !mv.zone) K.mark('finisher');
     const big = mv.heavy || mv.finisher;
     const col = K.raging || mv.zone || mv.wound ? 0xff6a5a : 0xffe2a8;
