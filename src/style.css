@@ -747,3 +747,14 @@ b, strong { font-weight: 600; }
 .kit-tut-again { position: absolute; left: 50%; top: calc(var(--top) + 96px); transform: translateX(-50%); padding: 4px 10px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); background: rgba(8,11,16,0.6); border: 1px solid var(--line-2); cursor: pointer; pointer-events: auto; }
 .kit-tut-again:hover { color: #fff; border-color: #fff; }
 @media (max-width: 640px) { .kit-tut { top: calc(var(--top) + 78px); padding: 8px 10px; } .kt-text { font-size: 12px; } }
+
+/* gun mode crosshair (render/chars/gunView.js) */
+.crosshair { --gap: 11px; position: fixed; left: 50%; top: 50%; width: 0; height: 0; z-index: 6; pointer-events: none; }
+.crosshair[hidden] { display: none; }
+.crosshair i { position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.55), 0 0 6px rgba(255,160,90,0.8); transition: transform 0.06s linear; }
+.crosshair i:nth-child(1), .crosshair i:nth-child(2) { width: 2px; height: 9px; left: -1px; }
+.crosshair i:nth-child(3), .crosshair i:nth-child(4) { width: 9px; height: 2px; top: -1px; }
+.crosshair i:nth-child(1) { bottom: var(--gap); } .crosshair i:nth-child(2) { top: var(--gap); }
+.crosshair i:nth-child(3) { right: var(--gap); } .crosshair i:nth-child(4) { left: var(--gap); }
+.crosshair b { position: absolute; left: -1.5px; top: -1.5px; width: 3px; height: 3px; border-radius: 50%; background: #ff7a4a; box-shadow: 0 0 0 1px rgba(0,0,0,0.55); }
+.crosshair.ads i { background: #ffb080; }

@@ -3,6 +3,8 @@
 // Surface mech: Space jump (again in the air = double jump, hold = fly up; Shift in the air = rocket boost).
 // Fighting (mech and characters, the Daywalker kit): click / J attack (hold to keep going), R / middle-click swap sword and
 // shotgun, E dash, F / right-click hold block (press just before a hit to parry), K / C awakening, Q ultimate, L launcher.
+// The mouse wheel swaps weapons too. With the shotgun out the mouse is captured: move to aim at the crosshair, left
+// button fires, right button looks down the sights (Esc frees the mouse).
 // Arena: Tab switch lock-on, Enter start a battle.
 export function createInput(app) {
   const keys = {};
@@ -10,6 +12,9 @@ export function createInput(app) {
   const held = { up: false, down: false, boost: false, mine: false };
   const look = { x: 0, y: 0 };
   let zoom = 1; // camera distance factor gathered from the wheel / pinch since the last sample
+  let wheel = 0, wheelAt = 0;   // wheel notches since the last sample (the fighting views swap weapons with it)
+  let aim = false;              // gun mode: capture the mouse so moving it aims
+  const mouse = { 0: false, 2: false };
   const out = { move: { x: 0, y: 0 }, lift: 0, lookX: 0, lookY: 0, mine: false, boost: false, zoom: 1, jump: false, slashHold: false, attack: 0, heavy: 0, spin: 0, guard: false, dodge: 0, launch: 0, lockSwitch: 0, arena: 0, swap: 0, rage: 0, attackHold: false };
   const taps = { attack: 0, heavy: 0, spin: 0, dodge: 0, launch: 0, lock: 0, arena: 0, swap: 0, rage: 0 }; // edge-triggered presses since the last sample
   let prevDown = false, prevArc = false, prevDodge = false, prevLaunch = false;
@@ -36,8 +41,17 @@ export function createInput(app) {
 
   const canvas = app.renderer.domElement;
   const drags = new Map();
+  const locked = () => document.pointerLockElement === canvas;
+  addEventListener('mousemove', (e) => { if (locked()) { look.x += e.movementX; look.y += e.movementY; } });
+  addEventListener('mouseup', (e) => { if (e.button in mouse) mouse[e.button] = false; });
+  document.addEventListener('pointerlockchange', () => { if (!locked()) mouse[0] = mouse[2] = false; });
   canvas.addEventListener('pointerdown', (e) => {
     if (app.mode === 'map') return;
+    if (aim && e.pointerType === 'mouse') {
+      // captured: the buttons act at once (no click-or-drag guessing)
+      if (locked()) { if (e.button in mouse) mouse[e.button] = true; if (e.button === 0) taps.attack++; else if (e.button === 1) taps.swap++; return; }
+      try { canvas.requestPointerLock?.()?.catch?.(() => {}); } catch { /* not available: drag to aim instead */ }
+    }
     drags.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), button: e.button, mouse: e.pointerType === 'mouse', still: true });
     canvas.setPointerCapture?.(e.pointerId);
   });
@@ -62,6 +76,8 @@ export function createInput(app) {
     if (app.mode === 'map') return; // the map has its own zoom
     e.preventDefault();
     zoom *= Math.exp(e.deltaY * 0.0012);
+    const now = performance.now();
+    if (now - wheelAt > 220) { wheelAt = now; wheel++; }
   }, { passive: false });
   const end = (e) => drags.delete(e.pointerId);
   canvas.addEventListener('pointerup', (e) => {
@@ -136,7 +152,12 @@ export function createInput(app) {
     // block: F, the BLOCK button, or the right mouse button held
     let rmb = false;
     for (const d of drags.values()) if (d.mouse && d.button === 2) rmb = true;
-    out.guard = !!held.guard || !!keys.KeyF || rmb;
+    if (mouse[2]) rmb = true;
+    if (mouse[0]) out.attackHold = true;
+    out.rmb = rmb;                                   // gun mode: look down the sights instead of blocking
+    out.guardKey = !!held.guard || !!keys.KeyF;
+    out.guard = out.guardKey || rmb;
+    out.wheel = wheel; wheel = 0;
     out.heavyHold = false;
     out.swap = taps.swap + (held.launch && !prevLaunch ? 1 : 0);
     out.rage = taps.rage;
@@ -152,5 +173,11 @@ export function createInput(app) {
     return out;
   }
 
-  return { bindJoystick, bindHold, sample };
+  // gun mode on / off: capturing the mouse starts with the next click, and ends with the mode
+  function setAim(on) {
+    if (aim === on) return;
+    aim = on;
+    if (!on && locked()) document.exitPointerLock?.();
+  }
+  return { bindJoystick, bindHold, sample, setAim };
 }

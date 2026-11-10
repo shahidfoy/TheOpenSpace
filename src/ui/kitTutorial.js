@@ -9,8 +9,8 @@ const DONE_KEY = 'openspace_kit_tutorial';
 const STEPS = [
   ['ANCESTRAL SWORD', 'Your blade. Keep attacking to chain five slashes; the last one hits hardest.',
     'Hold <kbd>J</kbd> or <kbd>click</kbd>', 'Hold <kbd>ATTACK</kbd>', 'Land the full five-hit chain on a target', 'finisher', 1],
-  ['HUNTER\'S SHOTGUN', 'Swap to the shotgun for range. Six shells, strongest up close; it reloads on its own.',
-    '<kbd>R</kbd> swap · <kbd>J</kbd> / <kbd>click</kbd> fire', '<kbd>SWAP</kbd> then <kbd>ATTACK</kbd>', 'Hit a target with three blasts', 'gunHit', 3],
+  ['HUNTER\'S SHOTGUN', 'Swap to the shotgun for range and aim with the crosshair. Six shells, strongest up close; it reloads on its own.',
+    '<kbd>wheel</kbd> / <kbd>R</kbd> swap · <kbd>click</kbd> fire · hold <kbd>right-click</kbd> to aim', '<kbd>SWAP</kbd> then <kbd>ATTACK</kbd>', 'Hit a target with three blasts', 'gunHit', 3],
   ['DAYWALKER DASH · SWORD', 'Two charges. With the sword out the dash ends in a cleaving strike that slows whatever it cuts.',
     '<kbd>R</kbd> to the sword · <kbd>E</kbd> dash', '<kbd>SWAP</kbd> to the sword · <kbd>DASH</kbd>', 'Dash through a target with the sword', 'dashSword', 1],
   ['DAYWALKER DASH · SHOTGUN', 'With the shotgun out the dash ends in a wide blast that leaves targets wounded: they take more damage for a while.',

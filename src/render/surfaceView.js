@@ -9,6 +9,8 @@ import { simNow } from '../sim/state.js';
 import { makeSky } from './sky.js';
 import { makeSeedShip, makeDrone, rockGeometry, MAT } from './models.js';
 import { MechPilot } from './mech/mechPilot.js';
+import { GunView, ADS_FOV } from './chars/gunView.js';
+import { S as MECH_S } from './mech/mechRig.js';
 import { LunarArena, ARENA } from './arena.js';
 import { ROCK_NORMAL } from './materials.js';
 import { haptic } from '../telegram.js';
@@ -144,6 +146,7 @@ export class SurfaceView {
 
   // leaving the surface (orbit, uplink): an arena run ends
   leave() {
+    this.gunView?.hide(); this.app?.input?.setAim?.(false);
     if (this.arena.fighting || this.arena.state === 'down') this.arena.end('leave');
     if (!this.pilot.alive) this.pilot.revive();
   }
@@ -384,9 +387,17 @@ export class SurfaceView {
     const T = this.terrain, P = this.pilot, m = { position: P.pos };
 
     // orbit camera from drag, zoom from wheel / pinch
-    this.camYaw -= I.lookX * 0.006;
+    // the wheel swaps weapons; with the shotgun out the right button looks down the sights and the mouse is captured
+    const kit = P.kit;
+    this.gunView ||= new GunView();
+    let ads = false;
+    if (I.wheel) { I.swap = (I.swap || 0) + 1; I.zoom = 1; }
+    if (kit.gun) { ads = !!I.rmb; I.guard = !!I.guardKey; }
+    input.setAim?.(kit.gun);
+    const adsK = this.gunView.update(dt, kit.gun, ads), sens = 1 - adsK * 0.45;
+    this.camYaw -= I.lookX * 0.006 * sens;
     if (I.lookX) this.lockYawHold = 1.2;
-    this.camPitch = THREE.MathUtils.clamp(this.camPitch + I.lookY * 0.004, -0.15, 1.1);
+    this.camPitch = THREE.MathUtils.clamp(this.camPitch + I.lookY * 0.004 * sens, kit.gun ? -0.9 : -0.15, 1.1);
     this.camDist = THREE.MathUtils.clamp(this.camDist * I.zoom, 10, 45);
 
     const A = this.arena, fight = this.hasArena && (A.fighting || A.state === 'down');
@@ -412,6 +423,8 @@ export class SurfaceView {
     this.ctx.center = fight ? A.center : null;
     this.ctx.bound = fight ? A.R - 1.5 : BOUND;
     this.ctx.camYaw = this.camYaw;
+    this.ctx.aim = this.gunView.ray(); this.ctx.onFire = () => this.gunView.fired();
+    P.fpsCam = adsK > 0.6 ? this.camera : null;
     if (I.arena && this.hasArena && A.info.inside && !A.fighting && P.alive) A.start();
     P.update(dt, I, this.ctx);
     if (this.hasArena) A.update(dt, dt);
@@ -464,6 +477,9 @@ export class SurfaceView {
       m.position.x + (L ? (L.pos.x - m.position.x) * lk : 0),
       m.position.y + 4.4 + (L ? Math.max(-3, Math.min(6, (L.pos.y - m.position.y))) * lk : 0),
       m.position.z + (L ? (L.pos.z - m.position.z) * lk : 0));
+    this.gunView.apply(this.camera, new THREE.Vector3(m.position.x, m.position.y + 1.72 * MECH_S, m.position.z), 2.6);
+    P.body.root.visible = adsK < 0.6;
+    if (adsK > 0 || this.adsFov) { this.adsFov = adsK > 0; this.camera.fov = THREE.MathUtils.lerp(60, ADS_FOV, adsK); this.camera.updateProjectionMatrix(); }
     if (P.shake > 0) {
       const k = P.shake * P.shake * 0.6;
       this.camera.position.x += (Math.random() - 0.5) * k;

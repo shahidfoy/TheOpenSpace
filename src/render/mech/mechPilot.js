@@ -279,7 +279,7 @@ export class MechPilot {
     else if (this.state === 'dodge') this.updateDodge(dt, ctx);
     else {
       if (this.comboGap < 9) this.comboGap += dt;
-      const boosting = !this.grounded && I.boost && this.fuel > 0;
+      const boosting = !this.grounded && I.boost && this.fuel > 0, d0 = this.aimDir;
       let top, ctl, dir = wish;
       if (boosting) {
         // rocket boost: along the stick, or straight ahead with no stick input
@@ -299,6 +299,7 @@ export class MechPilot {
       this.vel.z = lerp(this.vel.z, dir.z * top, k);
       this.accelX = (this.vel.x - prevX) / Math.max(dt, 1e-4); this.accelZ = (this.vel.z - prevZ) / Math.max(dt, 1e-4);
       const hs = Math.hypot(this.vel.x, this.vel.z);
+      if (K.gun && ctx.aim) { K.aimT = Math.max(K.aimT, 0.35); d0.copy(ctx.aim.d); }      // facing follows the crosshair
       if (K.gun && K.aimT > 0.3) this.yaw += angDiff(this.yaw, Math.atan2(this.aimDir.x, this.aimDir.z)) * (1 - Math.exp(-18 * dt));   // onto the aim
       else if (this.guarding && this.lock) this.faceTarget(this.lock, dt, 12);
       else if (hs > 0.6 && (wish.lengthSq() > 0.01 || boosting)) this.yaw += angDiff(this.yaw, Math.atan2(this.vel.x, this.vel.z)) * (1 - Math.exp(-(this.grounded ? 10 : boosting ? 5 : 3) * dt));
@@ -723,11 +724,17 @@ export class MechPilot {
 
   // one blast: at the locked target, else the nearest one in front of the camera, else straight along the camera
   fireGun(ctx, { free = false, wide = false } = {}) {
-    const K = this.kit, d = this.aimDir;
+    const K = this.kit, d = this.aimDir, A = free ? null : ctx.aim;
     if (free) this.forward(d); else d.set(-Math.sin(ctx.camYaw), 0, -Math.cos(ctx.camYaw));
     const o = _C.copy(this.pos); o.y += 1.42 * S;
-    let t = this.lock && this.lock.alive && !free ? this.lock : null, best = wide ? 0.3 : 0.86;
-    if (!t) for (const c of ctx.targets) {
+    let t = this.lock && this.lock.alive && !free && !A ? this.lock : null, best = wide ? 0.3 : 0.86;
+    if (A) {
+      // through the crosshair: whatever the camera's line meets first is the point the shot converges on
+      const far = shotgun(A.o, A.d, ctx.targets, { range: 200, spread: 0, pellets: 1, tall: 1.9 * S }).ends[0];
+      if (A.fps) o.copy(A.o).addScaledVector(UP, -0.4);
+      d.copy(far).sub(o).normalize();
+      ctx.onFire?.();
+    } else if (!t) for (const c of ctx.targets) {
       if (!c.alive) continue;
       _v.copy(c.pos); _v.y += (c.height || 1.9 * S) * 0.55; _v.sub(o);
       const L = _v.length(); if (L > GUN_RANGE) continue;
@@ -735,7 +742,7 @@ export class MechPilot {
       if (dot > best) { best = dot; t = c; }
     }
     if (t) { d.copy(t.pos); d.y += (t.height || 1.9 * S) * 0.55; d.sub(o).normalize(); }
-    const origin = o.clone().addScaledVector(d, 1.6 * S);
+    const origin = o.clone().addScaledVector(d, A?.fps ? 1.2 : 1.6 * S);
     const res = shotgun(origin, d, ctx.targets, wide ? { range: 11 * S, spread: 0.3, pellets: 14, tall: 1.9 * S } : { range: GUN_RANGE, tall: 1.9 * S });
     for (const [tg, n] of res.hits) {
       const dist = Math.hypot(tg.pos.x - this.pos.x, tg.pos.z - this.pos.z);
@@ -1116,6 +1123,7 @@ export class MechPilot {
     const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'rush' || cutDash;
     const lit = (st === 'attack' || st === 'aim' || st === 'rush' || st === 'rushEnd' || cutDash || this.swordHold > 0 || this.guardK > 0.3) && !REACT.has(st) && !K.gun;
     const grounded = this.grounded && !this.flying && (st === 'idle' || st === 'attack' || st === 'aim' || st === 'rushEnd') && !this.move?.air;
+    B.setFps(K.gun && this.fpsCam ? this.fpsCam : null, this.recoil);
     B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean, grounded,
       afterPose: this.aimK > 0.01 ? (b) => b.aimGun(this.aimDir, this.aimK, this.recoil) : null });
   }

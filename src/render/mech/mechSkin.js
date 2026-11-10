@@ -8,6 +8,7 @@ import { loadPack, retargetPack, layerClip } from '../chars/katanaPack.js';
 import { makeKatana } from '../chars/katana.js';
 import { twoBoneIK } from '../chars/handIK.js';
 import { makeShotgun } from '../chars/gun.js';
+import { mountFps } from '../chars/gunView.js';
 import { RAGE_COLOR } from '../chars/bladeKit.js';
 
 // The katana pack (see chars/katanaPack.js) retargeted onto a mech's own skeleton: clips, swings, root motion and
@@ -334,6 +335,7 @@ export class SkinnedMechBody {
       // the shotgun, sized to the claw; mounts: in the right hand / stowed on the thigh
       const gun = (this.gun = makeShotgun(0.31 * asset.meta.height * this.k, { metal: 0x2a2f38, trim: 0x16191f, glow: 0xff5a3a }));
       gun.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
+      this.gunScale = gun.scale.clone();
       // the gun in the fist: barrels the way the fingers point, its grip down through the knuckle row
       const X = hx, Y = HR.axis.clone();
       this.gunGrip = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, new THREE.Vector3().crossVectors(X, Y)));
@@ -346,11 +348,18 @@ export class SkinnedMechBody {
     this.onPack?.();
   }
 
+  // first person: the gun leaves the fist for the camera (a view model) while aim is held
+  setFps(camera, recoil = 0) {
+    if (!this.gun) return;
+    if (camera && this.weapon === 'gun') { this.fps = true; mountFps(this.gun, camera, this.root.parent, recoil); }
+    else if (this.fps) { this.fps = false; const w = this.weapon; this.weapon = null; this.setWeapon(w); }
+  }
   // which weapon is in the right hand: 'sword' (the saber hilt) or 'gun'; the other rides on a thigh
   setWeapon(w) {
     if (!this.mount || this.weapon === w) return;
     this.weapon = w;
     const M = this.mount, g = this.saber.group, gun = this.gun;
+    gun.scale.copy(this.gunScale); gun.rotation.order = 'XYZ'; this.fps = false;
     const put = (obj, st) => { const b = this.model.getObjectByName(st.bone); if (b) { b.add(obj); obj.position.copy(st.p); obj.quaternion.copy(st.q); } };
     if (w === 'gun') { put(g, M.stow.saber); M.hand.add(gun); gun.position.copy(this.gripP); gun.quaternion.copy(this.gunGrip); }
     else { put(gun, M.stow.gun); M.hand.add(g); g.position.copy(M.saberP); g.quaternion.copy(M.saberQ); }

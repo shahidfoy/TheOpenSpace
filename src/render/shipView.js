@@ -7,6 +7,7 @@ import { SwordFx } from './mech/swordFx.js';
 import { HumanSword } from './chars/katana.js';
 import { KitHud } from '../ui/kitHud.js';
 import { SparBots } from './chars/sparBots.js';
+import { GunView, ADS_FOV } from './chars/gunView.js';
 import { KitTutorial } from '../ui/kitTutorial.js';
 import { LunarArena, ARENA } from './arena.js';
 import { S as MECH_S } from './mech/mechRig.js';
@@ -498,6 +499,7 @@ export class ShipView {
   }
   leave() {
     this.hud.hidden = true; this.closeWardrobe();
+    this.gunView.hide(); this.app.input?.setAim?.(false);
     this.stopMech(false); this.setHelm(false);
     const craft = this.app.localView.craft;
     if (craft) craft.visible = true;
@@ -691,6 +693,7 @@ export class ShipView {
     this.$stam = el.querySelector('.sh-stam'); this.$stamBar = el.querySelector('.sh-stam i');
     this.$charge = el.querySelector('.sh-charge');
     this.kitHud = new KitHud(el);
+    this.gunView = new GunView();
     this.tutorial = new KitTutorial(el);
     el.querySelector('.sh-chars').innerHTML = CHARACTERS.map((c) => `
       <button class="sh-card" data-id="${c.id}"><img src="/characters/${c.thumb}" alt=""><b>${c.name}</b><small>${c.blurb}</small></button>`).join('') + FRAMES.map((f) => `
@@ -744,9 +747,9 @@ export class ShipView {
     this.$btns.querySelector('[data-act="spar"]').hidden = !this.mechActive || !!this.arena?.fighting;
     this.$help.hidden = this.mechActive;             // the arena HUD shows the mech's controls
     this.$help.textContent = this.mechActive
-      ? 'WASD move · Space jump/fly · J/click attack · R swap · E dash · F/right-click block · K awaken · Q ultimate · X leave'
+      ? 'WASD move · Space jump/fly · click attack · wheel swap · gun: right-click aims · E dash · F/right-click block · K awaken · Q ultimate · X leave'
       : this.helm ? 'Drag to look around · E to stand up'
-      : this.area === this.sim ? 'J/click attack · R sword ⇄ shotgun · E dash / interact · F/right-click block · K awaken · Q ultimate · L launcher · Space jump, wall kick'
+      : this.area === this.sim ? 'click attack · wheel: sword ⇄ shotgun · gun: right-click aims · E dash / interact · F/right-click block · K awaken · Q ultimate · L launcher · Space jump, wall kick'
       : 'WASD move · Shift sprint · Space jump (again in the air) · drag to look · E interact';
     if (this.helm || this.mechActive) { this.near = null; this.$prompt.hidden = true; }
   }
@@ -812,14 +815,24 @@ export class ShipView {
     this.time += dt;
     const I = input.sample(dt);
     if (!this.$ward.hidden) { I.move.x = I.move.y = 0; I.jump = false; I.dodge = 0; I.attack = I.heavy = I.swap = I.rage = I.spin = I.launch = 0; I.attackHold = I.guard = false; }
-    this.camYaw -= I.lookX * 0.006;
-    this.camPitch = THREE.MathUtils.clamp(this.camPitch + I.lookY * 0.004, -0.6, 1.2);
+    // the kit in play (mech, or a character in the sim): the wheel swaps weapons; with the shotgun out the right
+    // button looks down the sights instead of blocking, and the mouse is captured to aim
+    const kit = this.app.mode !== 'ship' || !this.$ward.hidden ? null : this.mechActive ? this.mech.kit : this.area === this.sim && !this.helm ? this.sword?.kit : null;
+    let ads = false;
+    if (kit) {
+      if (I.wheel) { I.swap = (I.swap || 0) + 1; I.zoom = 1; }
+      if (kit.gun) { ads = !!I.rmb; I.guard = !!I.guardKey; }
+    }
+    input.setAim?.(!!kit?.gun);
+    const adsK = this.gunView.update(dt, !!kit?.gun, ads), sens = 1 - adsK * 0.45;
+    this.camYaw -= I.lookX * 0.006 * sens;
+    this.camPitch = THREE.MathUtils.clamp(this.camPitch + I.lookY * 0.004 * sens, kit?.gun ? -1.1 : -0.6, 1.2);
     if (this.mechActive) this.mechDist = THREE.MathUtils.clamp(this.mechDist * I.zoom, 10, 45);
     else this.camDist = THREE.MathUtils.clamp(this.camDist * I.zoom, 1.8, 9);
     if (this.wardrobeRing) this.wardrobeRing.scale.setScalar(1 + Math.sin(this.time * 3) * 0.03);
 
     if (this.area === this.sim) { this.updateDummies(dt); this.simFx.update(dt); }
-    if (this.mechActive) { this.updateMech(dt, I); return; }
+    if (this.mechActive) { this.updateMech(dt, I, adsK); return; }
 
     const P = this.ctrl;
     if (!P) {
@@ -847,6 +860,7 @@ export class ShipView {
       // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
       if (this.sword) this.sword.camYaw = this.camYaw;
       const fighting = this.area === this.sim && this.$ward.hidden;
+      if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.onFire = () => this.gunView.fired(); }
       const pdt = this.sword ? this.sword.update(dt, I, P, this.simTargets, fighting) : dt;
       if (this.sword && this.area === this.sim) this.bots.update(pdt, P, this.sword, fighting);
       P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
@@ -857,14 +871,19 @@ export class ShipView {
         const head = _v.copy(P.pos).add(_v2.set(0, P.H * 0.62, 0));
         head.addScaledVector(_v3.set(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw)), innerWidth > 700 ? 0.75 : 0);
         this.chaseCam(dt, head, 3.4, true);
-      } else this.chaseCam(dt, _v.copy(P.pos).add(_v2.set(0, P.H * 0.88, 0)), this.camDist, true);
+      } else {
+        this.chaseCam(dt, _v.copy(P.pos).add(_v2.set(0, P.H * 0.88, 0)), this.camDist, true);
+        // gun mode: over the shoulder, and into the eyes while aim is held
+        this.gunView.apply(this.camera, _v.copy(P.pos).add(_v2.set(0, P.H * 0.9, 0)), 0.55);
+        this.char.root.visible = adsK < 0.6;
+      }
       // wall-run camera: tilt the horizon away from the wall, widen the lens with speed
       const wr = P.state === 'wallrun';
       this.camRoll = (this.camRoll || 0) + ((wr ? -0.09 * (P.wallSide || 1) : 0) - (this.camRoll || 0)) * Math.min(1, dt * 6);
       if (Math.abs(this.camRoll) > 1e-3) this.camera.rotateZ(this.camRoll);
       const hs = Math.hypot(P.vel.x, P.vel.z);
-      const fovWant = this.area === this.sim ? 60 + (wr ? 7 : THREE.MathUtils.clamp((hs - 6.5) * 1.2, 0, 4)) : 60;
-      if (Math.abs(this.camera.fov - fovWant) > 0.05) { this.camera.fov += (fovWant - this.camera.fov) * Math.min(1, dt * 5); this.camera.updateProjectionMatrix(); }
+      const fovWant = THREE.MathUtils.lerp(this.area === this.sim ? 60 + (wr ? 7 : THREE.MathUtils.clamp((hs - 6.5) * 1.2, 0, 4)) : 60, ADS_FOV, adsK);
+      if (Math.abs(this.camera.fov - fovWant) > 0.05) { this.camera.fov += (fovWant - this.camera.fov) * Math.min(1, dt * (adsK > 0 ? 14 : 5)); this.camera.updateProjectionMatrix(); }
       const sk = this.sword?.shake || 0;
       if (sk > 0) { const k = sk * sk * 0.12; this.camera.position.x += (Math.random() - 0.5) * k; this.camera.position.y += (Math.random() - 0.5) * k; }
     }
@@ -875,7 +894,7 @@ export class ShipView {
     else { this.app.localView.tickWorld(dt); this.camera.updateMatrixWorld(); this.renderSpace(); }
   }
 
-  updateMech(dt, I) {
+  updateMech(dt, I, adsK = 0) {
     const M = this.mech, ctx = this.mechCtx, A = this.arena;
     const fight = A.fighting || A.state === 'down';
     // inside a sparring round: 1 g plating, the holo wall, the projected enemies as the only targets
@@ -883,6 +902,8 @@ export class ShipView {
     ctx.targets = ctx.enemies = fight ? A.targets : this.dummies;
     ctx.bound = fight ? A.R - 1.5 : this.yard.R - 2;
     ctx.camYaw = this.camYaw;
+    ctx.aim = this.gunView.ray(); ctx.onFire = () => this.gunView.fired();
+    M.fpsCam = adsK > 0.6 ? this.camera : null;
     if (I.arena && !A.fighting && M.alive) A.start();
     for (const d of this.dummies) d.group.visible = d.alive && !fight;
     M.update(dt, I, ctx);
@@ -903,9 +924,11 @@ export class ShipView {
     const head = _v.copy(M.pos).add(_v2.set(0, 1.4 * MECH_S, 0));
     if (L) { head.x += (L.pos.x - M.pos.x) * 0.3; head.z += (L.pos.z - M.pos.z) * 0.3; head.y += THREE.MathUtils.clamp(L.pos.y - M.pos.y, -3, 6) * 0.3; }
     this.chaseCam(dt, head, this.mechDist * (fight ? 1.15 : 1), false);
+    this.gunView.apply(this.camera, _v2.copy(M.pos).setY(M.pos.y + 1.72 * MECH_S), 2.6);
+    M.body.root.visible = adsK < 0.6;
     // impact zoom on big hits, a wider lens while dashing
     this.fovKick = Math.max(0, (this.fovKick || 0) - dt * 3.5);
-    const fov = 60 - 7 * this.fovKick + (M.state === 'dodge' ? 5 : 0);
+    const fov = THREE.MathUtils.lerp(60 - 7 * this.fovKick + (M.state === 'dodge' ? 5 : 0), ADS_FOV, adsK);
     if (Math.abs(this.camera.fov - fov) > 0.01) { this.camera.fov += (fov - this.camera.fov) * Math.min(1, dt * 18); this.camera.updateProjectionMatrix(); }
     if (M.shake > 0) { const k = M.shake * M.shake * 0.6; this.camera.position.x += (Math.random() - 0.5) * k; this.camera.position.y += (Math.random() - 0.5) * k; }
     if (this.zone !== 'MECH YARD') { this.zone = 'MECH YARD'; this.$title.textContent = `${this.baseName} · TRAINING SIM · MECH YARD`; }

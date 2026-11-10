@@ -5,6 +5,7 @@ import { Beam } from '../mech/swordFx.js';
 import { twoBoneIK } from './handIK.js';
 import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul, slow, makeLane, setLane, distToLane } from './bladeKit.js';
 import { makeShotgun } from './gun.js';
+import { mountFps } from './gunView.js';
 
 // Sword and shotgun combat for the VRM characters, on the anime katana pack (see katanaPack.js) and the Daywalker
 // kit (bladeKit.js: Blade's kit from Marvel Rivals).
@@ -235,8 +236,9 @@ export class HumanSword {
       k.position.copy(R.centre).addScaledVector(R.axis, R.width * 0.5 + 0.02 * R.size);
     } else if (what === 'sword') { this.handNode.add(k); k.position.copy(g.p); k.quaternion.copy(g.q); k.scale.set(1, 1, 1).divide(g.handScale); }
     else { this.hipNode.add(k); k.position.copy(this.sheath.p); k.quaternion.copy(this.sheath.q); k.scale.set(1, 1, 1); }
-    if (what === 'gun' && R?.ok) { this.handNode.add(gun); gun.quaternion.copy(R.q); gun.position.copy(R.centre); }
-    else { this.hipNode.add(gun); gun.position.copy(this.holster.p); gun.quaternion.copy(this.holster.q); }
+    if (what === 'gunfps') { /* on the camera: mounted each frame in update */ }
+    else if (what === 'gun' && R?.ok) { this.handNode.add(gun); gun.quaternion.copy(R.q); gun.position.copy(R.centre); gun.scale.set(1, 1, 1); gun.rotation.order = 'XYZ'; }
+    else { this.hipNode.add(gun); gun.position.copy(this.holster.p); gun.quaternion.copy(this.holster.q); gun.scale.set(1, 1, 1); }
   }
 
   // after the clip is applied, before the humanoid drives the mesh: the grip, the gun arm, the feet on the ground
@@ -353,10 +355,15 @@ export class HumanSword {
     // quiet seconds. Sword-stance idle and run while it is drawn
     this.drawnT = this.act || this.zone ? 3 : Math.max(0, this.drawnT - dt);
     const sword = !K.gun && this.drawnT > 0;
-    this.hold(K.gun ? 'gun' : sword ? 'sword' : '');
+    // first person (aim held): the gun rides the camera as a view model
+    const fps = K.gun && this.aim?.fps && this.cam;
+    this.hold(K.gun ? (fps ? 'gunfps' : 'gun') : sword ? 'sword' : '');
+    if (fps) mountFps(this.gun, this.cam, this.ch.root.parent, this.recoil);
     P.idleClip = sword ? 'k_idle' : 'idle';
     P.runClip = sword ? 'k_run' : 'run';
     // the gun arm: up while a shot is fresh, the body turned onto the aim
+    // with a crosshair to aim by, the body keeps facing where the camera looks
+    if (K.gun && this.aim && !this.act) { K.aimT = Math.max(K.aimT, 0.35); this.aimDir.copy(this.aim.d); }
     const aiming = K.gun && K.aimT > 0 && !this.act && !parkourBusy;
     this.aimK += ((aiming ? 1 : 0) - this.aimK) * Math.min(1, dt * (aiming ? 22 : 7));
     this.recoil = Math.max(0, this.recoil - dt * 7);
@@ -405,16 +412,23 @@ export class HumanSword {
 
   // one blast: toward the nearest target in front of the camera, else straight along the camera
   fireGun(P, targets, { free = false, wide = false } = {}) {
-    const K = this.kit, yaw = free ? P.yaw : this.camForward();
-    const t = this.nearestTarget(P, targets, GUN_RANGE, yaw);
+    const K = this.kit, yaw = free ? P.yaw : this.camForward(), A = free ? null : this.aim;
+    const t = A ? null : this.nearestTarget(P, targets, GUN_RANGE, yaw);
     const o = _a.copy(P.pos); o.y += this.ch.height * 0.78;
     const d = this.aimDir.set(Math.sin(yaw), 0, Math.cos(yaw));
+    if (A) {
+      // through the crosshair: whatever the camera's line meets first is the point the shot converges on
+      const far = shotgun(A.o, A.d, targets, { range: 60, spread: 0, pellets: 1 }).ends[0];
+      if (A.fps) o.copy(A.o).addScaledVector(A.d, 0.1).addScaledVector(UP, -0.1);
+      d.copy(far).sub(o).normalize();
+      this.onFire?.();
+    }
     if (t) {
       _b.copy(t.pos); _b.y += (t.height || 1.7) * 0.6;
       _b.sub(o).normalize();
       if (_b.dot(d) > (wide ? 0.3 : 0.86)) d.copy(_b);              // aim assist inside a narrow cone
     }
-    o.addScaledVector(d, 0.45);
+    o.addScaledVector(d, A?.fps ? 0.5 : 0.45);
     const origin = o.clone();
     const res = shotgun(origin, d, targets, wide ? { range: 11, spread: 0.3, pellets: 14 } : { range: GUN_RANGE });
     for (const [tg, n] of res.hits) {
