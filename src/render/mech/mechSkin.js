@@ -7,7 +7,7 @@ import { Saber } from './saber.js';
 import { loadPack, retargetPack, layerClip } from '../chars/katanaPack.js';
 import { makeKatana } from '../chars/katana.js';
 import { twoBoneIK } from '../chars/handIK.js';
-import { makeShotgun } from '../chars/gun.js';
+import { makePistol } from '../chars/gun.js';
 import { mountFps } from '../chars/gunView.js';
 import { RAGE_COLOR } from '../chars/bladeKit.js';
 
@@ -58,7 +58,7 @@ function mechKatana(asset, pack, loco) {
   let foot = Infinity;
   for (const n of ['leftFoot', 'rightFoot', 'leftToes', 'rightToes']) foot = Math.min(foot, new THREE.Vector3().setFromMatrixPosition(B(n).matrixWorld).y);
   r.footRest = foot;
-  // where the weapon that is not in hand rides, in thigh-bone space: the shotgun on the right thigh (barrels down,
+  // where the weapon that is not in hand rides, in thigh-bone space: the pistol on the right thigh (barrel down,
   // grip to the rear), the saber hilt on the left (emitter down)
   {
     const P = (n) => new THREE.Vector3().setFromMatrixPosition(B(n).matrixWorld).applyMatrix4(rootInv);
@@ -333,8 +333,8 @@ export class SkinnedMechBody {
       this.armL = ['leftUpperArm', 'leftLowerArm', 'leftHand'].map(N);
       this.armR = ['rightUpperArm', 'rightLowerArm', 'rightHand'].map(N);
       this.twoK = 0;
-      // the shotgun, sized to the claw; mounts: in the right hand / stowed on the thigh
-      const gun = (this.gun = makeShotgun(0.31 * asset.meta.height * this.k, { metal: 0x2a2f38, trim: 0x16191f }));
+      // the pistol, sized to the hand; mounts: in the right hand / stowed on the thigh
+      const gun = (this.gun = makePistol(0.17 * asset.meta.height * this.k, { metal: 0x2a2f38, trim: 0x16191f }));
       gun.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
       this.gunScale = gun.scale.clone();
       // the gun in the fist: barrels the way the fingers point, its grip down through the knuckle row
@@ -372,13 +372,39 @@ export class SkinnedMechBody {
     up.updateWorldMatrix(true, false); lo.updateWorldMatrix(true, false); hd.updateWorldMatrix(true, false);
     const sh = _hv.setFromMatrixPosition(up.matrixWorld);
     const len = sh.distanceTo(_hv2.setFromMatrixPosition(lo.matrixWorld)) + _hv2.distanceTo(_hv3.setFromMatrixPosition(hd.matrixWorld));
-    const X = _ax.copy(dir).addScaledVector(_up, recoil * 0.35).normalize();
-    const Z = _az.crossVectors(X, _up).normalize(), Y = _ay.crossVectors(Z, X);
+    const X = _ax.copy(dir).addScaledVector(_up, recoil * 0.3).normalize();
+    const Z = _az.crossVectors(X, _up).normalize(), Y = _ay.crossVectors(Z, X).clone();          // Z: the mech's right
     _aq.setFromRotationMatrix(_am.makeBasis(X, Y, Z)).multiply(_aq2.copy(this.gunGrip).invert());
     const ws = hd.getWorldScale(_hv2).x;
-    const wrist = _hv3.copy(sh).addScaledVector(X, len * (0.8 - recoil * 0.14)).addScaledVector(_up, len * (recoil * 0.06 - 0.04));
-    wrist.sub(_hv2.copy(this.gripP).multiplyScalar(ws).applyQuaternion(_aq));
+    // a two-handed hold: the grip out in front, drawn in from the shoulder toward the centre line
+    // aiming down the sights: the sights on the eye's line, the gun out along it until the arm is all but straight
+    const head = this.headBone ||= this.model.getObjectByName(this.MB.head);
+    head.updateWorldMatrix(true, false);
+    const sights = 0.085 * (this.gun.userData.size / 0.26);
+    const grip = new THREE.Vector3().setFromMatrixPosition(head.matrixWorld).addScaledVector(Y, -sights);
+    // a frame whose shoulders are wider than its arms are long cannot bring both hands to the centre line: it aims
+    // one-handed, the arm straight out from its own shoulder (and the other arm stays with its shield)
+    const [lu0] = this.armL || [];
+    const wide = !lu0 || sh.distanceTo(_hv2.setFromMatrixPosition(lu0.matrixWorld)) > len * 1.1;
+    if (wide) { _hv2.copy(sh).sub(grip); grip.addScaledVector(Z, _hv2.dot(Z) * 0.85).addScaledVector(_up, _hv2.dot(_up) * 0.45); }
+    const off = _hv2.copy(this.gripP).multiplyScalar(ws).applyQuaternion(_aq);
+    const v = _hv3.copy(grip).sub(off).sub(sh), reach = len * (0.965 - recoil * 0.07), vx = v.dot(X), disc = vx * vx - v.lengthSq() + reach * reach;
+    grip.addScaledVector(X, Math.max(len * 0.5, -vx + Math.sqrt(Math.max(0, disc))));
+    const wrist = _hv3.copy(grip).sub(_hv2.copy(this.gripP).multiplyScalar(ws).applyQuaternion(_aq));
     twoBoneIK(up, lo, hd, wrist, k, { handQ: _aq, pole: _ay.set(0, -1, 0) });
+    // the support hand comes across onto the grip from the left, palm against it
+    const HL = this.handL, [lu, ll, lh] = this.armL || [];
+    if (!HL || !lu || wide) return;
+    const lp = _hv.copy(HL.centre).sub(HL.knuckle); lp.addScaledVector(HL.axis, -lp.dot(HL.axis)).addScaledVector(HL.dir, -lp.dot(HL.dir));
+    if (lp.lengthSq() < 1e-8) return;
+    lp.normalize();
+    _am.makeBasis(HL.axis, lp, _hv2.crossVectors(HL.axis, lp));
+    _aq2.setFromRotationMatrix(_am).invert();
+    const Yt = _hv2.copy(Y).addScaledVector(X, 0.35).normalize(), Zt = _hv3.crossVectors(Yt, Z).normalize();
+    const lq = _tq.setFromRotationMatrix(_am.makeBasis(Yt, _hv.crossVectors(Zt, Yt), Zt)).multiply(_aq2).clone();
+    const w = HL.half * 2 * ws;
+    const lw = grip.addScaledVector(Z, -w * 0.6).addScaledVector(Y, -w * 0.3).sub(_hv.copy(HL.centre).multiplyScalar(ws).applyQuaternion(lq));
+    twoBoneIK(lu, ll, lh, lw, k, { handQ: lq, pole: _ay.set(0, -1, 0) });
   }
   // the gun's muzzle in world space
   muzzle(out) { this.gun.updateWorldMatrix(true, false); return out.copy(this.gun.userData.muzzle).applyMatrix4(this.gun.matrixWorld); }

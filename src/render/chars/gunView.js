@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PISTOL_LEN } from './gun.js';
 
 // Gun mode for the chase cameras (characters and mechs): with the shotgun out a crosshair marks the centre of the
 // screen and the camera slides over the shoulder so the body is not in the way; holding aim pulls the camera into
@@ -87,7 +88,7 @@ const _q = new THREE.Quaternion(), _e = new THREE.Euler();
 export function mountFps(gun, camera, scene, recoil = 0, vm = null) {
   if (camera.parent !== scene) scene.add(camera);
   if (gun.parent !== camera) { camera.add(gun); gun.scale.set(1, 1, 1); }
-  const s = (gun.userData.size || 0.5) / 0.5, v = vm || { x: 0, y: 0, rx: 0, ry: 0, dip: 0 };
-  gun.position.set((0.15 + v.x) * s, (-0.17 + v.y + recoil * 0.025 - v.dip * 0.16) * s, (-0.4 + recoil * 0.1) * s);
+  const s = (gun.userData.size || PISTOL_LEN) / PISTOL_LEN, v = vm || { x: 0, y: 0, rx: 0, ry: 0, dip: 0 };
+  gun.position.set((0.1 + v.x) * s, (-0.135 + v.y + recoil * 0.02 - v.dip * 0.14) * s, (-0.46 + recoil * 0.07) * s);
   gun.quaternion.copy(_q.setFromEuler(_e.set(v.rx + recoil * 0.13 - v.dip * 0.7, v.ry, v.ry * 0.6 + v.dip * 0.25))).multiply(FPS_Q);
 }

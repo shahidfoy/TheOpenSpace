@@ -10,6 +10,7 @@ import { makeSky } from './sky.js';
 import { makeSeedShip, makeDrone, rockGeometry, MAT } from './models.js';
 import { MechPilot } from './mech/mechPilot.js';
 import { GunView, ADS_FOV } from './chars/gunView.js';
+import { worldOfHeight } from './chars/bullets.js';
 import { S as MECH_S } from './mech/mechRig.js';
 import { LunarArena, ARENA } from './arena.js';
 import { ROCK_NORMAL } from './materials.js';
@@ -424,6 +425,7 @@ export class SurfaceView {
     this.ctx.center = fight ? A.center : null;
     this.ctx.bound = fight ? A.R - 1.5 : BOUND;
     this.ctx.camYaw = this.camYaw;
+    this.ctx.world = this.groundRay ||= worldOfHeight((x, z) => this.terrain.height(x, z));
     this.ctx.aim = this.gunView.ray(); this.ctx.onFire = () => this.gunView.fired(); this.ctx.onGunHit = (k) => this.gunView.hit(k); P.vm = this.gunView.vm;
     P.fpsCam = adsK > 0.6 ? this.camera : null;
     if (I.arena && this.hasArena && A.info.inside && !A.fighting && P.alive) A.start();

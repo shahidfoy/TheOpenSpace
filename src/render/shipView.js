@@ -8,6 +8,7 @@ import { HumanSword } from './chars/katana.js';
 import { KitHud } from '../ui/kitHud.js';
 import { SparBots } from './chars/sparBots.js';
 import { GunView, ADS_FOV } from './chars/gunView.js';
+import { worldOfBoxes } from './chars/bullets.js';
 import { KitTutorial } from '../ui/kitTutorial.js';
 import { LunarArena, ARENA } from './arena.js';
 import { S as MECH_S } from './mech/mechRig.js';
@@ -421,7 +422,7 @@ export class ShipView {
     // ===== dojo: human-scale dummies for katana practice =====
     this.simFx = new SwordFx(S);
     this.dojo = [];
-    const dl = label('PRACTICE RANGE', 'follow the tutorial · sword, shotgun and abilities'); dl.position.set(30, 4.2, 1); dl.scale.set(6, 1.5, 1); S.add(dl);
+    const dl = label('PRACTICE RANGE', 'follow the tutorial · sword, pistol and abilities'); dl.position.set(30, 4.2, 1); dl.scale.set(6, 1.5, 1); S.add(dl);
     // a low wall behind the targets and two side walls frame the range
     A.box(20, 0, 3.5, 20, 3, 0.8, concrete, { tile: 3 });
     A.box(19.2, 0, -6, 0.8, 1.2, 9.5, concrete, { tile: 3 }); A.box(40, 0, -6, 0.8, 1.2, 9.5, concrete, { tile: 3 });
@@ -749,7 +750,7 @@ export class ShipView {
     this.$help.textContent = this.mechActive
       ? 'WASD move · Space jump/fly · click attack · wheel swap · gun: right-click aims · E dash · F/right-click block · K awaken · Q ultimate · X leave'
       : this.helm ? 'Drag to look around · E to stand up'
-      : this.area === this.sim ? 'click attack · wheel: sword ⇄ shotgun · gun: right-click aims · E dash / interact · F/right-click block · K awaken · Q ultimate · L launcher · Space jump, wall kick'
+      : this.area === this.sim ? 'click attack · wheel: sword ⇄ pistol · gun: right-click aims · E dash / interact · F/right-click block · K awaken · Q ultimate · L launcher · Space jump, wall kick'
       : 'WASD move · Shift sprint · Space jump (again in the air) · drag to look · E interact';
     if (this.helm || this.mechActive) { this.near = null; this.$prompt.hidden = true; }
   }
@@ -863,7 +864,7 @@ export class ShipView {
       // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
       if (this.sword) this.sword.camYaw = this.camYaw;
       const fighting = this.area === this.sim && this.$ward.hidden;
-      if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.onFire = () => this.gunView.fired(); this.sword.onGunHit = (k) => this.gunView.hit(k); this.sword.vm = this.gunView.vm; }
+      if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.world = this.simWorld ||= worldOfBoxes(this.sim.boxes); this.sword.onFire = () => this.gunView.fired(); this.sword.onGunHit = (k) => this.gunView.hit(k); this.sword.vm = this.gunView.vm; }
       const pdt = this.sword ? this.sword.update(dt, I, P, this.simTargets, fighting) : dt;
       if (this.sword && this.area === this.sim) this.bots.update(pdt, P, this.sword, fighting);
       P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
@@ -905,6 +906,7 @@ export class ShipView {
     ctx.targets = ctx.enemies = fight ? A.targets : this.dummies;
     ctx.bound = fight ? A.R - 1.5 : this.yard.R - 2;
     ctx.camYaw = this.camYaw;
+    ctx.world = this.simWorld ||= worldOfBoxes(this.sim.boxes);
     ctx.aim = this.gunView.ray(); ctx.onFire = () => this.gunView.fired(); ctx.onGunHit = (k) => this.gunView.hit(k); M.vm = this.gunView.vm;
     M.fpsCam = adsK > 0.6 ? this.camera : null;
     if (I.arena && !A.fighting && M.alive) A.start();

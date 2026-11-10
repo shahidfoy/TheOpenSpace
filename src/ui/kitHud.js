@@ -27,7 +27,7 @@ export class KitHud {
   update(K) {
     if (!K) { if (!this.el.hidden) this.el.hidden = true; return; }
     if (this.el.hidden) this.el.hidden = false;
-    this.set('w', K.weapon, (w) => { this.$wName.textContent = w === 'gun' ? 'SHOTGUN' : 'SWORD'; this.$weapon.dataset.w = w; });
+    this.set('w', K.weapon, (w) => { this.$wName.textContent = w === 'gun' ? 'PISTOL' : 'SWORD'; this.$weapon.dataset.w = w; });
     const shells = K.reload > 0 ? -1 : K.ammo;
     this.set('a', shells, (n) => {
       this.$weapon.classList.toggle('reload', n < 0);

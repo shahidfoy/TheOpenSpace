@@ -4,19 +4,20 @@ import { makeWarp, clipTime, clipRate } from '../mech/mechSkin.js';
 import { Beam } from '../mech/swordFx.js';
 import { twoBoneIK } from './handIK.js';
 import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul, slow, makeLane, setLane, distToLane, strafeLegs } from './bladeKit.js';
-import { makeShotgun } from './gun.js';
+import { makePistol, PISTOL_LEN } from './gun.js';
 import { mountFps } from './gunView.js';
+import { Bullets } from './bullets.js';
 
-// Sword and shotgun combat for the VRM characters, on the anime katana pack (see katanaPack.js) and the Daywalker
+// Sword and pistol combat for the VRM characters, on the anime katana pack (see katanaPack.js) and the Daywalker
 // kit (bladeKit.js: Blade's kit from Marvel Rivals).
 // Footwork: the strikes carry the pack's root motion, so the body travels with the steps and the feet stay planted;
 // toward a target the root motion is warped (stretched or shortened) so the cut lands at sword's reach. A foot pass
 // keeps the lowest foot on the ground. Moves:
 //   J / click (hold)     sword: 5-hit slash chain (sprinting: running slash; in the air: 3-hit air combo)
-//                        shotgun: pellet blasts, six shells, reloads on its own
-//   R / middle-click     swap sword and shotgun
-//   E                    Daywalker Dash, two charges: the sword's ends in a cleaving strike that slows, the shotgun's
-//                        in a wide blast that wounds; hold jump to dash upward (also in the air)
+//                        pistol: single bolts, twelve to a cell, reloads on its own
+//   R / middle-click     swap sword and pistol
+//   E                    Daywalker Dash, two charges: the sword's ends in a cleaving strike that slows, the pistol's
+//                        in a fan of shots that wounds; hold jump to dash upward (also in the air)
 //   F / right-click hold Scarlet Shroud: block with the sword (you can still walk)
 //   K / C                Bloodline Awakening: a sword stance; hits fill a meter that speeds the cuts into a whirlwind
 //   Q                    Thousand-Fold Slash: lay a path, confirm with attack, dash down it; the path is cut to ribbons
@@ -24,6 +25,7 @@ import { mountFps } from './gunView.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _U = new THREE.Vector3(), _V = new THREE.Vector3();
+const _g1 = new THREE.Vector3(), _g2 = new THREE.Vector3(), _g3 = new THREE.Vector3(), _g4 = new THREE.Vector3(), _lq = new THREE.Quaternion();
 const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _s = new THREE.Vector3();
 const clamp = THREE.MathUtils.clamp;
 const angDiff = (a, b) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
@@ -139,7 +141,8 @@ export function makeKatana(L = 0.85) {
 // ---------------- the fighter ----------------
 const DASH_DIST = 8.5, DASH_DUR = 0.34, AIR_DASH_DUR = 0.26;
 const ULT_LEN = 16, ULT_W = 3.8;             // the Thousand-Fold Slash's path: length and width, metres
-const GUN_RANGE = 24, PELLET_DMG = 4.4;
+const GUN_RANGE = 30, GUN_REACH = 220;      // metres: full-damage range, and how far a bolt flies
+const SHOT_DMG = 15, FAN_DMG = 6, FAN = { range: 14, spread: 0.2, pellets: 8 };      // a pistol shot; the dash's fan of shots
 // Rush clip phases (seconds): crouch, held iai stance, the dash, the finish
 const RUSH = { crouch: 0.6, holdA: 0.85, holdB: 2.2, dash0: 2.45, dash1: 4.15, end: 4.9 };
 const STEEL = 0x9fd8ff;
@@ -177,12 +180,15 @@ export class HumanSword {
     const nb = (b) => H.getNormalizedBoneNode(b);
     this.hands = ch.hands;                                                   // measured on the rest pose (vrmChar)
     this.spineNodes = ['spine', 'chest', 'upperChest'].map(nb).filter(Boolean);
+    this.headNode = nb('head');
     this.armL = ['leftUpperArm', 'leftLowerArm', 'leftHand'].map(nb);
     this.armR = ['rightUpperArm', 'rightLowerArm', 'rightHand'].map(nb);
     this.twoK = 0;
-    // the shotgun: in the right hand when it is the weapon, holstered on the right thigh otherwise
-    this.gun = makeShotgun(0.5 * Math.max(0.9, this.hands?.right?.size || 1));
+    // the pistol: in the right hand when it is the weapon, holstered on the right thigh otherwise
+    this.gun = makePistol(PISTOL_LEN * Math.max(0.9, this.hands?.right?.size || 1));
     this.aimK = 0; this.recoil = 0; this.aimDir = new THREE.Vector3(0, 0, 1);
+    this.bullets = new Bullets(scene, fx);
+    this.world = null;                       // the level's ray (set by the view): bolts stop at walls and floors
     this.held = null;
     this.beam = new Beam(scene, 0xbfe6ff);
     this.beamT = 0;
@@ -286,25 +292,41 @@ export class HumanSword {
     twoBoneIK(up, lo, hd, _c.sub(_b), this.twoK);
   }
 
-  // The shotgun in the fist. After a shot the arm comes up onto the aim line and holds there for a moment, kicking
-  // with the recoil; otherwise the gun swings with the arm.
+  // The pistol in a two-handed hold: both arms out in front, the sights at eye level on the aim line, the left hand
+  // wrapped around the right. It kicks with each shot; out of the aim the gun swings with the arm.
   aimGun() {
     const R = this.hands?.right, L = this.hands?.left;
     if (!R?.ok) return;
-    R.curl(0.92); if (L?.ok) L.curl(0.25);
+    R.curl(0.95); if (L?.ok) L.curl(0.25 + 0.65 * this.aimK);
     if (this.aimK < 0.01) return;
     const [up, lo, hd] = this.armR;
     up.updateWorldMatrix(true, false); lo.updateWorldMatrix(true, false); hd.updateWorldMatrix(true, false);
     const sh = _a.setFromMatrixPosition(up.matrixWorld);
     const len = sh.distanceTo(_b.setFromMatrixPosition(lo.matrixWorld)) + _b.distanceTo(_c.setFromMatrixPosition(hd.matrixWorld));
-    // barrels along the aim (kicked up by the recoil), the gun upright
-    const X = _U.copy(this.aimDir).addScaledVector(UP, this.recoil * 0.35).normalize();
-    const Z = _V.crossVectors(X, UP).normalize(), Y = _s.crossVectors(Z, X);
-    _q.setFromRotationMatrix(_m.makeBasis(X, Y, Z)).multiply(_q2.copy(R.q).invert());           // hand = gun * grip^-1
-    // the wrist: out along the aim from the shoulder, a little low so the sights sit under the eye line
-    const wrist = _c.copy(sh).addScaledVector(X, len * (0.8 - this.recoil * 0.14)).addScaledVector(UP, -0.03 + this.recoil * 0.05);
-    wrist.sub(_b.copy(R.centre).applyQuaternion(_q));
+    // barrel along the aim (kicked up by the recoil), the gun upright
+    const X = _U.copy(this.aimDir).addScaledVector(UP, this.recoil * 0.3).normalize();
+    const Z = _V.crossVectors(X, UP).normalize(), Y = _s.crossVectors(Z, X);                     // Z: the shooter's right
+    _q.setFromRotationMatrix(_m.makeBasis(X, Y, Z)).multiply(_q2.copy(R.q).invert());            // hand = gun * grip^-1
+    // aiming down the sights: the sights sit on the eye's line, and the gun goes out along it until the arm is
+    // all but straight
+    this.headNode.updateWorldMatrix(true, false);
+    const eye = _g1.setFromMatrixPosition(this.headNode.matrixWorld).addScaledVector(UP, this.ch.height * 0.045).addScaledVector(Z, 0.015);
+    const sights = 0.085 * (this.gun.userData.size / PISTOL_LEN);
+    const v = _g2.copy(eye).addScaledVector(Y, -sights).sub(_b.copy(R.centre).applyQuaternion(_q)).sub(sh);       // wrist - shoulder, at no distance
+    const reach = len * (0.965 - this.recoil * 0.07), vx = v.dot(X), disc = vx * vx - v.lengthSq() + reach * reach;
+    const grip = eye.addScaledVector(Y, -sights).addScaledVector(X, Math.max(len * 0.5, -vx + Math.sqrt(Math.max(0, disc))));
+    const wrist = _c.copy(grip).sub(_b.copy(R.centre).applyQuaternion(_q));
     twoBoneIK(up, lo, hd, wrist, this.aimK, { handQ: _q, pole: _b.set(0, -1, 0) });
+    if (!L?.ok || !this.armL[0]) return;
+    // the support hand: palm against the grip from the left, index uppermost, its fingers over the right hand's
+    const [lu, ll, lh] = this.armL;
+    const lp = _g2.copy(L.palm).addScaledVector(L.axis, -L.palm.dot(L.axis)).normalize();
+    _m.makeBasis(L.axis, lp, _g3.crossVectors(L.axis, lp));                                      // the hand's own frame
+    _q2.setFromRotationMatrix(_m).invert();
+    const Yt = _g3.copy(Y).addScaledVector(X, 0.35).normalize(), Zt = _g2.crossVectors(Yt, Z).normalize();
+    _lq.setFromRotationMatrix(_m.makeBasis(Yt, _g4.crossVectors(Zt, Yt), Zt)).multiply(_q2);     // axis up, palm to the right
+    const lw = _c.copy(grip).addScaledVector(Z, -R.width * 0.55).addScaledVector(Y, -R.width * 0.35).addScaledVector(X, R.width * 0.15).sub(_b.copy(L.centre).applyQuaternion(_lq));
+    twoBoneIK(lu, ll, lh, lw, this.aimK, { handQ: _lq, pole: _b.set(0, -1, 0) });
   }
 
   // targets: [{ pos, radius, alive, hit(dmg, dir, mv) }]. Returns the body's time step (hitstop slows it).
@@ -314,6 +336,7 @@ export class HumanSword {
     this.shake = Math.max(0, this.shake - dt * 3);
     this.updateBeam(dt);
     this.gun.userData.update(dt);
+    this.bullets.update(dt);
     const K = this.kit;
     if (!enabled) {
       if (this.act) this.end(P);
@@ -367,7 +390,7 @@ export class HumanSword {
     this.hold(K.gun ? (fps ? 'gunfps' : 'gun') : sword ? 'sword' : '');
     if (fps) mountFps(this.gun, this.cam, this.ch.root.parent, this.recoil, this.vm);
     // is the crosshair on something?
-    this.aimOn = !!(K.gun && this.aim) && shotgun(this.aim.o, this.aim.d, targets, { range: 60, spread: 0, pellets: 1 }).hits.size > 0;
+    this.aimOn = !!(K.gun && this.aim) && shotgun(this.aim.o, this.aim.d, targets, { range: GUN_REACH, spread: 0, pellets: 1, world: this.world }).hits.size > 0;
     P.idleClip = sword ? 'k_idle' : 'idle';
     P.runClip = sword ? 'k_run' : 'run';
     // the gun arm: up while a shot is fresh, the body turned onto the aim
@@ -429,7 +452,7 @@ export class HumanSword {
     const d = this.aimDir.set(Math.sin(yaw), 0, Math.cos(yaw));
     if (A) {
       // through the crosshair: whatever the camera's line meets first is the point the shot converges on
-      const far = shotgun(A.o, A.d, targets, { range: 60, spread: 0, pellets: 1 }).ends[0];
+      const far = shotgun(A.o, A.d, targets, { range: GUN_REACH, spread: 0, pellets: 1, world: this.world }).ends[0];
       if (A.fps) o.copy(A.o).addScaledVector(A.d, 0.1).addScaledVector(UP, -0.1);
       d.copy(far).sub(o).normalize();
       this.onFire?.();
@@ -442,23 +465,21 @@ export class HumanSword {
     o.addScaledVector(d, A?.fps ? 0.5 : 0.45);
     const origin = o.clone();
     // down the sights the pattern is tighter
-    const res = shotgun(origin, d, targets, wide ? { range: 11, spread: 0.3, pellets: 14 } : { range: GUN_RANGE, spread: A?.fps ? 0.05 : A ? 0.085 : KIT.spread });
+    const res = shotgun(origin, d, targets, wide ? { ...FAN, world: this.world } : { range: GUN_REACH, spread: A?.fps ? 0.002 : A ? 0.011 : KIT.spread, world: this.world });
     for (const [tg, n] of res.hits) {
       const dist = Math.hypot(tg.pos.x - P.pos.x, tg.pos.z - P.pos.z);
       const fall = wide ? 1 : clamp(1.25 - dist / GUN_RANGE * 1.1, 0.4, 1);
       if (wide) wound(tg, this.now);                                 // the dash's blast leaves them wounded
-      this.hit(tg, { dmg: n * PELLET_DMG * fall * (wide ? 1.3 : 1), gun: true, heavy: wide || n >= 7, hitstop: wide ? 0.07 : 0.03, wound: wide }, P, d);
+      this.hit(tg, { dmg: n * (wide ? FAN_DMG : SHOT_DMG) * fall, gun: true, heavy: wide, light: !wide, hitstop: wide ? 0.07 : 0.02, wound: wide }, P, d);
     }
-    for (const e of res.ends) {
-      _b.copy(e).sub(origin); const L = _b.length(); _b.multiplyScalar(1 / Math.max(L, 1e-3));
-      this.fx.sparksAt(origin, 1, { dir: _b, spread: 0, speed: Math.min(200, L / 0.07), life: 0.09, width: 0.022, grav: 0, color: K.raging ? 0xff8a7a : 0x9fe8ff, intensity: 5 });
-      if (L < (wide ? 10.9 : GUN_RANGE - 0.1)) this.fx.sparksAt(e, 2, { speed: 4, life: 0.2, width: 0.02, color: 0xffe2a8 });
-    }
-    this.fx.sparksAt(origin, wide ? 16 : 9, { dir: d, spread: 0.5, speed: 9, life: 0.14, width: 0.03, grav: 0, color: 0x7fdcff });
+    // every pellet is a bolt you can watch fly, out of the muzzle
+    const muzzle = this.held === 'gunfps' || this.aimK > 0.8 ? this.gun.localToWorld(_b.copy(this.gun.userData.muzzle)).clone() : origin;
+    for (const sh of res.shots) this.bullets.fire(muzzle, sh.to, { kind: sh.kind, n: sh.n, color: K.raging ? RAGE_COLOR : 0x39d8ff });
+    this.fx.sparksAt(muzzle, wide ? 14 : 4, { dir: d, spread: 0.5, speed: 7, life: 0.1, width: 0.025, grav: 0, color: 0x7fdcff });
     this.gun.userData.fire();
-    this.recoil = 1; this.aimK = Math.max(this.aimK, 0.55);
-    this.shake = Math.max(this.shake, wide ? 0.45 : 0.28);
-    this.punchCb?.(wide ? 0.5 : 0.22);
+    this.recoil = wide ? 1 : 0.7; this.aimK = Math.max(this.aimK, 0.55);
+    this.shake = Math.max(this.shake, wide ? 0.4 : 0.12);
+    if (wide) this.punchCb?.(0.45);
     K.fire(free);
     if (free) K.aimT = 0.5;
   }

@@ -11,7 +11,8 @@ import { rmAt } from '../chars/katanaPack.js';
 import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul, slow, makeLane, setLane, distToLane, strafeLegs } from '../chars/bladeKit.js';
 // the Rush clip's phases: its dash carries the Daywalker Dash and the Thousand-Fold Slash's entry
 const RUSH = { crouch: 0.6, holdA: 0.85, holdB: 2.2, dash0: 2.45, dash1: 4.15, end: 4.9 };
-const GUN_RANGE = 75, PELLET_DMG = 4.4;       // metres; damage per pellet (nine to a shell)
+const GUN_RANGE = 90, GUN_REACH = 600;        // metres: full-damage range, how far a bolt flies
+const SHOT_DMG = 15, FAN_DMG = 6;              // a pistol shot; each bolt of the dash's fan
 const ULT_LEN = 50, ULT_W = 12;               // metres: the Thousand-Fold Slash's path
 const distSeg = (p, a, b) => {
   const abx = b.x - a.x, abz = b.z - a.z, l2 = abx * abx + abz * abz;
@@ -20,11 +21,12 @@ const distSeg = (p, a, b) => {
 };
 import { skinned } from '../assets.js';
 import { loadFrame } from './frames.js';
+import { Bullets } from '../chars/bullets.js';
 
 // Surface mech controller: run / sprint, jump + double jump (thruster burst), rocket flight (hold jump in the air
 // to climb on the foot / calf / back thrusters, Shift in the air to boost along the stick on the back and wing
 // thrusters, leaning into it), and the Daywalker kit (chars/bladeKit.js, Blade's kit from Marvel Rivals): a saber slash
-// chain or shotgun blasts as the primary (swap between them), the Daywalker Dash, the Scarlet Shroud block, Bloodline
+// chain or pistol shots as the primary (swap between them), the Daywalker Dash, the Scarlet Shroud block, Bloodline
 // Awakening and the Thousand-Fold Slash, plus a launcher and a 3-hit aerial combo.
 // Defence for the arena: hold GUARD to block (press it just before a hit lands to PARRY: the attacker staggers and
 // time slows), DODGE for a thruster step with invulnerability frames. Enemies can hurt, launch and knock you down.
@@ -63,6 +65,7 @@ export class MechPilot {
     this.thrWant = { back: 0, wing: 0, sh: 0, calf: 0, foot: 0 };
     this.dodgeDir = new THREE.Vector3();
     this.legs = { leg: 0, back: false, speed: 1 };
+    this.bullets = new Bullets(scene, this.fx, S);
     this.kit = new BladeKit();
     this.aimDir = new THREE.Vector3(0, 0, 1);
     // the Thousand-Fold Slash's path on the ground
@@ -83,7 +86,7 @@ export class MechPilot {
     this.skin = asset ? this.body : null;
     this.C = asset ? buildSkinCombos(this.body) : COMBO;
     // once the clip packs are on the body, rebuild the moves on its clips (root motion, true grip, new launcher)
-    if (asset) this.body.onPack = () => { this.C = buildSkinCombos(this.body); };
+    if (asset) this.body.onPack = () => { this.C = buildSkinCombos(this.body); this.body.setWeapon(this.kit.weapon); };
     this.rig = this.body.rig;
     this.root = this.body.root;
     if (!first) { this.body.setVisible(vis); this.state = 'idle'; this.move = null; this.skin?.setWeapon(this.kit.weapon); }
@@ -223,6 +226,7 @@ export class MechPilot {
       this.fx.sparksAt(_v.set(this.pos.x + Math.cos(a) * 1.2, this.pos.y + Math.random() * 1.5 * S, this.pos.z + Math.sin(a) * 1.2), 1, { speed: 6, dir: UP, spread: 0.3, life: 0.5, width: 0.05, grav: -3, color: RAGE_COLOR });
     }
     this.animate(dt);
+    this.bullets.update(rawDt);
     this.fx.update(rawDt);
   }
 
@@ -303,7 +307,7 @@ export class MechPilot {
       const hs = Math.hypot(this.vel.x, this.vel.z);
       if (K.gun && ctx.aim) {                        // facing follows the crosshair
         K.aimT = Math.max(K.aimT, 0.35); d0.copy(ctx.aim.d);
-        this.aimOn = shotgun(ctx.aim.o, ctx.aim.d, ctx.targets, { range: 200, spread: 0, pellets: 1, tall: 1.9 * S }).hits.size > 0;
+        this.aimOn = shotgun(ctx.aim.o, ctx.aim.d, ctx.targets, { range: GUN_REACH, spread: 0, pellets: 1, tall: 1.9 * S, world: ctx.world }).hits.size > 0;
       } else this.aimOn = false;
       this.aimOnGround = K.gun && !!ctx.aim;
       if (K.gun && K.aimT > 0.3) this.yaw += angDiff(this.yaw, Math.atan2(this.aimDir.x, this.aimDir.z)) * (1 - Math.exp(-18 * dt));   // onto the aim
@@ -736,7 +740,7 @@ export class MechPilot {
     let t = this.lock && this.lock.alive && !free && !A ? this.lock : null, best = wide ? 0.3 : 0.86;
     if (A) {
       // through the crosshair: whatever the camera's line meets first is the point the shot converges on
-      const far = shotgun(A.o, A.d, ctx.targets, { range: 200, spread: 0, pellets: 1, tall: 1.9 * S }).ends[0];
+      const far = shotgun(A.o, A.d, ctx.targets, { range: GUN_REACH, spread: 0, pellets: 1, tall: 1.9 * S, world: ctx.world }).ends[0];
       if (A.fps) o.copy(A.o).addScaledVector(UP, -0.4);
       d.copy(far).sub(o).normalize();
       ctx.onFire?.();
@@ -749,24 +753,22 @@ export class MechPilot {
     }
     if (t) { d.copy(t.pos); d.y += (t.height || 1.9 * S) * 0.55; d.sub(o).normalize(); }
     const origin = o.clone().addScaledVector(d, A?.fps ? 1.2 : 1.6 * S);
-    const res = shotgun(origin, d, ctx.targets, wide ? { range: 11 * S, spread: 0.3, pellets: 14, tall: 1.9 * S } : { range: GUN_RANGE, tall: 1.9 * S, spread: A?.fps ? 0.05 : A ? 0.085 : KIT.spread });
+    const res = shotgun(origin, d, ctx.targets, wide ? { range: 14 * S, spread: 0.2, pellets: 8, tall: 1.9 * S, world: ctx.world } : { range: GUN_REACH, tall: 1.9 * S, spread: A?.fps ? 0.002 : A ? 0.011 : KIT.spread, world: ctx.world });
     for (const [tg, n] of res.hits) {
       const dist = Math.hypot(tg.pos.x - this.pos.x, tg.pos.z - this.pos.z);
       const fall = wide ? 1 : clamp(1.25 - dist / GUN_RANGE * 1.1, 0.4, 1);
       if (wide) wound(tg, this.time);              // the dash's blast leaves them wounded
-      this.hit(tg, { dmg: n * PELLET_DMG * fall * (wide ? 1.3 : 1), gun: true, heavy: wide || n >= 7, hitstop: wide ? 0.07 : 0.03, cone: Math.PI, range: 3 }, ctx);
+      this.hit(tg, { dmg: n * (wide ? FAN_DMG : SHOT_DMG) * fall, gun: true, heavy: wide, light: !wide, hitstop: wide ? 0.07 : 0.02, cone: Math.PI, range: 3 }, ctx);
     }
-    for (const e of res.ends) {
-      _v.copy(e).sub(origin); const L = _v.length(); _v.multiplyScalar(1 / Math.max(L, 1e-3));
-      this.fx.sparksAt(origin, 1, { dir: _v, spread: 0, speed: Math.min(600, L / 0.07), life: 0.09, width: 0.07, grav: 0, color: K.raging ? 0xff8a7a : 0x9fe8ff, intensity: 5 });
-      if (L < (wide ? 11 * S : GUN_RANGE) - 0.2) this.fx.sparksAt(e, 2, { speed: 10, life: 0.2, width: 0.05, color: 0xffe2a8 });
-    }
-    this.fx.sparksAt(origin, wide ? 18 : 10, { dir: d, spread: 0.5, speed: 26, life: 0.14, width: 0.08, grav: 0, color: 0xffc080 });
+    // every pellet is a bolt you can watch fly, out of the muzzle
+    const gun = this.skin?.gun, muzzle = gun && (this.skin.fps || this.aimK > 0.8) ? this.skin.muzzle(new THREE.Vector3()) : origin;
+    for (const sh of res.shots) this.bullets.fire(muzzle, sh.to, { kind: sh.kind, n: sh.n, color: K.raging ? RAGE_COLOR : 0x39d8ff, speed: 150 });
+    this.fx.sparksAt(origin, wide ? 18 : 10, { dir: d, spread: 0.5, speed: 26, life: 0.14, width: 0.08, grav: 0, color: 0x7fdcff });
     this.skin?.gun?.userData.fire();
-    this.recoil = 1; this.aimK = Math.max(this.aimK || 0, 0.55);
-    this.body.recoil(0, 0.4, wide ? 0.7 : 0.4);
-    this.shake = Math.max(this.shake, wide ? 0.45 : 0.25);
-    ctx.haptic?.(wide ? 'heavy' : 'medium');
+    this.recoil = wide ? 1 : 0.7; this.aimK = Math.max(this.aimK || 0, 0.55);
+    this.body.recoil(0, 0.4, wide ? 0.7 : 0.15);
+    this.shake = Math.max(this.shake, wide ? 0.4 : 0.1);
+    ctx.haptic?.(wide ? 'heavy' : 'light');
     K.fire(free);
     if (free) K.aimT = 0.5;
   }

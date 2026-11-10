@@ -40,8 +40,8 @@ export const TUTORIAL = [
   {
     kicker: 'SURFACE', title: 'Pilot the knight-frame mech',
     body: 'At a base on a solid world (Moon, Mars, Mercury, Ceres, Europa, Titan, Pluto) tap <b>DEPLOY MECH</b>. Gravity is the real value for that world. Run, double jump, fly on the thrusters and cut glowing deposits apart with the laser sword: every strike knocks ore into the hopper. Walk back onto the landing pad to unload.',
-    mobile: [['t:Left stick · SPRINT', 'Run · sprint'], ['t:Drag', 'Turn the camera'], ['t:▲ · SPRINT in the air', 'Jump · double jump · hold to fly up · rocket boost along the stick'], ['t:ATTACK · SWAP · DASH', 'Sword slashes or shotgun blasts · switch weapon · Daywalker Dash'], ['t:BLOCK · AWAKEN · ULT', 'Block with the sword · frenzy · Thousand-Fold Slash']],
-    desktop: [['k:[W] [A] [S] [D] · [Shift]', 'Run · sprint'], ['k:Mouse drag', 'Turn the camera'], ['k:[Space] · [Shift] in the air', 'Jump · double jump · hold to fly up · rocket boost along the stick'], ['k:Click / [J] · [R] · [E]', 'Sword slashes or shotgun blasts (hold) · swap weapon · Daywalker Dash'], ['k:[F] / right-click · [K] · [Q]', 'Block with the sword · Bloodline Awakening · Thousand-Fold Slash']],
+    mobile: [['t:Left stick · SPRINT', 'Run · sprint'], ['t:Drag', 'Turn the camera'], ['t:▲ · SPRINT in the air', 'Jump · double jump · hold to fly up · rocket boost along the stick'], ['t:ATTACK · SWAP · DASH', 'Sword slashes or pistol shots · switch weapon · Daywalker Dash'], ['t:BLOCK · AWAKEN · ULT', 'Block with the sword · frenzy · Thousand-Fold Slash']],
+    desktop: [['k:[W] [A] [S] [D] · [Shift]', 'Run · sprint'], ['k:Mouse drag', 'Turn the camera'], ['k:[Space] · [Shift] in the air', 'Jump · double jump · hold to fly up · rocket boost along the stick'], ['k:Click / [J] · [R] · [E]', 'Sword slashes or pistol shots (hold) · swap weapon · Daywalker Dash'], ['k:[F] / right-click · [K] · [Q]', 'Block with the sword · Bloodline Awakening · Thousand-Fold Slash']],
   },
   {
     kicker: 'EARTH 2087', title: 'Fly down to Earth',

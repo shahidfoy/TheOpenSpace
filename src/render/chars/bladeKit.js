@@ -2,21 +2,21 @@ import * as THREE from 'three';
 
 // The Daywalker kit shared by the VRM characters (chars/katana.js) and the mech (mech/mechPilot.js): Blade's kit from
 // Marvel Rivals.
-//   primary              Ancestral Sword: a five-hit slash chain / Hunter's Shotgun: pellet blasts, six shells
-//   swap                 switch between the sword and the shotgun
+//   primary              Ancestral Sword: a five-hit slash chain / Hunter's Pistol: single bolts, twelve to a cell
+//   swap                 switch between the sword and the pistol
 //   Daywalker Dash       two charges. A short invulnerable dash, upward too if jump is held. With the sword it ends
-//                        in a cleaving strike that slows; with the shotgun in a blast that wounds (the target takes
+//                        in a cleaving strike that slows; with the pistol in a fan of shots that wounds (the target takes
 //                        more damage for a while)
 //   Scarlet Shroud       hold: block with the sword. Every blow it takes shortens the dash cooldown
 //   Bloodline Awakening  a stance, sword only. Landing hits fills a meter that speeds the cuts up, until the chain
-//                        turns into a whirlwind; every hit steals life. Drawing the shotgun drops the stance (half
+//                        turns into a whirlwind; every hit steals life. Drawing the pistol drops the stance (half
 //                        the meter is kept)
 //   Thousand-Fold Slash  the ultimate, charged by dealing damage: lay a path on the ground, confirm, and dash down
 //                        it; the path is then cut to ribbons while you fight on
 // This class is the kit's state (weapon, ammo, charges, meter); the two controllers own the motion and effects.
 
 export const KIT = {
-  mag: 6, fireT: 0.52, reloadT: 1.3, pellets: 9, spread: 0.11,
+  mag: 12, fireT: 0.19, reloadT: 1.1, pellets: 1, spread: 0.02,        // the pistol: one bolt a shot
   dashN: 2, dashCd: 7, blockRefund: 1, woundT: 5, woundMul: 1.3, slowT: 3,
   meterHit: 0.085, meterHold: 2.5, meterDecay: 0.14, rageSpeed: 0.75, rageDmg: 1.15, lifesteal: 0.3, whirlAt: 0.45,
   ultFull: 420, ultT: 2.6, ultTick: 0.15,
@@ -57,14 +57,14 @@ export class BladeKit {
     else if (this.ammo <= 0 || (this.ammo < KIT.mag && this.idleT > 2.2)) this.reload = KIT.reloadT;
   }
 
-  // drawing the shotgun drops the awakening stance, keeping half the meter
+  // drawing the pistol drops the awakening stance, keeping half the meter
   swap(to = null) {
     const w = to || (this.weapon === 'sword' ? 'gun' : 'sword');
     if (w !== this.weapon) { this.weapon = w; this.mark('swap'); if (w === 'gun' && this.stance) this.leaveStance(); }
     return this.weapon;
   }
   canFire() { return this.fireCd <= 0 && this.reload <= 0 && this.ammo > 0; }
-  // one shell; free: the dash's blast costs nothing
+  // one round; free: the dash's fan of shots costs nothing
   fire(free = false) {
     if (!free) { this.ammo--; this.fireCd = KIT.fireT; this.mark('shot'); }
     this.idleT = 0; this.aimT = 0.9;
@@ -140,18 +140,22 @@ export function woundMul(t, now) { return t.woundUntil && t.woundUntil > now ? K
 export function slow(t, now) { t.slowUntil = now + KIT.slowT; t.slowT = KIT.slowT; }
 
 const _d = new THREE.Vector3(), _r = new THREE.Vector3(), _u = new THREE.Vector3();
-// One shotgun blast: pellets in a cone from `origin` along `dir` (unit). Each pellet stops at the first target it
+// One pull of the trigger: pellets in a cone (the pistol fires one, the dash's fan several) from `origin` along `dir` (unit). Each pellet stops at the first target it
 // meets; targets are upright capsules { pos (feet), radius, height?, alive }. Returns
 // { hits: Map(target -> pellets), ends: [Vector3] } with every pellet's end point for the tracers.
-export function shotgun(origin, dir, targets, { range = 22, spread = KIT.spread, pellets = KIT.pellets, tall = 1.9 } = {}) {
-  const hits = new Map(), ends = [];
+// world: an optional (origin, dir, max) -> { t, n } ray against the level (chars/bullets.js): a pellet stops at the
+// first wall or floor, and nothing behind it is hit. shots: per pellet { to, kind: 'target' | 'world' | 'air', n }.
+export function shotgun(origin, dir, targets, { range = 22, spread = KIT.spread, pellets = KIT.pellets, tall = 1.9, world = null } = {}) {
+  const hits = new Map(), ends = [], shots = [];
   _r.set(dir.z, 0, -dir.x); if (_r.lengthSq() < 1e-6) _r.set(1, 0, 0); _r.normalize();
   _u.crossVectors(dir, _r).normalize();
   for (let i = 0; i < pellets; i++) {
     // an even disc: the first pellet flies true, the rest ring it
     const a = Math.random() * Math.PI * 2, s = i === 0 ? 0 : Math.sqrt(Math.random()) * spread;
     _d.copy(dir).addScaledVector(_r, Math.cos(a) * s).addScaledVector(_u, Math.sin(a) * s).normalize();
-    let best = null, bt = range;
+    let best = null, bt = range, wn = null;
+    const w = world ? world(origin, _d, range) : null;
+    if (w) { bt = w.t; wn = w.n.clone(); }
     for (const t of targets) {
       if (!t.alive) continue;
       // ray against the capsule's circle seen from above, then the height at that distance
@@ -171,8 +175,10 @@ export function shotgun(origin, dir, targets, { range = 22, spread = KIT.spread,
       if (y < t.pos.y - 0.2 || y > t.pos.y + h + 0.2) continue;
       best = t; bt = tt;
     }
-    ends.push(new THREE.Vector3().copy(origin).addScaledVector(_d, bt));
+    const to = new THREE.Vector3().copy(origin).addScaledVector(_d, bt);
+    ends.push(to);
+    shots.push({ to, kind: best ? 'target' : wn ? 'world' : 'air', n: best ? null : wn });
     if (best) hits.set(best, (hits.get(best) || 0) + 1);
   }
-  return { hits, ends };
+  return { hits, ends, shots };
 }
