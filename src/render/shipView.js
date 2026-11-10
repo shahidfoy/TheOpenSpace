@@ -6,6 +6,7 @@ import { FRAMES, loadFrame, saveFrame } from './mech/frames.js';
 import { SwordFx } from './mech/swordFx.js';
 import { HumanSword } from './chars/katana.js';
 import { KitHud } from '../ui/kitHud.js';
+import { SparBots } from './chars/sparBots.js';
 import { KitTutorial } from '../ui/kitTutorial.js';
 import { LunarArena, ARENA } from './arena.js';
 import { S as MECH_S } from './mech/mechRig.js';
@@ -333,7 +334,7 @@ export class ShipView {
     // a city block: cast-concrete walls, stone paving, brick for the walls you run along, steel ladder frames for
     // the ones you climb, and buildings all around
     const concrete = new THREE.MeshStandardMaterial({ map: concreteTexture(), roughness: 0.92 });
-    const ground = new THREE.MeshStandardMaterial({ map: pavingTexture(), roughness: 0.95 });
+    const ground = new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 0.9 });
     const runMat = new THREE.MeshStandardMaterial({ map: brickTexture(), roughness: 0.9 });
     const climbMat = new THREE.MeshStandardMaterial({ map: ladderTexture(), roughness: 0.5, metalness: 0.6 });
     const roofMat = new THREE.MeshStandardMaterial({ color: 0x2c2f35, roughness: 0.95 });
@@ -341,26 +342,16 @@ export class ShipView {
       const f = facadeTexture(c, l, sd);
       return new THREE.MeshStandardMaterial({ map: f.map, emissiveMap: f.emissive, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: 0.85 });
     });
-    // a building: storeys of windows under a flat roof with a parapet
-    let seed = 17;
-    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    const building = (x, z, w, d, h, collide = true) => {
-      h = Math.round(h / 4) * 4;
-      A.box(x, 0, z, w, h, d, fronts[Math.floor(rnd() * fronts.length)], { tile: 4, collide });
-      A.box(x - 0.3, h, z - 0.3, w + 0.6, 0.5, d + 0.6, roofMat, { collide: false });
-      if (rnd() < 0.6) A.box(x + w * 0.2, h + 0.5, z + d * 0.25, w * 0.3, 2.2, d * 0.3, concrete, { tile: 3, collide: false });
+    // a building: storeys of windows under a flat roof. Solid all the way through, and you can stand on the roof
+    const building = (x, z, w, d, h, look = 0) => {
+      A.box(x, 0, z, w, h, d, fronts[look % fronts.length], { tile: 4 });
+      A.box(x, h, z, w, 0.4, d, roofMat, {});
     };
     const pad = new THREE.MeshStandardMaterial({ color: 0x0f2230, emissive: 0x3fd8ff, emissiveIntensity: 1.6 });
     const amberPad = new THREE.MeshStandardMaterial({ color: 0x2a1a06, emissive: 0xffa030, emissiveIntensity: 1.6 });
     const T = 1;
 
-    A.box(-90, -1, -70, 270, 1, 200, ground, { tile: 4 });
-    // the streets around the block
-    for (let x = -88; x < 176;) { const w = 14 + rnd() * 12; building(x, -68, w, 16 + rnd() * 6, 12 + rnd() * 26); x += w + 3; }
-    for (let x = -88; x < 176;) { const w = 14 + rnd() * 12, d = 16 + rnd() * 6; building(x, 128 - d, w, d, 12 + rnd() * 26); x += w + 3; }
-    for (let z = -44; z < 104;) { const d = 14 + rnd() * 12; building(-88, z, 16 + rnd() * 6, d, 12 + rnd() * 22); z += d + 3; }
-    for (let z = -44; z < 104;) { const d = 14 + rnd() * 12, w = 16 + rnd() * 6; building(178 - w, z, w, d, 16 + rnd() * 26); z += d + 3; }
-    building(-62, 66, 20, 18, 16); building(-58, -38, 22, 14, 12); building(60, 70, 18, 22, 20);
+    A.box(-90, -1, -70, 270, 1, 200, ground, { tile: T });
 
     // ===== parkour course (panels sit nearly flush with their walls so nothing catches on their edges) =====
     for (let i = 0; i < 4; i++) A.box(1 + i * 1.6, 0, -9, 1.6, 0.5 + i * 0.5, 3, concrete, { tile: 3 });
@@ -409,11 +400,6 @@ export class ShipView {
     const YC = new THREE.Vector3(110, 0, 10);
     this.yard = { center: YC, R: 46 };
     const yl = label('MECH YARD', 'dummies · Enter: holo sparring', '#ffc46a'); yl.position.set(YC.x - 40, 8, YC.z); yl.scale.set(12, 3, 1); S.add(yl);
-    // giant blocks around the yard for scale (outside the fence)
-    for (let i = 0; i < 10; i++) {
-      const a = (i / 10) * Math.PI * 2 + 0.3, r = 58 + (i % 3) * 6, h = 14 + (i % 4) * 8;
-      if (Math.abs(YC.z + Math.sin(a) * r) < 60 && YC.x + Math.cos(a) * r < 150) building(YC.x + Math.cos(a) * r - 6, YC.z + Math.sin(a) * r - 6, 12, 12, h + 6, false);
-    }
     // training dummies: posts that wobble when struck, burst when broken and come back
     this.dummies = [];
     const postMat = new THREE.MeshStandardMaterial({ map: concreteTexture('#6c7078'), roughness: 0.7, metalness: 0.3 });
@@ -457,6 +443,35 @@ export class ShipView {
       d.hit = (dmg, dir) => this.damageDummy(d, dmg, this.simFx, dir);
       this.dojo.push(d);
     }
+
+    // ===== rooftop run: a street of buildings to climb and leap across (each one solid, none touching) =====
+    building(-60, 70, 14, 14, 8, 0); building(-42, 70, 12, 14, 12, 1); building(-26, 72, 14, 12, 12, 2);
+    building(-8, 70, 12, 14, 16, 3); building(8, 70, 14, 14, 12, 0);
+    A.box(-55, 0, 69.75, 3, 8.4, 0.25, climbMat, { kind: 'climb', tile: 1.5 });                  // the way up
+    const rl = label('ROOFTOP RUN', 'climb the ladder · leap roof to roof'); rl.position.set(-53.5, 4, 67); rl.scale.set(6, 1.5, 1); S.add(rl);
+    const rf = label('FINISH', ''); rf.position.set(15, 15, 77); S.add(rf);
+
+    // ===== dash course: gaps a jump will not clear, and ledges a dash carries you up =====
+    A.box(-40, 0, -34, 4, 3, 6, concrete, { tile: 3 }); A.box(-51, 0, -34, 4, 3, 6, concrete, { tile: 3 });
+    A.box(-62, 0, -34, 4, 4.5, 6, concrete, { tile: 3 }); A.box(-73, 0, -34, 4, 6, 6, concrete, { tile: 3 });
+    const dc = label('DASH COURSE', 'E across the gaps · Space + E up the ledges'); dc.position.set(-33, 3.4, -31); dc.scale.set(6, 1.5, 1); S.add(dc);
+    const df = label('FINISH', ''); df.position.set(-71, 8.6, -31); S.add(df);
+
+    // ===== battle areas: sparring bots that fight back, in waves =====
+    // the pit: a walled square with a gate facing the range
+    A.box(19.2, 0, -24, 8.8, 2.5, 0.8, concrete, { tile: 3 }); A.box(32, 0, -24, 8.8, 2.5, 0.8, concrete, { tile: 3 });
+    A.box(19.2, 0, -46.8, 21.6, 2.5, 0.8, concrete, { tile: 3 });
+    A.box(19.2, 0, -46, 0.8, 2.5, 22, concrete, { tile: 3 }); A.box(40, 0, -46, 0.8, 2.5, 22, concrete, { tile: 3 });
+    const pl = label('SPARRING PIT', 'bots fight back · block, dash, cut them down', '#ff9a6a'); pl.position.set(30, 4.2, -24); pl.scale.set(6, 1.5, 1); S.add(pl);
+    // the alley: a long walled lane, made for the dash and the Thousand-Fold Slash
+    A.box(51.2, 0, -46, 0.8, 3, 36, concrete, { tile: 3 }); A.box(58, 0, -46, 0.8, 3, 36, concrete, { tile: 3 });
+    A.box(51.2, 0, -46.8, 7.6, 3, 0.8, concrete, { tile: 3 });
+    const al = label('AMBUSH ALLEY', 'a lane of bots · dash and ultimate down the line', '#ff9a6a'); al.position.set(55, 4.6, -10); al.scale.set(6, 1.5, 1); S.add(al);
+    this.bots = new SparBots(S, this.simFx, [
+      { name: 'SPARRING PIT', rect: [20, 40, -46, -24.5], count: 3, max: 6 },
+      { name: 'AMBUSH ALLEY', rect: [52, 58, -46, -11], count: 4, max: 7 },
+    ], (Z, n) => this.app.hud?.toast(`${Z.name} · WAVE ${n}`, 'good'));
+    this.simTargets = [...this.dojo, ...this.bots.targets];
 
     S.add(new THREE.HemisphereLight(0xcfe6ff, 0x8a8f96, 1.1));
     const sun = new THREE.DirectionalLight(0xfff2dd, 2.4);
@@ -831,7 +846,9 @@ export class ShipView {
       if (near && I.dodge) { this.act(near.act); I.dodge = 0; }
       // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
       if (this.sword) this.sword.camYaw = this.camYaw;
-      const pdt = this.sword ? this.sword.update(dt, I, P, this.dojo, this.area === this.sim && this.$ward.hidden) : dt;
+      const fighting = this.area === this.sim && this.$ward.hidden;
+      const pdt = this.sword ? this.sword.update(dt, I, P, this.simTargets, fighting) : dt;
+      if (this.sword && this.area === this.sim) this.bots.update(pdt, P, this.sword, fighting);
       P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
       this.updateMeters(P);
       if (!this.$ward.hidden && this.area === this.deck) {

@@ -595,6 +595,30 @@ export class HumanSword {
     }
   }
 
+  // A foe's blow reaches you, from a point on the ground. Returns 'dodge' (mid-dash), 'block' (the Shroud took it:
+  // the dash comes back sooner) or 'hit' (a stagger).
+  takeHit(from, P) {
+    if (this.act?.kind === 'dash') return 'dodge';
+    const dx = from.x - P.pos.x, dz = from.z - P.pos.z, d = Math.hypot(dx, dz) || 1;
+    const facing = (dx * Math.sin(P.yaw) + dz * Math.cos(P.yaw)) / d;
+    if (this.act?.kind === 'guard' && facing > 0.1) {
+      this.kit.blocked();
+      P.vel.x -= dx / d * 2.5; P.vel.z -= dz / d * 2.5;
+      this.shake = Math.max(this.shake, 0.18);
+      return 'block';
+    }
+    if (this.act) this.end(P);
+    this.act = { kind: 'hit' }; this.t = 0;
+    this.kit.mark('struck');
+    this.ch.play(Math.random() < 0.5 ? 'k_hit' : 'k_hit2', { fade: 0.05, time: 0.05, speed: 1.5, restart: true });
+    P.vel.x = -dx / d * 5.5; P.vel.z = -dz / d * 5.5;
+    this.flashCb?.('#ff3a2a', 0.22);
+    this.shake = Math.max(this.shake, 0.32);
+    this.drawnT = 3;
+    P.action = this;
+    return 'hit';
+  }
+
   // ---------------- Scarlet Shroud ----------------
   startGuard(P) {
     if (this.kit.gun) this.swap(P, 'sword');
@@ -652,6 +676,7 @@ export class HumanSword {
       v.y = a.up ? sp * 0.62 : P.grounded || a.air ? 0 : v.y - 24 * dt;
       return;
     }
+    if (a.kind === 'hit') { v.x *= Math.exp(-dt * 8); v.z *= Math.exp(-dt * 8); v.y -= 24 * dt; return; }
     if (a.kind === 'aim') {
       // stand in the stance, turning with the camera
       P.yaw += angDiff(P.yaw, this.camForward()) * Math.min(1, dt * 12);
@@ -668,6 +693,7 @@ export class HumanSword {
     const a = this.act;
     this.t += dt;
     if (a.kind === 'move') return this.stepMove(dt, P, targets);
+    if (a.kind === 'hit') { if (this.t >= 0.42) this.end(P); return; }
     if (a.kind === 'aim') {
       const tc = this.t < RUSH.crouch ? this.t : RUSH.holdA + (Math.sin((this.t - RUSH.crouch) * 1.4) * 0.5 + 0.5) * (RUSH.holdB - RUSH.holdA) * 0.6;
       this.ch.scrub(tc);
