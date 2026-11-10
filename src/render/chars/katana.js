@@ -3,7 +3,7 @@ import { loadKatanaPack, loadPack, retargetPack, layerClip, rmAt } from './katan
 import { makeWarp, clipTime, clipRate } from '../mech/mechSkin.js';
 import { Beam } from '../mech/swordFx.js';
 import { twoBoneIK } from './handIK.js';
-import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul, slow, makeLane, setLane, distToLane } from './bladeKit.js';
+import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul, slow, makeLane, setLane, distToLane, strafeLegs } from './bladeKit.js';
 import { makeShotgun } from './gun.js';
 import { mountFps } from './gunView.js';
 
@@ -176,6 +176,7 @@ export class HumanSword {
     this.sheathPose();
     const nb = (b) => H.getNormalizedBoneNode(b);
     this.hands = ch.hands;                                                   // measured on the rest pose (vrmChar)
+    this.spineNodes = ['spine', 'chest', 'upperChest'].map(nb).filter(Boolean);
     this.armL = ['leftUpperArm', 'leftLowerArm', 'leftHand'].map(nb);
     this.armR = ['rightUpperArm', 'rightLowerArm', 'rightHand'].map(nb);
     this.twoK = 0;
@@ -243,6 +244,12 @@ export class HumanSword {
 
   // after the clip is applied, before the humanoid drives the mesh: the grip, the gun arm, the feet on the ground
   pose() {
+    // hips turned into a strafe: the spine twists back so the chest stays on the aim
+    const leg = this.legs?.leg || 0;
+    if (Math.abs(leg) > 0.01 && this.spineNodes.length) {
+      _q.setFromAxisAngle(UP, -leg / this.spineNodes.length);
+      for (const n of this.spineNodes) n.quaternion.premultiply(_q);
+    }
     if (this.held === 'sword') this.seatKatana();
     else if (this.held === 'gun') this.aimGun();
     if (this.ground) {
@@ -311,7 +318,7 @@ export class HumanSword {
     if (!enabled) {
       if (this.act) this.end(P);
       this.hold(''); this.trail.on = false; this.ground = null; this.zone = null; this.lane.visible = false; K.aiming = false;
-      this.aimK = 0; P.faceYaw = null;
+      this.aimK = 0; P.faceYaw = null; P.legs = null; if (this.legs) this.legs.leg = 0;
       P.idleClip = 'idle'; P.runClip = 'run';
       return dt;
     }
@@ -370,6 +377,8 @@ export class HumanSword {
     this.aimK += ((aiming ? 1 : 0) - this.aimK) * Math.min(1, dt * (aiming ? 22 : 7));
     this.recoil = Math.max(0, this.recoil - dt * 7);
     P.faceYaw = aiming && K.aimT > 0.3 ? Math.atan2(this.aimDir.x, this.aimDir.z) : null;
+    // the body stays on the aim, so the legs follow the ground: strafing and backpedalling
+    P.legs = strafeLegs(this.legs ||= { leg: 0, back: false, speed: 1 }, P.vel.x, P.vel.z, P.yaw, P.faceYaw != null && P.grounded && P.state !== 'climb' && P.state !== 'wallrun' && P.state !== 'mantle', dt);
     // feet on the ground: planted while standing or striking, kept out of the floor while running
     const st = P.state;
     this.ground = !P.grounded || st === 'mantle' || st === 'climb' || st === 'wallrun' || this.act?.kind === 'dash' ? null

@@ -102,7 +102,9 @@ export class Parkour {
       } else if (this.wallT > WALLRUN_T || v.y < -6) this.leaveWall('air');
     } else {
       // ground / air locomotion
-      const top = this.grounded ? (I.boost ? SPRINT : RUN) : Math.max(RUN, Math.hypot(v.x, v.z));
+      // legs: gun mode's strafing (see bladeKit.strafeLegs): slower sideways and backward, and no sprinting back
+      const LG = this.legs, slow = this.grounded && LG ? LG.speed : 1;
+      const top = this.grounded ? (I.boost && !(LG && LG.back) ? SPRINT : RUN) * slow : Math.max(RUN, Math.hypot(v.x, v.z));
       const k = 1 - Math.exp(-(this.grounded ? (this.landT > 0 ? 4 : 14) : 3) * dt);
       v.x = lerp(v.x, wish.x * top, k); v.z = lerp(v.z, wish.z * top, k);
       v.y -= G * dt;
@@ -325,7 +327,8 @@ export class Parkour {
     } else if (this.grounded) {
       if (this.landT > 0 && c.currentName === 'land') { /* let the landing play */ }
       else if (hs < 0.35) c.play(idle, { fade: 0.25 });
-      else if (hs < 7.4) c.play(run, { fade: 0.2, speed: clamp(hs / RUN, 0.55, 1.25) * (run === 'run' ? 1 : 0.9) });
+      // backpedalling: the same stride, run in reverse
+      else if (hs < 7.4) c.play(run, { fade: 0.2, speed: clamp(hs / RUN, 0.55, 1.25) * (run === 'run' ? 1 : 0.9) * (this.legs?.back ? -1 : 1) });
       else c.play('sprint', { fade: 0.2, speed: clamp(hs / SPRINT, 0.8, 1.2) });
     } else {
       const jumping = c.currentName === 'jump' && !c.done() && v.y > -2;
@@ -349,7 +352,7 @@ export class Parkour {
     if (!contact) { this.climbOff *= 0.8; this.wrOff *= 0.8; }
     if (this.wall && (st === 'climb' || Math.abs(this.climbOff) > 1e-3)) root.position.addScaledVector(this.wall.n, this.climbOff);
     if (this.wall && (st === 'wallrun' || Math.abs(this.wrOff) > 1e-3)) root.position.addScaledVector(this.wall.n, this.wrOff);
-    root.rotation.set(0, this.yaw, this.roll, 'YXZ');
+    root.rotation.set(0, this.yaw + (this.legs?.leg || 0), this.roll, 'YXZ');
     c.update(dt);
     if (contact) {
       root.updateMatrixWorld(true);

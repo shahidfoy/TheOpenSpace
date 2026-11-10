@@ -8,7 +8,7 @@ import {
 import { SwordFx } from './swordFx.js';
 import { SkinnedMechBody, buildSkinCombos, makeWarp, clipTime, clipRate } from './mechSkin.js';
 import { rmAt } from '../chars/katanaPack.js';
-import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul, slow, makeLane, setLane, distToLane } from '../chars/bladeKit.js';
+import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul, slow, makeLane, setLane, distToLane, strafeLegs } from '../chars/bladeKit.js';
 // the Rush clip's phases: its dash carries the Daywalker Dash and the Thousand-Fold Slash's entry
 const RUSH = { crouch: 0.6, holdA: 0.85, holdB: 2.2, dash0: 2.45, dash1: 4.15, end: 4.9 };
 const GUN_RANGE = 75, PELLET_DMG = 4.4;       // metres; damage per pellet (nine to a shell)
@@ -62,6 +62,7 @@ export class MechPilot {
     this.H = { p: new THREE.Vector3(), d: new THREE.Vector3(), u: new THREE.Vector3(), w: 1, snap: false, rate: 18, force: false };
     this.thrWant = { back: 0, wing: 0, sh: 0, calf: 0, foot: 0 };
     this.dodgeDir = new THREE.Vector3();
+    this.legs = { leg: 0, back: false, speed: 1 };
     this.kit = new BladeKit();
     this.aimDir = new THREE.Vector3(0, 0, 1);
     // the Thousand-Fold Slash's path on the ground
@@ -287,7 +288,8 @@ export class MechPilot {
         top = FLY_TOP; ctl = 2.6;
         this.fuel = Math.max(0, this.fuel - BURN_BOOST * dt);
       } else if (this.grounded) {
-        top = this.guarding ? GUARD_WALK : I.boost ? SPRINT : RUN; ctl = this.landT > 0 ? 3 : 9;
+        // gun mode strafing: slower sideways and backward, no sprinting back
+        top = (this.guarding ? GUARD_WALK : I.boost && !this.legs.back ? SPRINT : RUN) * this.legs.speed; ctl = this.landT > 0 ? 3 : 9;
       } else {
         // free fall keeps momentum; climbing on thrusters gives some steering
         top = Math.max(RUN, Math.hypot(this.vel.x, this.vel.z)); ctl = this.climb > 0.1 ? 2.4 : 0.9;
@@ -303,6 +305,7 @@ export class MechPilot {
         K.aimT = Math.max(K.aimT, 0.35); d0.copy(ctx.aim.d);
         this.aimOn = shotgun(ctx.aim.o, ctx.aim.d, ctx.targets, { range: 200, spread: 0, pellets: 1, tall: 1.9 * S }).hits.size > 0;
       } else this.aimOn = false;
+      this.aimOnGround = K.gun && !!ctx.aim;
       if (K.gun && K.aimT > 0.3) this.yaw += angDiff(this.yaw, Math.atan2(this.aimDir.x, this.aimDir.z)) * (1 - Math.exp(-18 * dt));   // onto the aim
       else if (this.guarding && this.lock) this.faceTarget(this.lock, dt, 12);
       else if (hs > 0.6 && (wish.lengthSq() > 0.01 || boosting)) this.yaw += angDiff(this.yaw, Math.atan2(this.vel.x, this.vel.z)) * (1 - Math.exp(-(this.grounded ? 10 : boosting ? 5 : 3) * dt));
@@ -1056,6 +1059,10 @@ export class MechPilot {
     // the gun arm: up on the aim line while a shot is fresh
     const K = this.kit, aiming = K.gun && K.aimT > 0 && st === 'idle' && this.guardK < 0.05;
     this.aimK = (this.aimK || 0) + ((aiming ? 1 : 0) - (this.aimK || 0)) * Math.min(1, dt * (aiming ? 22 : 7));
+    // the body stays on the aim, so the legs follow the ground: strafing and backpedalling
+    const strafing = K.gun && !!this.aimOnGround && st === 'idle' && this.grounded && !this.flying && this.guardK < 0.05;
+    strafeLegs(this.legs, this.vel.x, this.vel.z, this.yaw, strafing, dt);
+    const rev = this.legs.back ? -1 : 1;
     if (st === 'rush' || st === 'rushEnd' || st === 'aim') {
       // posed by the rush (updateAim / updateRush)
     } else if (st === 'attack') {
@@ -1098,10 +1105,10 @@ export class MechPilot {
     } else if (sp < 0.6) {
       B.play('idle', { fade: 0.3 });
     } else if (sp < 5) {
-      // a heavy walk whose feet keep pace with the ground
-      B.play('walk', { fade: 0.25, speed: clamp(sp / (B.pace('walk') || 4.5), 0.5, 1.3) });
+      // a heavy walk whose feet keep pace with the ground (backpedalling: the same stride in reverse)
+      B.play('walk', { fade: 0.25, speed: clamp(sp / (B.pace('walk') || 4.5), 0.5, 1.3) * rev });
     } else if (sp < 12.5) {
-      B.play('run', { fade: 0.22, speed: clamp(sp / 14, 0.6, 1.1) });
+      B.play('run', { fade: 0.22, speed: clamp(sp / 14, 0.6, 1.1) * rev });
     } else {
       B.play('sprint', { fade: 0.22, speed: clamp(sp / (B.pace('sprint') || 17), 0.7, 1.2) });
     }
@@ -1127,7 +1134,7 @@ export class MechPilot {
     const lit = (st === 'attack' || st === 'aim' || st === 'rush' || st === 'rushEnd' || cutDash || this.swordHold > 0 || this.guardK > 0.3) && !REACT.has(st) && !K.gun;
     const grounded = this.grounded && !this.flying && (st === 'idle' || st === 'attack' || st === 'aim' || st === 'rushEnd') && !this.move?.air;
     B.setFps(K.gun && this.fpsCam ? this.fpsCam : null, this.recoil, this.vm);
-    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean, grounded,
+    B.solve(dt, { pos: this.pos, yaw: this.yaw + this.legs.leg, twist: -this.legs.leg, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean, grounded,
       afterPose: this.aimK > 0.01 ? (b) => b.aimGun(this.aimDir, this.aimK, this.recoil) : null });
   }
 

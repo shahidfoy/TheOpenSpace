@@ -113,6 +113,26 @@ export function distToLane(p, a, b) {
   return Math.hypot(p.x - (a.x + abx * t), p.z - (a.z + abz * t));
 }
 
+// Gun mode keeps the body on the crosshair, so the legs have to follow the ground instead: the hips turn toward the
+// way you are moving (up to about 80 degrees, the spine twisting back onto the aim) and the run plays forward; past
+// that the hips turn the other way and the same run plays backward, a backpedal. s: { leg, back } kept by the
+// caller; (vx, vz): ground velocity; yaw: the facing; on: gun mode on the ground. Returns s, with s.leg the hips'
+// turn (radians, added to the facing) and s.back whether the stride runs in reverse.
+const LEG_MAX = 1.4;
+export function strafeLegs(s, vx, vz, yaw, on, dt) {
+  let want = 0;
+  if (on && Math.hypot(vx, vz) > 0.6) {
+    const m = Math.atan2(vx, vz) - yaw, a = Math.atan2(Math.sin(m), Math.cos(m));
+    s.back = Math.abs(a) > (s.back ? 1.45 : 1.85);              // sticky, so a diagonal does not flicker
+    want = Math.max(-LEG_MAX, Math.min(LEG_MAX, s.back ? a - Math.sign(a) * Math.PI : a));
+  } else s.back = false;
+  s.leg += (want - s.leg) * Math.min(1, dt * 12);
+  if (Math.abs(s.leg) < 1e-3 && want === 0) s.leg = 0;
+  // how fast you can go that way: full speed ahead, a little less sideways, less again backward
+  s.speed = s.back ? 0.7 : 1 - 0.15 * Math.abs(s.leg) / LEG_MAX;
+  return s;
+}
+
 // A target counts as wounded for a while after the sword dash: it takes more damage from everything.
 export function wound(t, now) { t.woundUntil = now + KIT.woundT; }
 export function woundMul(t, now) { return t.woundUntil && t.woundUntil > now ? KIT.woundMul : 1; }

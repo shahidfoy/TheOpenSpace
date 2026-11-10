@@ -99,7 +99,7 @@ function mechKatana(asset, pack, loco) {
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 const _hv = new THREE.Vector3(), _hv2 = new THREE.Vector3(), _hv3 = new THREE.Vector3();
 const _ax = new THREE.Vector3(), _ay = new THREE.Vector3(), _az = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
-const _aq = new THREE.Quaternion(), _aq2 = new THREE.Quaternion(), _am = new THREE.Matrix4();
+const _aq = new THREE.Quaternion(), _aq2 = new THREE.Quaternion(), _am = new THREE.Matrix4(), _tq = new THREE.Quaternion();
 
 // Skinned mechs built by blender/build_mech_player.py: the player suit ("NEXORION // The Neon Vanguard" by Atahan3D)
 // and the arena enemies ("JSDF MECHA" by Kussa), both Sketchfab CC-BY 4.0, with a long sword and katana-pack / Mixamo
@@ -188,6 +188,7 @@ export class SkinnedMechBody {
     // JSDF bone names, else the suit's Mixamo-style names
     this.hips = named('hips') || bone(/^(Hip_|Hips$)/);
     this.chest = named('chest') || bone(/^(Chest_|Spine2$)/);
+    this.twistBones = [named('spine') || bone(/^Spine1$/), this.chest].filter(Boolean);
     this.spine = this.chest;                       // the run lean / recoil bend the whole torso
     this.knee = { L: named('leftLowerLeg') || bone(/^(Lower_leg\.?L|LeftLeg$)/), R: named('rightLowerLeg') || bone(/^(Lower_leg\.?R|RightLeg$)/) };
     this.ankle = { L: named('leftFoot') || bone(/^(Upper_Foot\.?L|LeftFoot$)/), R: named('rightFoot') || bone(/^(Upper_Foot\.?R|RightFoot$)/) };
@@ -475,6 +476,15 @@ export class SkinnedMechBody {
     this.mixer.update(dt);
     if (this.armL && this.weapon === 'sword') this.twoHands();
     this.gun?.userData.update(dt);
+    // hips turned into a strafe (o.twist, about the vertical): the spine twists back so the chest stays on the aim
+    if (o.twist && this.twistBones.length) {
+      _tq.setFromAxisAngle(_up, o.twist / this.twistBones.length);
+      for (const b of this.twistBones) {
+        b.parent.updateWorldMatrix(true, false);
+        b.parent.matrixWorld.decompose(_hv, _aq, _hv2);
+        b.quaternion.premultiply(_aq2.copy(_aq).invert().multiply(_tq).multiply(_aq));
+      }
+    }
     o.afterPose?.(this);
     if (o.grounded && this.feet && this.hipsBone) this.groundFeet();
 
