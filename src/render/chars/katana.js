@@ -394,8 +394,9 @@ export class HumanSword {
     P.idleClip = sword ? 'k_idle' : 'idle';
     P.runClip = sword ? 'k_run' : 'run';
     // the gun arm: up while a shot is fresh, the body turned onto the aim
-    // with a crosshair to aim by, the body keeps facing where the camera looks
-    if (K.gun && this.aim && !this.act) { K.aimT = Math.max(K.aimT, 0.35); this.aimDir.copy(this.aim.d); }
+    // the pistol comes up into the two-handed aim only for a shot (and a moment after) or while aim is held;
+    // otherwise it stays in one hand at the side and you run as usual
+    if (K.gun && this.aim && !this.act) { this.aimDir.copy(this.aim.d); if (this.ads) K.aimT = Math.max(K.aimT, 0.35); }
     const aiming = K.gun && K.aimT > 0 && !this.act && !parkourBusy;
     this.aimK += ((aiming ? 1 : 0) - this.aimK) * Math.min(1, dt * (aiming ? 22 : 7));
     this.recoil = Math.max(0, this.recoil - dt * 7);

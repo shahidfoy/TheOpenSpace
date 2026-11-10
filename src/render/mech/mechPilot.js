@@ -306,10 +306,10 @@ export class MechPilot {
       this.accelX = (this.vel.x - prevX) / Math.max(dt, 1e-4); this.accelZ = (this.vel.z - prevZ) / Math.max(dt, 1e-4);
       const hs = Math.hypot(this.vel.x, this.vel.z);
       if (K.gun && ctx.aim) {                        // facing follows the crosshair
-        K.aimT = Math.max(K.aimT, 0.35); d0.copy(ctx.aim.d);
+        d0.copy(ctx.aim.d); if (ctx.ads) K.aimT = Math.max(K.aimT, 0.35);      // raised only for a shot, or while aim is held
         this.aimOn = shotgun(ctx.aim.o, ctx.aim.d, ctx.targets, { range: GUN_REACH, spread: 0, pellets: 1, tall: 1.9 * S, world: ctx.world }).hits.size > 0;
       } else this.aimOn = false;
-      this.aimOnGround = K.gun && !!ctx.aim;
+      this.aimOnGround = K.gun && K.aimT > 0.3;
       if (K.gun && K.aimT > 0.3) this.yaw += angDiff(this.yaw, Math.atan2(this.aimDir.x, this.aimDir.z)) * (1 - Math.exp(-18 * dt));   // onto the aim
       else if (this.guarding && this.lock) this.faceTarget(this.lock, dt, 12);
       else if (hs > 0.6 && (wish.lengthSq() > 0.01 || boosting)) this.yaw += angDiff(this.yaw, Math.atan2(this.vel.x, this.vel.z)) * (1 - Math.exp(-(this.grounded ? 10 : boosting ? 5 : 3) * dt));

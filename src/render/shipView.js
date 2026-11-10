@@ -864,7 +864,7 @@ export class ShipView {
       // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
       if (this.sword) this.sword.camYaw = this.camYaw;
       const fighting = this.area === this.sim && this.$ward.hidden;
-      if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.world = this.simWorld ||= worldOfBoxes(this.sim.boxes); this.sword.onFire = () => this.gunView.fired(); this.sword.onGunHit = (k) => this.gunView.hit(k); this.sword.vm = this.gunView.vm; }
+      if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.ads = this.gunView.adsK > 0.05; this.sword.world = this.simWorld ||= worldOfBoxes(this.sim.boxes); this.sword.onFire = () => this.gunView.fired(); this.sword.onGunHit = (k) => this.gunView.hit(k); this.sword.vm = this.gunView.vm; }
       const pdt = this.sword ? this.sword.update(dt, I, P, this.simTargets, fighting) : dt;
       if (this.sword && this.area === this.sim) this.bots.update(pdt, P, this.sword, fighting);
       P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
@@ -907,6 +907,7 @@ export class ShipView {
     ctx.bound = fight ? A.R - 1.5 : this.yard.R - 2;
     ctx.camYaw = this.camYaw;
     ctx.world = this.simWorld ||= worldOfBoxes(this.sim.boxes);
+    ctx.ads = adsK > 0.05;
     ctx.aim = this.gunView.ray(); ctx.onFire = () => this.gunView.fired(); ctx.onGunHit = (k) => this.gunView.hit(k); M.vm = this.gunView.vm;
     M.fpsCam = adsK > 0.6 ? this.camera : null;
     if (I.arena && !A.fighting && M.alive) A.start();

@@ -67,7 +67,7 @@ export class BladeKit {
   // one round; free: the dash's fan of shots costs nothing
   fire(free = false) {
     if (!free) { this.ammo--; this.fireCd = KIT.fireT; this.mark('shot'); }
-    this.idleT = 0; this.aimT = 0.9;
+    this.idleT = 0; this.aimT = 1.1;
   }
   canDash() { return this.dashes > 0; }
   useDash() { if (this.dashes === KIT.dashN) this.dashCd = KIT.dashCd; this.dashes--; this.mark(this.gun ? 'dashGun' : 'dashSword'); this.mark('dash'); }

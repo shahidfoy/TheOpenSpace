@@ -426,6 +426,7 @@ export class SurfaceView {
     this.ctx.bound = fight ? A.R - 1.5 : BOUND;
     this.ctx.camYaw = this.camYaw;
     this.ctx.world = this.groundRay ||= worldOfHeight((x, z) => this.terrain.height(x, z));
+    this.ctx.ads = adsK > 0.05;
     this.ctx.aim = this.gunView.ray(); this.ctx.onFire = () => this.gunView.fired(); this.ctx.onGunHit = (k) => this.gunView.hit(k); P.vm = this.gunView.vm;
     P.fpsCam = adsK > 0.6 ? this.camera : null;
     if (I.arena && this.hasArena && A.info.inside && !A.fighting && P.alive) A.start();
