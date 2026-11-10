@@ -4,7 +4,7 @@ import { MOVES } from './swordAnim.js';
 import { applyLivery, loadLivery } from './livery.js';
 import { SUIT_GLOW } from '../materials.js';
 import { Saber } from './saber.js';
-import { loadPack, retargetPack } from '../chars/katanaPack.js';
+import { loadPack, retargetPack, layerClip } from '../chars/katanaPack.js';
 import { makeKatana } from '../chars/katana.js';
 import { twoBoneIK } from '../chars/handIK.js';
 import { makeShotgun } from '../chars/gun.js';
@@ -22,8 +22,17 @@ const MECH_BONES = {
 // pack clips that replace the baked ones (same names) and the new ones the mech gains
 const PACK_CLIPS = ['idle', 'run', 'dash', 'dodge', 'dodge2', 'block', 'block_hit', 'hit', 'hit2', 'circle', 'combo1', 'charge', 'aerial',
   'combo_down', 'rush', 'jump_attack', 'double_slash', 'strikes', 'run_attack', 'thrust'];
-// locomotion loops from the Mixamo pack (scripts/build-loco.mjs) that replace the baked ones
+// locomotion loops from the Mixamo pack (scripts/build-loco.mjs) that replace the baked ones. A frame that comes
+// without baked clips (mech/frames.js) takes the whole pack: falling, landing and the reactions too
 const LOCO_CLIPS = ['walk', 'walk_b', 'sprint'];
+// the NEXORION's hands, in hand-bone units: rigid claws (+Y along the hand, the palm on +X of the right hand and -X
+// of the left, the thumb side toward -Z). Other frames bring their own (asset.hands). dir: the way the fingers
+// point; axis: the knuckle row, little finger -> index; knuckle: its centre; half: half its width; centre: where a
+// handle sits in the fist
+const NEX_HAND = (s) => ({ dir: new THREE.Vector3(0, 1, 0), axis: new THREE.Vector3(0, 0, -1), knuckle: new THREE.Vector3(0, 0.36, 0), half: 0.13, centre: new THREE.Vector3(s * 0.17, 0.44, 0) });
+const NEX_HANDS = { left: NEX_HAND(-1), right: NEX_HAND(1) };
+const handsOf = (asset) => asset.hands || NEX_HANDS;
+const bonesOf = (asset) => asset.bones || MECH_BONES;
 function mechKatana(asset, pack, loco) {
   if (asset._katana) return asset._katana;
   const clone = SkeletonUtils.clone(asset.gltf.scene);
@@ -31,55 +40,62 @@ function mechKatana(asset, pack, loco) {
   clone.updateMatrixWorld(true);
   const bones = {};
   clone.traverse((o) => { if (o.isBone) bones[o.name] = o; });
-  if (!Object.values(MECH_BONES).every((n) => bones[n])) return (asset._katana = null);
-  // The suit has no finger bones: its hands are rigid claws on the hand bones (+Y along the hand, the palm on +X of
-  // the right hand and -X of the left, the thumb side toward -Z). Knuckle points measured on that geometry give the
-  // retarget each hand's direction and roll, and place a handle in the fist.
+  const MB = bonesOf(asset), HANDS = handsOf(asset), B = (b) => bones[MB[b]];
+  if (!Object.values(MB).every((n) => bones[n])) return (asset._katana = null);
+  // Knuckle points from the frame's hand measurements give the retarget each hand's direction and roll (the packs
+  // do not animate fingers, and most frames have none).
   const rootInv = new THREE.Matrix4().copy(clone.matrixWorld).invert();
-  const knuckle = (side, z) => new THREE.Vector3(0, HAND.knuckle, z).applyMatrix4(bones[side + 'Hand'].matrixWorld).applyMatrix4(rootInv);
   const point = (b) => {
     const m = /^(left|right)(Index|Middle|Little)Proximal$/.exec(b);
     if (!m) return null;
-    return knuckle(m[1] === 'left' ? 'Left' : 'Right', m[2] === 'Index' ? -HAND.half : m[2] === 'Little' ? HAND.half : 0);
+    const H = HANDS[m[1]], k = m[2] === 'Index' ? 1 : m[2] === 'Little' ? -1 : 0;
+    return H.knuckle.clone().addScaledVector(H.axis, H.half * k).applyMatrix4(B(m[1] + 'Hand').matrixWorld).applyMatrix4(rootInv);
   };
-  const r = retargetPack(pack, { root: clone, node: (b) => bones[MECH_BONES[b]] || null, point }, PACK_CLIPS);
+  const bare = !asset.gltf.animations.length;                 // no baked clips: everything comes from the packs
+  const r = retargetPack(pack, { root: clone, node: (b) => bones[MB[b]] || null, point }, PACK_CLIPS);
   // the bind-pose height of the lowest foot (model units), for keeping feet on the ground
   let foot = Infinity;
-  for (const n of ['LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase']) foot = Math.min(foot, new THREE.Vector3().setFromMatrixPosition(bones[n].matrixWorld).y);
+  for (const n of ['leftFoot', 'rightFoot', 'leftToes', 'rightToes']) foot = Math.min(foot, new THREE.Vector3().setFromMatrixPosition(B(n).matrixWorld).y);
   r.footRest = foot;
   // where the weapon that is not in hand rides, in thigh-bone space: the shotgun on the right thigh (barrels down,
   // grip to the rear), the saber hilt on the left (emitter down)
   {
-    const P = (n) => new THREE.Vector3().setFromMatrixPosition(bones[n].matrixWorld);
-    const left = P('LeftUpLeg').sub(P('RightUpLeg')).normalize();
-    const up = P('Head').sub(P('Hips')); up.addScaledVector(left, -up.dot(left)).normalize();
+    const P = (n) => new THREE.Vector3().setFromMatrixPosition(B(n).matrixWorld).applyMatrix4(rootInv);
+    const u = asset.meta.height / 6;                           // offsets below were measured on the 6-unit NEXORION
+    const left = P('leftUpperLeg').sub(P('rightUpperLeg')).normalize();
+    const up = P('head').sub(P('hips')); up.addScaledVector(left, -up.dot(left)).normalize();
     const fwd = new THREE.Vector3().crossVectors(left, up), down = up.clone().negate();
     const local = (bone, pos, X, Y) => {
       const m = new THREE.Matrix4().makeBasis(X, Y, new THREE.Vector3().crossVectors(X, Y)).setPosition(pos);
-      m.premultiply(new THREE.Matrix4().copy(bones[bone].matrixWorld).invert());
+      m.premultiply(new THREE.Matrix4().multiplyMatrices(rootInv, B(bone).matrixWorld).invert());
       const q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
       m.decompose(p, q, sc);
-      return { bone, p, q };
+      return { bone: MB[bone], p, q };
     };
     r.stow = {
-      gun: local('RightUpLeg', P('RightUpLeg').addScaledVector(left, -0.62).addScaledVector(up, -0.35).addScaledVector(fwd, 0.05), down, fwd),
-      saber: local('LeftUpLeg', P('LeftUpLeg').addScaledVector(left, 0.62).addScaledVector(up, -0.2), fwd.clone().negate(), down),
+      gun: local('rightUpperLeg', P('rightUpperLeg').addScaledVector(left, -0.62 * u).addScaledVector(up, -0.35 * u).addScaledVector(fwd, 0.05 * u), down, fwd),
+      saber: local('leftUpperLeg', P('leftUpperLeg').addScaledVector(left, 0.62 * u).addScaledVector(up, -0.2 * u), fwd.clone().negate(), down),
     };
   }
   if (loco) {
-    const l = retargetPack(loco, { root: clone, node: (b) => bones[MECH_BONES[b]] || null, point }, LOCO_CLIPS);
+    const l = retargetPack(loco, { root: clone, node: (b) => bones[MB[b]] || null, point }, bare ? null : LOCO_CLIPS);
     for (const n of Object.keys(l.clips)) {
       r.clips[n] = l.clips[n]; r.rm[n] = l.rm[n];
       // metres per second (model units) the feet cover at normal speed
       r.meta.clips[n] = { ...l.meta.clips[n], pace: loco.json.clips[n].travel[0] * l.scale / l.meta.clips[n].dur };
     }
+    // walking behind the block: the walk's legs under the held guard
+    if (r.clips.walk && r.clips.block) {
+      const lower = ['hips', 'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'leftToes', 'rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'rightToes'].map((b) => MB[b]);
+      r.clips.block_walk = layerClip('block_walk', r.clips.walk, r.clips.block, 0.7, lower);
+      const two = r.meta.clips.block.two?.[21] ?? 1;
+      r.meta.clips.block_walk = { dur: r.clips.walk.duration, swings: [], pace: r.meta.clips.walk.pace, two: new Float32Array(Math.ceil(r.clips.walk.duration * 30) + 2).fill(two) };
+      r.loops = ['block_walk'];
+    }
   }
   return (asset._katana = r);
 }
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
-// the suit's hands in hand-bone units: knuckle row distance from the wrist, half its width, where a handle sits in
-// the claw (toward the palm: x is mirrored on the left hand) and the handle's axis out of the thumb side
-const HAND = { knuckle: 0.36, half: 0.13, palm: 0.17, along: 0.44, axis: new THREE.Vector3(0, 0, -1) };
 const _hv = new THREE.Vector3(), _hv2 = new THREE.Vector3(), _hv3 = new THREE.Vector3();
 const _ax = new THREE.Vector3(), _ay = new THREE.Vector3(), _az = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
 const _aq = new THREE.Quaternion(), _aq2 = new THREE.Quaternion(), _am = new THREE.Matrix4();
@@ -166,13 +182,14 @@ export class SkinnedMechBody {
     });
 
     const bone = (re) => { let b = null; model.traverse((o) => { if (!b && o.isBone && re.test(o.name)) b = o; }); return b; };
-    this.grip = model.getObjectByName(san('katana_grip'));
+    const MB = (this.MB = bonesOf(asset)), named = (b) => (asset.bones ? model.getObjectByName(MB[b]) : null);
+    this.grip = model.getObjectByName(san('katana_grip')) || named('rightHand');
     // JSDF bone names, else the suit's Mixamo-style names
-    this.hips = bone(/^(Hip_|Hips$)/);
-    this.chest = bone(/^(Chest_|Spine2$)/);
+    this.hips = named('hips') || bone(/^(Hip_|Hips$)/);
+    this.chest = named('chest') || bone(/^(Chest_|Spine2$)/);
     this.spine = this.chest;                       // the run lean / recoil bend the whole torso
-    this.knee = { L: bone(/^(Lower_leg\.?L|LeftLeg$)/), R: bone(/^(Lower_leg\.?R|RightLeg$)/) };
-    this.ankle = { L: bone(/^(Upper_Foot\.?L|LeftFoot$)/), R: bone(/^(Upper_Foot\.?R|RightFoot$)/) };
+    this.knee = { L: named('leftLowerLeg') || bone(/^(Lower_leg\.?L|LeftLeg$)/), R: named('rightLowerLeg') || bone(/^(Lower_leg\.?R|RightLeg$)/) };
+    this.ankle = { L: named('leftFoot') || bone(/^(Upper_Foot\.?L|LeftFoot$)/), R: named('rightFoot') || bone(/^(Upper_Foot\.?R|RightFoot$)/) };
     this.blade = asset.meta.blade;
 
     // clips first: the raw rest stance faces backwards, so the thrusters are placed on the idle pose
@@ -277,7 +294,7 @@ export class SkinnedMechBody {
   applyPack(pack, asset, loco) {
     const r = mechKatana(asset, pack, loco);
     if (!r) return;
-    const loops = new Set(asset.meta.loops || []);
+    const loops = new Set([...(asset.meta.loops || []), ...(r.loops || [])]);
     for (const [name, clip] of Object.entries(r.clips)) {
       const old = this.actions[name];
       const a = this.mixer.clipAction(clip);
@@ -293,28 +310,34 @@ export class SkinnedMechBody {
       this.rm[name] = r.rm[name];
     }
     this.footRest = r.footRest;
-    this.feet = ['LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase'].map((n) => this.model.getObjectByName(n)).filter(Boolean);
-    this.hipsBone = this.model.getObjectByName('Hips');
+    const MB = this.MB, N = (b) => this.model.getObjectByName(MB[b]), HANDS = handsOf(asset), HR = HANDS.right;
+    this.handL = HANDS.left;
+    this.feet = ['leftFoot', 'rightFoot', 'leftToes', 'rightToes'].map(N).filter(Boolean);
+    this.hipsBone = N('hips');
     // the saber moves from the grip bone to the hand, on the grip the pack's two-handed frames agree on
-    const hand = this.model.getObjectByName('RightHand');
+    const hand = N('rightHand');
     if (this.saber && hand) {
       const g = this.saber.group, ws = new THREE.Vector3();
       hand.add(g);
       hand.getWorldScale(ws);
       g.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
       // in the claw: the hilt along the knuckle row, the emitter just clear of the index finger
-      g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), HAND.axis);
-      g.position.set(HAND.palm, HAND.along, 0).addScaledVector(HAND.axis, HAND.half + 0.1);
+      // the hilt's own frame in the fist: +Y out of the thumb side, +X toward the knuckles
+      const hx = HR.dir.clone().addScaledVector(HR.axis, -HR.dir.dot(HR.axis)).normalize();
+      g.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(hx, HR.axis, new THREE.Vector3().crossVectors(hx, HR.axis)));
+      g.position.copy(HR.centre).addScaledVector(HR.axis, HR.half * 1.77);
+      this.handScale = ws.x;
       this.saberOnHand = true;
-      this.armL = ['LeftArm', 'LeftForeArm', 'LeftHand'].map((n) => this.model.getObjectByName(n));
-      this.armR = ['RightArm', 'RightForeArm', 'RightHand'].map((n) => this.model.getObjectByName(n));
+      this.armL = ['leftUpperArm', 'leftLowerArm', 'leftHand'].map(N);
+      this.armR = ['rightUpperArm', 'rightLowerArm', 'rightHand'].map(N);
       this.twoK = 0;
       // the shotgun, sized to the claw; mounts: in the right hand / stowed on the thigh
-      const gun = (this.gun = makeShotgun(0.37 * asset.meta.height * this.k, { metal: 0x2a2f38, trim: 0x16191f, glow: 0xff5a3a }));
+      const gun = (this.gun = makeShotgun(0.31 * asset.meta.height * this.k, { metal: 0x2a2f38, trim: 0x16191f, glow: 0xff5a3a }));
       gun.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
-      const X = new THREE.Vector3(0, 1, 0), Y = HAND.axis.clone();
+      // the gun in the fist: barrels the way the fingers point, its grip down through the knuckle row
+      const X = hx, Y = HR.axis.clone();
       this.gunGrip = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, new THREE.Vector3().crossVectors(X, Y)));
-      this.gripP = new THREE.Vector3(HAND.palm, HAND.along, 0);
+      this.gripP = HR.centre.clone();
       this.mount = { hand, saberP: g.position.clone(), saberQ: g.quaternion.clone(), stow: r.stow };
       this.weapon = null;
       this.setWeapon('sword');
@@ -476,9 +499,9 @@ export class SkinnedMechBody {
     if (this.twoK < 0.02) return;
     const [up, lo, hd] = this.armL, g = this.saber.group;
     hd.updateWorldMatrix(true, false); g.updateWorldMatrix(true, false);
-    const below = (HAND.half * 3 + 0.16) * this.k * 1.008;            // metres down the hilt from the emitter
+    const below = this.handL.half * 4.2 * this.handScale;              // metres down the hilt from the emitter
     _hv.set(0, -below, 0).applyMatrix4(g.matrixWorld);
-    _hv2.set(-HAND.palm, HAND.along, 0).applyMatrix4(hd.matrixWorld).sub(_hv3.setFromMatrixPosition(hd.matrixWorld));
+    _hv2.copy(this.handL.centre).applyMatrix4(hd.matrixWorld).sub(_hv3.setFromMatrixPosition(hd.matrixWorld));
     twoBoneIK(up, lo, hd, _hv.sub(_hv2), this.twoK);
   }
 
@@ -677,6 +700,8 @@ export function buildSkinCombos(body) {
     launch: body.packed && has('jump_attack') ? reg('sl', [single(k, meta, 'jump_attack', { t0: meta.clips.jump_attack.swings[0].t0, t1: meta.clips.jump_attack.swings[0].t1, lead: 0.2, tail: 0.3, speed: 1.1, extra: { dmg: 16, hitstop: 0.09, launch: true, lunge: 1.8 } })])[0]
       : has('gs_slash') ? reg('sl', [single(k, meta, 'gs_slash', { speed: 1.3, extra: { dmg: 16, hitstop: 0.09, launch: true, lunge: 1.8 } })])[0] : 'kL',
     rush: body.packed && has('rush'),
+    // Bloodline Awakening's whirlwind: the circle clip's spinning cuts
+    whirl: body.packed && meta.clips.circle?.swings?.[1] ? reg('sw', [single(k, meta, 'circle', { t0: meta.clips.circle.swings[1].t0, t1: meta.clips.circle.swings[1].t1, lead: 0.06, tail: 0.1, speed: 1.35, extra: { dmg: 11, cone: Math.PI, whirl: true, hitstop: 0.02 } })])[0] : null,
     air: has('aerial') ? reg('sa', chain(k, meta, 'aerial', { speed: 1.25, minPeak: 30, limit: 3, base: { dmg: 12, air: true, lunge: 1.2 }, last: { dmg: 20, slam: true, heavy: true, hitstop: 0.1 } })) : ['kA1', 'kA2', 'kA3'],
     plunge: has('combo_down') ? reg('sp', [single(k, meta, 'combo_down', { speed: 1.25, extra: { dmg: 28, shock: 3.6, plunge: true, heavy: true, hitstop: 0.1 } })])[0] : 'kP',
   };

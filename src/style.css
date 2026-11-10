@@ -722,3 +722,28 @@ b, strong { font-weight: 600; }
 .kit-weapon.reload .kit-shells { animation: kit-reload 0.5s linear infinite; }
 @keyframes kit-reload { 50% { opacity: 0.25; } }
 @media (max-width: 640px) { .kit-hud { bottom: auto; top: calc(var(--top) + 46px); gap: 4px; } .kit-chip { min-width: 0; padding: 0 6px; } .kit-chip kbd { display: none; } }
+
+/* training sim: the ability tutorial (ui/kitTutorial.js) */
+.kit-tut { position: absolute; left: 50%; top: calc(var(--top) + 96px); transform: translateX(-50%); width: min(460px, calc(100vw - 24px)); padding: 10px 14px 9px; background: rgba(8,11,16,0.82); border: 1px solid var(--line-2); border-left: 2px solid var(--amber); clip-path: var(--cut); font-family: var(--mono); color: #e9f1f8; pointer-events: auto; }
+.kit-tut[hidden], .kit-tut-again[hidden] { display: none; }
+.kt-head { display: flex; align-items: baseline; gap: 10px; }
+.kt-step { font-size: 10px; letter-spacing: 0.18em; color: var(--amber); }
+.kt-title { font-family: var(--ui); font-size: 17px; font-weight: 700; letter-spacing: 0.08em; }
+.kt-skip { margin-left: auto; padding: 2px 7px; font: inherit; font-size: 9.5px; letter-spacing: 0.12em; color: var(--dim); background: none; border: 1px solid var(--line-2); cursor: pointer; }
+.kt-skip:hover { color: #fff; border-color: #fff; }
+.kt-text { margin: 6px 0 7px; font-family: var(--ui); font-size: 13.5px; line-height: 1.35; color: #c9d4de; }
+.kt-keys { font-size: 11px; letter-spacing: 0.06em; color: var(--dim); }
+.kit-tut kbd { display: inline-block; padding: 0 6px; margin: 0 1px; font-family: var(--mono); font-size: 11px; color: #fff; background: linear-gradient(180deg, #2a313c, #171c24); border: 1px solid rgba(255,255,255,0.22); border-bottom-width: 2px; border-radius: 4px; }
+.kt-task { display: flex; align-items: center; gap: 8px; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line-2); font-size: 11.5px; letter-spacing: 0.04em; }
+.kt-task i { width: 11px; height: 11px; border: 1px solid var(--amber); transform: rotate(45deg); flex: none; }
+.kt-task em { margin-left: auto; font-style: normal; color: var(--amber); }
+.kit-tut.ok { border-left-color: #6dffa8; }
+.kit-tut.ok .kt-task { color: #6dffa8; }
+.kit-tut.ok .kt-task i { background: #6dffa8; border-color: #6dffa8; box-shadow: 0 0 8px rgba(109,255,168,0.8); }
+.kt-dots { display: flex; gap: 4px; margin-top: 8px; }
+.kt-dots i { flex: 1; height: 2px; background: rgba(255,255,255,0.14); }
+.kt-dots i.done { background: #6dffa8; }
+.kt-dots i.on { background: var(--amber); }
+.kit-tut-again { position: absolute; left: 50%; top: calc(var(--top) + 96px); transform: translateX(-50%); padding: 4px 10px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--dim); background: rgba(8,11,16,0.6); border: 1px solid var(--line-2); cursor: pointer; pointer-events: auto; }
+.kit-tut-again:hover { color: #fff; border-color: #fff; }
+@media (max-width: 640px) { .kit-tut { top: calc(var(--top) + 78px); padding: 8px 10px; } .kt-text { font-size: 12px; } }

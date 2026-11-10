@@ -1,9 +1,9 @@
 import * as THREE from 'three';
-import { loadKatanaPack, retargetPack, rmAt } from './katanaPack.js';
+import { loadKatanaPack, loadPack, retargetPack, layerClip, rmAt } from './katanaPack.js';
 import { makeWarp, clipTime, clipRate } from '../mech/mechSkin.js';
 import { Beam } from '../mech/swordFx.js';
 import { twoBoneIK } from './handIK.js';
-import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul } from './bladeKit.js';
+import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul, slow, makeLane, setLane, distToLane } from './bladeKit.js';
 import { makeShotgun } from './gun.js';
 
 // Sword and shotgun combat for the VRM characters, on the anime katana pack (see katanaPack.js) and the Daywalker
@@ -14,10 +14,11 @@ import { makeShotgun } from './gun.js';
 //   J / click (hold)     sword: 5-hit slash chain (sprinting: running slash; in the air: 3-hit air combo)
 //                        shotgun: pellet blasts, six shells, reloads on its own
 //   R / middle-click     swap sword and shotgun
-//   E                    Daywalker Dash: sword cuts through and wounds, shotgun ends in a wide blast (also in the air)
-//   F / right-click hold Scarlet Shroud: block with the sword
-//   K / C                Bloodline Awakening: a frenzy of faster, harder hits
-//   Q                    Thousand-Fold Slash: dash into a zone that is then cut to ribbons (charged by damage)
+//   E                    Daywalker Dash, two charges: the sword's ends in a cleaving strike that slows, the shotgun's
+//                        in a wide blast that wounds; hold jump to dash upward (also in the air)
+//   F / right-click hold Scarlet Shroud: block with the sword (you can still walk)
+//   K / C                Bloodline Awakening: a sword stance; hits fill a meter that speeds the cuts into a whirlwind
+//   Q                    Thousand-Fold Slash: lay a path, confirm with attack, dash down it; the path is cut to ribbons
 //   L                    launcher: a rising cut that carries you into the air; in the air: plunge with a shockwave
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -42,6 +43,17 @@ export async function retargetKatanaVrm(vrm) {
   const r = retargetPack(pack, vrmRig(vrm));
   const pre = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => ['k_' + k, v]));
   for (const [k, c] of Object.entries(r.clips)) c.name = 'k_' + k;
+  // walking behind the block: the Mixamo walk's legs under the held guard
+  try {
+    const walk = retargetPack(await loadPack('loco'), vrmRig(vrm), ['walk']).clips.walk;
+    const lower = ['hips', 'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'leftToes', 'rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'rightToes']
+      .map((b) => vrm.humanoid.getNormalizedBoneNode(b)?.name).filter(Boolean);
+    if (walk && r.clips.block) {
+      r.clips.block_walk = layerClip('k_block_walk', walk, r.clips.block, 0.6, lower);
+      const two = r.meta.clips.block.two?.[18] ?? 1;                     // both hands stay on the handle
+      r.meta.clips.block_walk = { dur: walk.duration, swings: [], two: new Float32Array(Math.ceil(walk.duration * 30) + 2).fill(two) };
+    }
+  } catch (e) { console.warn('guard walk unavailable', e); }
   return { clips: Object.values(r.clips), meta: { ...r.meta, clips: pre(r.meta.clips) }, rm: pre(r.rm), grip: r.grip, height: r.meta.height };
 }
 
@@ -125,7 +137,7 @@ export function makeKatana(L = 0.85) {
 
 // ---------------- the fighter ----------------
 const DASH_DIST = 8.5, DASH_DUR = 0.34, AIR_DASH_DUR = 0.26;
-const ULT_RANGE = [4, 17], ULT_R = 4.6;
+const ULT_LEN = 16, ULT_W = 3.8;             // the Thousand-Fold Slash's path: length and width, metres
 const GUN_RANGE = 24, PELLET_DMG = 4.4;
 // Rush clip phases (seconds): crouch, held iai stance, the dash, the finish
 const RUSH = { crouch: 0.6, holdA: 0.85, holdB: 2.2, dash0: 2.45, dash1: 4.15, end: 4.9 };
@@ -143,6 +155,8 @@ export class HumanSword {
       run: span(meta, rm, 'k_run_attack', 0, last('k_run_attack'), { lead: 0.08, tail: 0.25, speed: 1, extra: { dmg: 18, run: true, cone: 1.2 } }),
       launch: span(meta, rm, 'k_jump_attack', 0, 0, { lead: 0.2, tail: 0.18, speed: 1.05, extra: { dmg: 18, launch: true, hitstop: 0.08 } }),
       air: chainOf(meta, rm, 'k_aerial', { speed: 1.25, minPeak: 40, gap: 0.09, limit: 3, base: { dmg: 12, air: true }, last: { dmg: 20, heavy: true, hitstop: 0.1 } }),
+      // Bloodline Awakening's whirlwind: the spinning cuts of the circle clip, repeated while the attack is held
+      whirl: span(meta, rm, 'k_circle', 1, 1, { lead: 0.06, tail: 0.1, speed: 1.35, extra: { dmg: 11, cone: Math.PI, rangeM: 2.5, whirl: true, hitstop: 0.02 } }),
       plunge: span(meta, rm, 'k_combo_down', 1, 1, { lead: 0.3, tail: 0.35, speed: 1.15, extra: { dmg: 30, plunge: true, heavy: true, hitstop: 0.1 } }),
     };
     this.act = null;                     // current action: { kind: 'move' | 'dash' | 'guard', ... }
@@ -170,10 +184,9 @@ export class HumanSword {
     this.held = null;
     this.beam = new Beam(scene, 0xbfe6ff);
     this.beamT = 0;
-    // the Thousand-Fold Slash's zone on the floor
-    this.zoneMesh = new THREE.Mesh(new THREE.RingGeometry(0.93, 1, 72), new THREE.MeshBasicMaterial({ color: new THREE.Color(RAGE_COLOR).multiplyScalar(2.2), transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
-    this.zoneMesh.rotation.x = -Math.PI / 2; this.zoneMesh.visible = false; this.zoneMesh.frustumCulled = false;
-    scene.add(this.zoneMesh);
+    // the Thousand-Fold Slash's path on the floor
+    this.lane = makeLane();
+    scene.add(this.lane);
     this.hold('');
     ch.onPose = () => this.pose();
   }
@@ -295,7 +308,7 @@ export class HumanSword {
     const K = this.kit;
     if (!enabled) {
       if (this.act) this.end(P);
-      this.hold(''); this.trail.on = false; this.ground = null; this.zone = null; this.zoneMesh.visible = false;
+      this.hold(''); this.trail.on = false; this.ground = null; this.zone = null; this.lane.visible = false; K.aiming = false;
       this.aimK = 0; P.faceYaw = null;
       P.idleClip = 'idle'; P.runClip = 'run';
       return dt;
@@ -314,18 +327,23 @@ export class HumanSword {
     if (I.launch) this.bufIn(P.grounded ? 'launch' : 'plunge');
     if (I.dodge) this.bufIn('dash');
     if (I.spin) this.bufIn('ult');
-    if ((I.heavy || I.rage) && K.canRage()) this.startRage(P);
+    // laying the ultimate's path: attack (or the ultimate again) confirms, dash or block calls it off
+    if (this.act?.kind === 'aim') {
+      if (I.dodge || I.guard) { this.buf = null; this.end(P); }
+      else if ((I.attack || I.spin) && this.t > 0.15) { this.buf = null; this.confirmUlt(P); }
+    }
+    if ((I.heavy || I.rage) && K.canRage() && free) this.toggleRage(P);
     if (this.bufT > 0) this.bufT -= dt; else this.buf = null;
     this.comboGap += dt;
 
     // Scarlet Shroud: block with the sword while held
-    if (I.guard && P.grounded && !parkourBusy && (!this.act || this.act.kind === 'guard')) { if (!this.act) this.startGuard(P); }
+    if (I.guard && P.grounded && !parkourBusy && (!this.act || this.act.kind === 'guard')) { if (!this.act) this.startGuard(P); else this.guardWalk(P); }
     else if (this.act?.kind === 'guard') this.end(P);
     // buffered actions
     if (this.buf && !parkourBusy && (!this.act || this.cancellable(this.act))) {
       const b = this.buf;
       if (b === 'dash') { if (K.canDash() && (P.grounded || this.airDashes > 0)) { this.startDash(P, I); this.buf = null; } }
-      else if (b === 'ult') { if (K.canUlt() && P.grounded) this.startUlt(P, targets); this.buf = null; }
+      else if (b === 'ult') { if (K.canUlt() && P.grounded) this.startAim(P); this.buf = null; }
       else { if (K.gun) this.swap(P, 'sword'); this.startMove(b, P, targets); this.buf = null; }
     }
     if (this.act) this.step(dt, P, targets);
@@ -357,6 +375,7 @@ export class HumanSword {
   // the guard is always interruptible
   cancellable(a) {
     if (a.kind === 'guard') return true;
+    if (a.kind === 'aim') return false;
     if (a.kind === 'move') return this.t > a.mv.t[0] + a.mv.t[1] + 0.04 || (this.buf === 'dash' && this.t > a.mv.t[0]);
     return false;
   }
@@ -401,7 +420,8 @@ export class HumanSword {
     for (const [tg, n] of res.hits) {
       const dist = Math.hypot(tg.pos.x - P.pos.x, tg.pos.z - P.pos.z);
       const fall = wide ? 1 : clamp(1.25 - dist / GUN_RANGE * 1.1, 0.4, 1);
-      this.hit(tg, { dmg: n * PELLET_DMG * fall * (wide ? 1.3 : 1), gun: true, heavy: wide || n >= 7, hitstop: wide ? 0.07 : 0.03 }, P, d);
+      if (wide) wound(tg, this.now);                                 // the dash's blast leaves them wounded
+      this.hit(tg, { dmg: n * PELLET_DMG * fall * (wide ? 1.3 : 1), gun: true, heavy: wide || n >= 7, hitstop: wide ? 0.07 : 0.03, wound: wide }, P, d);
     }
     for (const e of res.ends) {
       _b.copy(e).sub(origin); const L = _b.length(); _b.multiplyScalar(1 / Math.max(L, 1e-3));
@@ -418,9 +438,10 @@ export class HumanSword {
   }
 
   // ---------------- Bloodline Awakening ----------------
-  startRage(P) {
-    this.kit.startRage();
-    this.fx.ring(_a.copy(P.pos).setY(P.pos.y + 0.05), 3.2, { life: 0.5, color: RAGE_COLOR });
+  toggleRage(P) {
+    const on = this.kit.toggleStance();
+    this.fx.ring(_a.copy(P.pos).setY(P.pos.y + 0.05), on ? 3.2 : 1.6, { life: on ? 0.5 : 0.35, color: RAGE_COLOR });
+    if (!on) return;
     this.fx.sparksAt(_a.copy(P.pos).setY(P.pos.y + 0.9), 30, { speed: 7, dir: UP, spread: 1.6, life: 0.6, width: 0.03, grav: -2, color: RAGE_COLOR });
     this.flashCb?.('#ff2a3a', 0.2);
     this.punchCb?.(0.5);
@@ -434,7 +455,6 @@ export class HumanSword {
       this.edgeMat.emissive.setHex(rage ? RAGE_COLOR : STEEL);
       this.edgeMat.emissiveIntensity = rage ? 3.2 : 0.25;
       this.trail.mesh.material.uniforms.color.value.set(rage ? RAGE_COLOR : 0xcfe9ff).multiplyScalar(2);
-      if (!rage) this.fx.ring(_a.copy(P.pos).setY(P.pos.y + 0.05), 1.6, { life: 0.35, color: RAGE_COLOR });
     }
     if (rage && Math.random() < dt * 14) {
       const a = Math.random() * Math.PI * 2;
@@ -453,15 +473,17 @@ export class HumanSword {
       const n = prev?.mv.air ? this.combo : 0; mv = this.moves.air[n % this.moves.air.length]; this.combo = n + 1;
     } else if (kind === 'launch') { mv = this.moves.launch; this.combo = 0; }
     else if (Math.hypot(P.vel.x, P.vel.z) > 7.2 && !prev) { mv = this.moves.run; this.combo = 0; }
+    else if (this.kit.whirl && (prev?.mv.whirl || this.combo >= this.moves.ground.length)) { mv = this.moves.whirl; this.kit.mark('whirlCut'); }
     else {
       if (!(prev || this.comboGap < 0.45) || this.combo >= this.moves.ground.length) this.combo = 0;
       mv = this.moves.ground[this.combo++];
     }
+    if (kind === 'launch') this.kit.mark('launch');
     // the frenzy speeds every cut up
     const sp = this.kit.speed;
     mv = { ...mv, t: mv.t.slice(), speed: mv.speed * sp, arcs: sp === 1 ? mv.arcs : mv.arcs.map((a) => ({ ...a, dt: a.dt / sp, dur: a.dur / sp })) };
     const a = { kind: 'move', mv };
-    this.hits.clear(); this.arcI = 0; this.comboGap = 0; this.slammed = false;
+    this.hits.clear(); this.arcI = 0; this.comboGap = 0; this.slammed = false; this.rehitT = 0;
     const t = this.nearestTarget(P, targets, mv.run ? 9 : 6);
     a.target = t;
     if (t) P.yaw = Math.atan2(t.pos.x - P.pos.x, t.pos.z - P.pos.z);
@@ -501,10 +523,12 @@ export class HumanSword {
     let dist = DASH_DIST, d;
     if (opts.ult) { d = opts.to.clone().sub(P.pos).setY(0); dist = d.length(); d.normalize(); }
     else { d = this.dirFrom(P, I); K.useDash(); if (air) this.airDashes--; }
+    const up = !opts.ult && !!I?.jump;                                   // jump held: the dash carries you upward
     P.yaw = Math.atan2(d.x, d.z);
     const gun = K.gun && !opts.ult;
     const dur = opts.ult ? 0.4 : air ? AIR_DASH_DUR : DASH_DUR;
-    this.act = { kind: 'dash', dir: d, dist, dur, from: P.pos.clone(), gun, ult: !!opts.ult, air, zone: opts.to || null };
+    this.act = { kind: 'dash', dir: d, dist, dur, from: P.pos.clone(), gun, ult: !!opts.ult, air: air || up, up, zone: opts.to || null };
+    if (up) { P.grounded = false; P.state = 'air'; P.pos.y += 0.05; K.mark('dashUp'); }
     this.t = 0; this.hits.clear();
     if (gun) this.ch.play('k_dash', { fade: 0.05, time: 0.05, speed: 1.7, restart: true });
     else { this.ch.play('k_rush', { fade: 0.04, time: RUSH.dash0, restart: true }); this.ch.scrub(RUSH.dash0); }
@@ -518,57 +542,56 @@ export class HumanSword {
   }
 
   // ---------------- Thousand-Fold Slash ----------------
-  startUlt(P, targets) {
-    const K = this.kit, yaw = this.camForward();
+  // lay the path: an iai crouch, the strip on the floor following the camera
+  startAim(P) {
+    const K = this.kit;
     if (K.gun) this.swap(P, 'sword');
-    const t = this.nearestTarget(P, targets, ULT_RANGE[1], yaw);
-    const fwd = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
-    const to = t ? t.pos.clone() : P.pos.clone().addScaledVector(fwd, 9);
-    const d = to.clone().sub(P.pos).setY(0), L = d.length();
-    if (L < ULT_RANGE[0]) to.copy(P.pos).addScaledVector(L > 0.1 ? d.normalize() : fwd, ULT_RANGE[0]);
-    to.y = P.pos.y;
-    K.useUlt();
+    K.aiming = true;
+    this.act = { kind: 'aim' }; this.t = 0;
+    this.ch.play('k_rush', { fade: 0.12, time: 0, restart: true }); this.ch.scrub(0);
+    this.drawnT = 3;
+    P.action = this;
+  }
+  confirmUlt(P) {
+    const to = P.pos.clone().addScaledVector(_a.set(Math.sin(P.yaw), 0, Math.cos(P.yaw)), ULT_LEN);
+    this.kit.useUlt();
     this.startDash(P, null, { ult: true, to });
   }
-  openZone(c) {
-    this.zone = { c: c.clone(), t: 0, tick: 0 };
-    this.zoneMesh.position.copy(c).setY(c.y + 0.06);
-    this.zoneMesh.scale.setScalar(ULT_R);
-    this.zoneMesh.visible = true;
-    this.fx.ring(_a.copy(c).setY(c.y + 0.08), ULT_R * 1.15, { life: 0.5, color: RAGE_COLOR });
+  openZone(from, to) {
+    this.zone = { a: from.clone(), b: to.clone(), t: 0, tick: 0 };
+    this.zone.a.y = this.zone.b.y = from.y;
+    setLane(this.lane, from, Math.atan2(to.x - from.x, to.z - from.z), from.distanceTo(to), ULT_W);
   }
-  // the zone cuts everything inside it, over and over, then bursts
+  // the path cuts everything on it, over and over, then bursts
   updateZone(dt, P, targets) {
     const Z = this.zone;
     if (!Z) return;
     Z.t += dt; Z.tick -= dt;
-    this.zoneMesh.material.opacity = 0.55 + Math.sin(Z.t * 30) * 0.25;
-    this.zoneMesh.rotation.z += dt * 2.4;
     const done = Z.t >= KIT.ultT;
     if (Z.tick <= 0 || done) {
       Z.tick = KIT.ultTick;
-      // slashes criss-crossing the zone
-      for (let i = 0; i < (done ? 6 : 2); i++) {
-        const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * ULT_R * 0.6;
-        _c.set(Z.c.x + Math.cos(a) * r, Z.c.y + 0.6 + Math.random() * 1.4, Z.c.z + Math.sin(a) * r);
+      // slashes criss-crossing the path
+      for (let i = 0; i < (done ? 8 : 3); i++) {
+        _c.copy(Z.a).lerp(Z.b, Math.random());
+        _c.x += (Math.random() - 0.5) * ULT_W * 0.5; _c.z += (Math.random() - 0.5) * ULT_W * 0.5; _c.y += 0.6 + Math.random() * 1.4;
         const b = Math.random() * Math.PI * 2, tilt = (Math.random() - 0.5) * 2.2;
         _U.set(Math.cos(b), 0, Math.sin(b));
         _V.set(-Math.sin(b) * Math.sin(tilt), Math.cos(tilt), Math.cos(b) * Math.sin(tilt));
         const a0 = Math.random() * 6.28, sw = (1.6 + Math.random() * 1.6) * (Math.random() < 0.5 ? -1 : 1);
-        this.fx.crescent(_c, _U, _V, a0, a0 + sw, 0.07, { radius: (done ? 2.6 : 1.5) + Math.random() * 1.3, innerFrac: 0.62, life: 0.2, color: i % 2 ? 0xffffff : 0xff4a55 });
+        this.fx.crescent(_c, _U, _V, a0, a0 + sw, 0.07, { radius: (done ? 2.4 : 1.4) + Math.random() * 1.2, innerFrac: 0.62, life: 0.2, color: i % 2 ? 0xffffff : 0xff4a55 });
       }
       for (const t of targets) {
-        if (!t.alive || Math.hypot(t.pos.x - Z.c.x, t.pos.z - Z.c.z) > ULT_R + t.radius || Math.abs(t.pos.y - Z.c.y) > 3) continue;
-        _V.set(t.pos.x - Z.c.x, 0, t.pos.z - Z.c.z).normalize();
+        if (!t.alive || distToLane(t.pos, Z.a, Z.b) > ULT_W * 0.5 + t.radius || Math.abs(t.pos.y - Z.a.y) > 3) continue;
+        wound(t, this.now);
+        _V.set(Z.b.x - Z.a.x, 0, Z.b.z - Z.a.z).normalize();
         this.hit(t, done ? { dmg: 42, heavy: true, finisher: true, hitstop: 0.12, zone: true } : { dmg: 9, hitstop: 0.012, zone: true, light: true }, P, _V);
       }
     }
     if (done) {
-      this.fx.ring(_a.copy(Z.c).setY(Z.c.y + 0.1), ULT_R * 1.5, { life: 0.5, color: 0xffffff });
-      this.fx.sparksAt(_a.copy(Z.c).setY(Z.c.y + 0.6), 40, { speed: 12, dir: UP, spread: 1.6, color: RAGE_COLOR, width: 0.035, floor: Z.c.y });
+      this.fx.sparksAt(_a.copy(Z.a).lerp(Z.b, 0.5).setY(Z.a.y + 0.6), 40, { speed: 12, dir: UP, spread: 1.6, color: RAGE_COLOR, width: 0.035, floor: Z.a.y });
       this.flashCb?.('#ffffff', 0.25); this.punchCb?.(1);
       this.shake = Math.max(this.shake, 0.6);
-      this.zone = null; this.zoneMesh.visible = false;
+      this.zone = null; this.lane.visible = false;
     }
   }
 
@@ -576,9 +599,17 @@ export class HumanSword {
   startGuard(P) {
     if (this.kit.gun) this.swap(P, 'sword');
     this.act = { kind: 'guard' }; this.t = 0;
+    this.kit.mark('block');
     this.ch.play('k_block', { fade: 0.12, time: 0.6, speed: 0, restart: true });
     this.drawnT = 3;
     P.action = this;
+  }
+
+  // behind the Shroud you can still walk: the legs step under the held block
+  guardWalk(P) {
+    const sp = Math.hypot(P.vel.x, P.vel.z), c = this.ch, walk = c.actions.k_block_walk;
+    if (walk && sp > 0.35) c.play('k_block_walk', { fade: 0.18, speed: clamp(sp / 1.6, 0.5, 1.3) });
+    else if (c.currentName !== 'k_block') c.play('k_block', { fade: 0.18, time: 0.6, speed: 0, restart: true });
   }
 
   // called by the Parkour controller while an action owns the body
@@ -617,8 +648,14 @@ export class HumanSword {
     if (a.kind === 'dash') {
       // a fast start easing out; the whole distance in the dash's time
       const k = Math.min(1, this.t / a.dur), sp = a.dist / a.dur * 2 * (1 - k);
-      v.x = a.dir.x * sp; v.z = a.dir.z * sp;
-      v.y = P.grounded || a.air ? 0 : v.y - 24 * dt;
+      v.x = a.dir.x * sp * (a.up ? 0.6 : 1); v.z = a.dir.z * sp * (a.up ? 0.6 : 1);
+      v.y = a.up ? sp * 0.62 : P.grounded || a.air ? 0 : v.y - 24 * dt;
+      return;
+    }
+    if (a.kind === 'aim') {
+      // stand in the stance, turning with the camera
+      P.yaw += angDiff(P.yaw, this.camForward()) * Math.min(1, dt * 12);
+      v.x *= Math.exp(-dt * 14); v.z *= Math.exp(-dt * 14); v.y -= 24 * dt;
       return;
     }
     if (a.kind === 'guard') {
@@ -631,16 +668,22 @@ export class HumanSword {
     const a = this.act;
     this.t += dt;
     if (a.kind === 'move') return this.stepMove(dt, P, targets);
+    if (a.kind === 'aim') {
+      const tc = this.t < RUSH.crouch ? this.t : RUSH.holdA + (Math.sin((this.t - RUSH.crouch) * 1.4) * 0.5 + 0.5) * (RUSH.holdB - RUSH.holdA) * 0.6;
+      this.ch.scrub(tc);
+      setLane(this.lane, P.pos, P.yaw, ULT_LEN, ULT_W);
+      return;
+    }
     if (a.kind === 'dash') {
       const k = Math.min(1, this.t / a.dur);
       if (!a.gun) {
         this.ch.scrub(RUSH.dash0 + (RUSH.dash1 - RUSH.dash0) * k);
-        // everything along the path gets cut, and is left wounded
+        // the cleaving strike: everything along the path gets cut, and slowed
         for (const t of targets) {
           if (!t.alive || this.hits.has(t)) continue;
           if (distToSeg(t.pos, a.from, P.pos) < t.radius + 1.0 && Math.abs(t.pos.y - P.pos.y) < 2.2) {
             this.hits.add(t);
-            wound(t, this.now);
+            slow(t, this.now);
             this.hit(t, { dmg: a.ult ? 30 : 24, heavy: true, hitstop: 0.09, wound: true }, P);
           }
         }
@@ -656,7 +699,7 @@ export class HumanSword {
       this.beam.set(_a.copy(a.from).setY(a.from.y + 1.1), _b.copy(P.pos).setY(P.pos.y + 1.1), a.ult ? 0.16 : 0.09, 1, 1);
       this.beamT = 0.35;
       this.fx.crescent(_c.copy(P.pos).setY(P.pos.y + 1.1), _U.set(Math.cos(P.yaw), 0, -Math.sin(P.yaw)), _V.set(Math.sin(P.yaw), 0, Math.cos(P.yaw)), -1.2, 1.2, 0.08, { radius: a.ult ? 3 : 2.3, innerFrac: 0.6, life: 0.3, color: this.slashColor(true) });
-      if (a.ult) this.openZone(a.zone);
+      if (a.ult) this.openZone(a.from, P.pos);
       P.vel.multiplyScalar(0.2);
       this.act = { kind: 'move', mv: this.finishMove(), warp: 0 };
       this.t = 0;
@@ -675,6 +718,8 @@ export class HumanSword {
     mv.phase = this.t < tw ? 'wind' : this.t < tw + ts ? 'swing' : 'recover';
     this.ch.scrub(clipTime(mv, this.t));
     if (mv.phase !== 'wind') this.slashes(P);
+    // the whirlwind cuts again and again as it turns
+    if (mv.whirl && mv.phase === 'swing' && (this.rehitT += dt) > 0.2 / this.kit.speed) { this.rehitT = 0; this.hits.clear(); }
     if (mv.phase === 'swing' || (mv.phase === 'recover' && this.t < tw + ts + 0.04)) this.sweep(P, targets);
     if (mv.plunge && P.grounded && this.t > tw && !this.slammed) {
       this.slammed = true;
@@ -691,6 +736,7 @@ export class HumanSword {
   }
 
   end(P) {
+    if (this.act?.kind === 'aim') { this.kit.aiming = false; if (!this.zone) this.lane.visible = false; }
     this.act = null; P.action = null; this.comboGap = 0;
   }
 
@@ -715,6 +761,9 @@ export class HumanSword {
     const p = _p.copy(t.pos); p.y += 1.2;
     t.hit?.(dmg, dir ? _s.copy(dir) : _s.set(Math.sin(P.yaw), 0, Math.cos(P.yaw)), { ...mv, dmg });
     if (!mv.zone) K.dealt(dmg);
+    if (!mv.zone && !mv.gun) K.swordHit();
+    if (mv.gun) K.mark('gunHit');
+    if (mv.finisher && !mv.zone) K.mark('finisher');
     const big = mv.heavy || mv.finisher;
     const col = K.raging || mv.zone || mv.wound ? 0xff6a5a : 0xffe2a8;
     if (mv.light) this.fx.sparksAt(p, 6, { color: col, speed: 7, life: 0.3, width: 0.03, grav: 6, floor: t.pos.y });
@@ -762,7 +811,7 @@ export class HumanSword {
   }
 
   dispose() {
-    this.katana.removeFromParent(); this.gun.removeFromParent(); this.zoneMesh.removeFromParent();
+    this.katana.removeFromParent(); this.gun.removeFromParent(); this.lane.removeFromParent();
     this.trail.on = false; this.trail.mesh.visible = false;
     this.beam.hide();
   }

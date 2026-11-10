@@ -127,6 +127,7 @@ export class MechEnemy {
 
   // ctx: { player, g, height, center, R, fx, tokens: { free, take(e), give(e) }, others, onHitPlayer(e, mv, kind), puff, time }
   update(dt, ctx) {
+    if (this.slowT > 0) this.slowT -= dt;
     if (!this.active) return;
     this.t += dt;
     const P = ctx.player;
@@ -179,7 +180,7 @@ export class MechEnemy {
         const ring = this.token ? cfg.reach * 0.7 : want + (cfg.gun ? 0 : 4);
         const toward = (dist - ring);
         const nx = dist > 0.01 ? dx / dist : 0, nz = dist > 0.01 ? dz / dist : 1;
-        const sp = cfg.speed * (dist > 25 && !cfg.gun ? 1.4 : 1);
+        const sp = cfg.speed * (dist > 25 && !cfg.gun ? 1.4 : 1) * (this.slowT > 0 ? 0.45 : 1);   // slowed by the Daywalker Dash
         const radial = clamp(toward * 0.6, -1, 1);
         const tang = Math.abs(toward) < 6 ? this.strafeDir * 0.55 : 0;
         wantVX = (nx * radial + -nz * tang) * sp;

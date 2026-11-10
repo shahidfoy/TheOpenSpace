@@ -1,3 +1,14 @@
+mech_x12.glb (player mech: the X-12)
+  "X-12 Mech" by dronemaster - https://sketchfab.com/3d-models/x-12-mech-01c685b2e98a486981aeb60a89149265
+  Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  The file is unmodified; at load the game rigs it (a skeleton, every part hung on one bone), merges its parts,
+  tones its paint and retargets animation onto it (src/render/mech/frames.js).
+
+mech_omega.glb (player mech: the Omega armoured suit)
+  "Omega knight" by Professor_E12 - https://sketchfab.com/3d-models/omega-knight-bd92ab179d7f42fda65f49e77adf21a7
+  Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  The file is unmodified; at load the game closes its hands and retargets animation onto it.
+
 mech_player.glb (player suit: the on-foot mech, and at human scale the flight suit)
   "NEXORION // The Neon Vanguard" by Atahan3D - https://sketchfab.com/3d-models/nexorion-the-neon-vanguard-4f5c15fb803b4bd493cf45b9cc4e24ce
   Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).

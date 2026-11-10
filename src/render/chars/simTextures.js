@@ -124,3 +124,102 @@ export function worldBox(w, h, d, tile = 1) {
   }
   return geo;
 }
+
+// ---------------- the training sim's city block ----------------
+const noise = (g, n, amt, seed) => {
+  rnd = seed;
+  const im = g.getImageData(0, 0, n, n), d = im.data;
+  for (let i = 0; i < d.length; i += 4) { const k = 1 + (rand() - 0.5) * amt; d[i] *= k; d[i + 1] *= k; d[i + 2] *= k; }
+  g.putImageData(im, 0, 0);
+};
+
+// cast concrete: 1.5 m formwork panels with seams, tie holes and rain streaks (one tile = 3 m)
+export function concreteTexture(base = '#9a9c9f') {
+  const n = 512, c = canvas(n), g = c.getContext('2d');
+  g.fillStyle = base; g.fillRect(0, 0, n, n);
+  rnd = 21;
+  for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) {
+    g.fillStyle = `rgba(${rand() < 0.5 ? '255,255,255' : '0,0,0'},${0.03 + rand() * 0.05})`;
+    g.fillRect(x * 256, y * 256, 256, 256);
+  }
+  for (let i = 0; i < 26; i++) {
+    const x = rand() * n, w = 6 + rand() * 22, h = 60 + rand() * 260, y = rand() * n;
+    const gr = g.createLinearGradient(0, y, 0, y + h);
+    gr.addColorStop(0, 'rgba(40,42,46,0.16)'); gr.addColorStop(1, 'rgba(40,42,46,0)');
+    g.fillStyle = gr; g.fillRect(x, y, w, h);
+  }
+  g.fillStyle = 'rgba(30,32,36,0.55)';
+  for (let i = 0; i <= 2; i++) { g.fillRect(i * 256 - 1.5, 0, 3, n); g.fillRect(0, i * 256 - 1.5, n, 3); }
+  g.fillStyle = 'rgba(25,27,30,0.6)';
+  for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) for (const [a, b] of [[48, 48], [208, 48], [48, 208], [208, 208]]) { g.beginPath(); g.arc(x * 256 + a, y * 256 + b, 5, 0, 7); g.fill(); }
+  noise(g, n, 0.12, 5);
+  return tex(c);
+}
+
+// stone paving: staggered slabs with dark joints (one tile = 4 m)
+export function pavingTexture() {
+  const n = 512, c = canvas(n), g = c.getContext('2d');
+  g.fillStyle = '#4c4f55'; g.fillRect(0, 0, n, n);
+  rnd = 33;
+  const rows = 4, h = n / rows;
+  for (let r = 0; r < rows; r++) {
+    const cols = 2, w = n / cols, off = r % 2 ? w / 2 : 0;
+    for (let i = -1; i < cols + 1; i++) {
+      const k = 0.86 + rand() * 0.24, warm = rand() * 10;
+      g.fillStyle = `rgb(${Math.round((128 + warm) * k)},${Math.round(130 * k)},${Math.round(134 * k)})`;
+      g.fillRect(i * w + off + 3, r * h + 3, w - 6, h - 6);
+    }
+  }
+  noise(g, n, 0.16, 9);
+  return tex(c);
+}
+
+// a building front: one storey per tile (4 m), two windows across, some lit
+export function facadeTexture(wall = '#6f7480', lit = 0.3, seed = 41) {
+  const n = 512, c = canvas(n), e = canvas(n), g = c.getContext('2d'), ge = e.getContext('2d');
+  g.fillStyle = wall; g.fillRect(0, 0, n, n);
+  ge.fillStyle = '#000'; ge.fillRect(0, 0, n, n);
+  rnd = seed;
+  g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(0, n - 26, n, 26);             // floor band
+  g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(0, n - 34, n, 8);
+  for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) {
+    const wx = x * 256 + 44, wy = y * 256 + 40, ww = 168, wh = 150;
+    g.fillStyle = '#23262c'; g.fillRect(wx - 8, wy - 8, ww + 16, wh + 16);
+    const on = rand() < lit;
+    g.fillStyle = on ? '#e9c98a' : '#2f3f55'; g.fillRect(wx, wy, ww, wh);
+    const gr = g.createLinearGradient(wx, wy, wx + ww, wy + wh);
+    gr.addColorStop(0, 'rgba(255,255,255,0.22)'); gr.addColorStop(0.5, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(wx, wy, ww, wh);
+    g.fillStyle = '#23262c'; g.fillRect(wx + ww / 2 - 3, wy, 6, wh); g.fillRect(wx, wy + wh * 0.45, ww, 5);
+    if (on) { ge.fillStyle = '#b8935a'; ge.fillRect(wx, wy, ww, wh); }
+  }
+  noise(g, n, 0.1, seed + 1);
+  return { map: tex(c), emissive: tex(e) };
+}
+
+// brick, for the walls you run along: courses of brick with a painted lane line at running height (one tile = 3 m)
+export function brickTexture() {
+  const n = 512, c = canvas(n), g = c.getContext('2d');
+  g.fillStyle = '#3b3532'; g.fillRect(0, 0, n, n);
+  rnd = 57;
+  const rows = 16, h = n / rows, w = n / 6;
+  for (let r = 0; r < rows; r++) for (let i = -1; i < 7; i++) {
+    const k = 0.8 + rand() * 0.35;
+    g.fillStyle = `rgb(${Math.round(126 * k)},${Math.round(70 * k)},${Math.round(56 * k)})`;
+    g.fillRect(i * w + (r % 2 ? w / 2 : 0) + 2, r * h + 2, w - 4, h - 4);
+  }
+  noise(g, n, 0.14, 13);
+  return tex(c);
+}
+
+// a steel ladder frame, for the walls you climb: rails, rungs every 30 cm, a hazard-yellow edge (one tile = 1.5 m)
+export function ladderTexture() {
+  const n = 256, c = canvas(n), g = c.getContext('2d');
+  g.fillStyle = '#23272d'; g.fillRect(0, 0, n, n);
+  g.fillStyle = '#14171b';
+  for (let i = 0; i < 5; i++) g.fillRect(0, i * 51.2 + 8, n, 30);              // gaps between rungs
+  g.fillStyle = '#8f98a3';
+  for (let i = 0; i < 5; i++) { g.fillRect(0, i * 51.2, n, 9); g.fillStyle = '#c9d0d8'; g.fillRect(0, i * 51.2, n, 2); g.fillStyle = '#8f98a3'; }
+  for (const x of [0, n / 2 - 7, n - 14]) { g.fillStyle = '#e0b020'; g.fillRect(x, 0, 14, n); g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(x + 10, 0, 4, n); }
+  return tex(c);
+}

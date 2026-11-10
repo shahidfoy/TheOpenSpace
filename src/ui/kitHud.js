@@ -34,9 +34,11 @@ export class KitHud {
       this.$shells.forEach((s, i) => s.classList.toggle('on', i < n));
     });
     const sec = (t) => (t > 0.05 ? `${t.toFixed(t < 9.95 ? 1 : 0)}s` : '');
-    this.chip('d', this.$dash, 1 - K.dashCd / KIT.dashCd, sec(K.dashCd), K.dashCd > 0 ? 'cd' : 'ready');
-    if (K.rage > 0) this.chip('r', this.$rage, K.rage / KIT.rageT, sec(K.rage), 'on');
-    else this.chip('r', this.$rage, 1 - K.rageCd / KIT.rageCd, sec(K.rageCd), K.rageCd > 0 ? 'cd' : 'ready');
-    this.chip('u', this.$ult, K.ult, K.ult >= 1 ? '' : `${Math.floor(K.ult * 100)}%`, K.ult >= 1 ? 'ready' : 'cd');
+    // dash: its charges, and the next one coming back
+    const full = K.dashes >= KIT.dashN;
+    this.chip('d', this.$dash, full ? 1 : 1 - K.dashCd / KIT.dashCd, '●'.repeat(K.dashes) + '○'.repeat(KIT.dashN - K.dashes) + (full ? '' : ' ' + sec(K.dashCd)), K.dashes > 0 ? 'ready' : 'cd');
+    // awakening: the stance and its meter
+    this.chip('r', this.$rage, K.meter, K.stance ? (K.whirl ? 'WHIRL' : `${Math.round(K.meter * 100)}%`) : K.meter > 0.01 ? `${Math.round(K.meter * 100)}%` : '', K.stance ? 'on' : 'ready');
+    this.chip('u', this.$ult, K.ult, K.aiming ? 'CONFIRM' : K.ult >= 1 ? '' : `${Math.floor(K.ult * 100)}%`, K.ult >= 1 ? 'ready' : 'cd');
   }
 }

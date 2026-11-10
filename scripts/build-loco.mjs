@@ -34,11 +34,18 @@ for (const S of ['Left', 'Right']) {
   for (const [vr, mx] of [['Index', 'Index'], ['Middle', 'Middle'], ['Ring', 'Ring'], ['Little', 'Pinky']]) REST_ONLY[`${s}${vr}Proximal`] = M(`${S}Hand${mx}1`);
   REST_ONLY[`${s}ThumbProximal`] = M(`${S}HandThumb2`);
 }
-// [game name, file]: all loops, played in place
+// [game name, file, one-shot]: loops are played in place; one-shots keep their own travel (a fall backwards)
 const CLIPS = [
   ['walk', 'mech/mixamo/Walking.fbx'],
   ['walk_b', 'mech/mixamo/Walking Backwards.fbx'],
   ['sprint', 'characters/anims/Fast Run.fbx'],
+  ['fall', 'mech/mixamo/Falling Idle.fbx'],
+  ['jump', 'characters/anims/Jump.fbx', 'xz'],           // 'xz': only the vertical motion is kept
+  ['land', 'mech/mixamo/Hard Landing.fbx', 'xz'],
+  ['big_hit', 'mech/mixamo/Big Stomach Hit.fbx', true],
+  ['knockdown', 'noir/arena/anims/Livershot Knockdown.fbx', true],
+  ['getup', 'noir/arena/anims/Getting Up.fbx', true],
+  ['death', 'noir/arena/anims/Dying Backwards.fbx', true],
 ];
 
 const load = (file) => {
@@ -72,12 +79,14 @@ console.log('rest height', height.toFixed(3), 'm; hips', rest.hips.p.join(','));
 
 const parts = [], clips = {};
 let off = 0;
-for (const [name, file] of CLIPS) {
+for (const [name, file, once] of CLIPS) {
   const fp = path.join(SRC, file);
   if (!fs.existsSync(fp)) { console.warn('missing', fp); continue; }
   const obj = load(fp);
   const clip = obj.animations.find((a) => a.name === 'mixamo.com') || obj.animations[0];
-  const bones = bonesOf(obj);
+  const bones = {};
+  for (const [k, b] of Object.entries(bonesOf(obj))) bones[k.replace(/^mixamorigd*:?/, 'mixamorig')] = b;
+  if (Object.values(BONES).some((b) => !bones[b])) { console.warn(name, 'missing bones'); continue; }
   const mixer = new THREE.AnimationMixer(obj);
   mixer.clipAction(clip).play();
   // a loop's last frame equals its first: sample one period without the duplicate
@@ -95,12 +104,14 @@ for (const [name, file] of CLIPS) {
   // in place: take the pelvis's steady drift out, and its average sideways offset
   const l = (n - 1) * 3, dx = pelvis[l] - pelvis[0], dz = pelvis[l + 2] - pelvis[2];
   let mx = 0;
-  for (let f = 0; f < n; f++) { const k = f / (n - 1); pelvis[f * 3] -= dx * k; pelvis[f * 3 + 2] -= dz * k; mx += pelvis[f * 3] / n; }
+  if (once === 'xz') { for (let f = 0; f < n; f++) { pelvis[f * 3] = pelvis[0]; pelvis[f * 3 + 2] = pelvis[2]; } mx = pelvis[0]; }
+  else if (once) { mx = pelvis[0]; }
+  else for (let f = 0; f < n; f++) { const k = f / (n - 1); pelvis[f * 3] -= dx * k; pelvis[f * 3 + 2] -= dz * k; mx += pelvis[f * 3] / n; }
   const z0 = pelvis[2];
   for (let f = 0; f < n; f++) { pelvis[f * 3] -= mx; pelvis[f * 3 + 2] -= z0 - rest.hips.p[2]; }
   const q16 = new Int16Array(quats.length);
   for (let i = 0; i < quats.length; i++) q16[i] = Math.round(Math.max(-1, Math.min(1, quats[i])) * 32767);
-  const rec = { n, dur: +clip.duration.toFixed(4), loop: true, q: off };
+  const rec = { n, dur: +clip.duration.toFixed(4), loop: !once, q: off };
   parts.push(Buffer.from(q16.buffer)); off += q16.byteLength;
   if (off % 4) { const pad = 4 - (off % 4); parts.push(Buffer.alloc(pad)); off += pad; }
   rec.pelvis = off; parts.push(Buffer.from(pelvis.buffer)); off += pelvis.byteLength;

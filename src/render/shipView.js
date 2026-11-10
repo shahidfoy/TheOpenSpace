@@ -2,12 +2,14 @@ import * as THREE from 'three';
 import { VrmChar, CHARACTERS, SWATCHES, applyColours } from './chars/vrmChar.js';
 import { Parkour } from './chars/parkour.js';
 import { MechPilot } from './mech/mechPilot.js';
+import { FRAMES, loadFrame, saveFrame } from './mech/frames.js';
 import { SwordFx } from './mech/swordFx.js';
 import { HumanSword } from './chars/katana.js';
 import { KitHud } from '../ui/kitHud.js';
+import { KitTutorial } from '../ui/kitTutorial.js';
 import { LunarArena, ARENA } from './arena.js';
 import { S as MECH_S } from './mech/mechRig.js';
-import { gridTexture, floorTexture, deckTexture, wallTexture, hexStoneTextures, worldBox } from './chars/simTextures.js';
+import { gridTexture, floorTexture, deckTexture, wallTexture, hexStoneTextures, worldBox, concreteTexture, pavingTexture, facadeTexture, brickTexture, ladderTexture } from './chars/simTextures.js';
 
 // Inside the mothership: you dock with the station and walk it as one of the playable characters.
 // Hangar deck: a long hall whose whole outer wall is glass, the airlock back to space, the door to the training
@@ -328,69 +330,93 @@ export class ShipView {
     }
     S.fog = new THREE.Fog(0xd8ecff, 140, 650);
 
-    const orange = new THREE.MeshStandardMaterial({ map: gridTexture(), roughness: 0.8 });
-    const ground = new THREE.MeshStandardMaterial({ map: floorTexture(), roughness: 0.9 });
-    const hexMat = new THREE.MeshStandardMaterial({ map: this.hex.map, emissiveMap: this.hex.emissive, emissive: 0xffffff, emissiveIntensity: 1.1, bumpMap: this.hex.bump, bumpScale: 4, roughness: 0.3, metalness: 0.15 });
+    // a city block: cast-concrete walls, stone paving, brick for the walls you run along, steel ladder frames for
+    // the ones you climb, and buildings all around
+    const concrete = new THREE.MeshStandardMaterial({ map: concreteTexture(), roughness: 0.92 });
+    const ground = new THREE.MeshStandardMaterial({ map: pavingTexture(), roughness: 0.95 });
+    const runMat = new THREE.MeshStandardMaterial({ map: brickTexture(), roughness: 0.9 });
+    const climbMat = new THREE.MeshStandardMaterial({ map: ladderTexture(), roughness: 0.5, metalness: 0.6 });
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0x2c2f35, roughness: 0.95 });
+    const fronts = [['#6f7480', 0.3, 41], ['#8a7566', 0.22, 52], ['#55606e', 0.4, 63], ['#7d8086', 0.15, 74]].map(([c, l, sd]) => {
+      const f = facadeTexture(c, l, sd);
+      return new THREE.MeshStandardMaterial({ map: f.map, emissiveMap: f.emissive, emissive: 0xffffff, emissiveIntensity: 0.45, roughness: 0.85 });
+    });
+    // a building: storeys of windows under a flat roof with a parapet
+    let seed = 17;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const building = (x, z, w, d, h, collide = true) => {
+      h = Math.round(h / 4) * 4;
+      A.box(x, 0, z, w, h, d, fronts[Math.floor(rnd() * fronts.length)], { tile: 4, collide });
+      A.box(x - 0.3, h, z - 0.3, w + 0.6, 0.5, d + 0.6, roofMat, { collide: false });
+      if (rnd() < 0.6) A.box(x + w * 0.2, h + 0.5, z + d * 0.25, w * 0.3, 2.2, d * 0.3, concrete, { tile: 3, collide: false });
+    };
     const pad = new THREE.MeshStandardMaterial({ color: 0x0f2230, emissive: 0x3fd8ff, emissiveIntensity: 1.6 });
     const amberPad = new THREE.MeshStandardMaterial({ color: 0x2a1a06, emissive: 0xffa030, emissiveIntensity: 1.6 });
     const T = 1;
 
-    A.box(-90, -1, -70, 270, 1, 200, ground, { tile: T });
+    A.box(-90, -1, -70, 270, 1, 200, ground, { tile: 4 });
+    // the streets around the block
+    for (let x = -88; x < 176;) { const w = 14 + rnd() * 12; building(x, -68, w, 16 + rnd() * 6, 12 + rnd() * 26); x += w + 3; }
+    for (let x = -88; x < 176;) { const w = 14 + rnd() * 12, d = 16 + rnd() * 6; building(x, 128 - d, w, d, 12 + rnd() * 26); x += w + 3; }
+    for (let z = -44; z < 104;) { const d = 14 + rnd() * 12; building(-88, z, 16 + rnd() * 6, d, 12 + rnd() * 22); z += d + 3; }
+    for (let z = -44; z < 104;) { const d = 14 + rnd() * 12, w = 16 + rnd() * 6; building(178 - w, z, w, d, 16 + rnd() * 26); z += d + 3; }
+    building(-62, 66, 20, 18, 16); building(-58, -38, 22, 14, 12); building(60, 70, 18, 22, 20);
 
     // ===== parkour course (panels sit nearly flush with their walls so nothing catches on their edges) =====
-    for (let i = 0; i < 4; i++) A.box(1 + i * 1.6, 0, -9, 1.6, 0.5 + i * 0.5, 3, orange, { tile: T });
-    A.box(-3, 0, 18, 6, 10, 6, orange, { tile: T });
-    A.box(-1.5, 0, 17.95, 3, 10, 0.25, hexMat, { kind: 'climb', tile: 2 });
-    A.box(-1.25, 8.8, 24, 2.5, 1.2, 17, hexMat, { kind: 'run', tile: 2 });
-    A.box(-3, 0, 41, 6, 10, 6, orange, { tile: T });
-    A.box(2.8, 0, 42.5, 0.25, 10, 3, hexMat, { kind: 'climb', tile: 2 });
-    A.box(9, 0, 0, 1, 7, 34, orange, { tile: T });
-    A.box(8.95, 1.4, 3, 0.25, 4.6, 28, hexMat, { kind: 'run', tile: 2 });
-    A.box(10, 0, 32, 6, 3.5, 6, orange, { tile: T });
-    A.box(-10, 0, 4, 1, 8, 30, orange, { tile: T });
-    A.box(-9.2, 1.6, 7, 0.25, 4.8, 24, hexMat, { kind: 'run', tile: 2 });
-    for (const [x, y, z] of [[-6, 1.6, 8], [-6.5, 3, 13], [-5.5, 4.4, 18], [-6.2, 5.8, 23]]) A.box(x, y, z, 2, 0.5, 2, orange, { tile: T });
-    A.box(-24, 0, 26, 5, 16, 5, orange, { tile: T });
-    A.box(-19.2, 0, 27, 0.25, 16, 3, hexMat, { kind: 'climb', tile: 2 });
-    A.box(-23, 14.8, 31, 3, 1.2, 26, hexMat, { kind: 'run', tile: 2 });
-    A.box(-25, 0, 57, 5, 16, 5, orange, { tile: T });
-    for (let i = 0; i < 6; i++) A.box(16 + (i % 2) * 3, 1 + i * 1.3, 8 + i * 4, 3, 0.6, 3, orange, { tile: T });
+    for (let i = 0; i < 4; i++) A.box(1 + i * 1.6, 0, -9, 1.6, 0.5 + i * 0.5, 3, concrete, { tile: 3 });
+    A.box(-3, 0, 18, 6, 10, 6, concrete, { tile: 3 });
+    A.box(-1.5, 0, 17.95, 3, 10, 0.25, climbMat, { kind: 'climb', tile: 1.5 });
+    A.box(-1.25, 8.8, 24, 2.5, 1.2, 17, runMat, { kind: 'run', tile: 3 });
+    A.box(-3, 0, 41, 6, 10, 6, concrete, { tile: 3 });
+    A.box(2.8, 0, 42.5, 0.25, 10, 3, climbMat, { kind: 'climb', tile: 1.5 });
+    A.box(9, 0, 0, 1, 7, 34, concrete, { tile: 3 });
+    A.box(8.95, 1.4, 3, 0.25, 4.6, 28, runMat, { kind: 'run', tile: 3 });
+    A.box(10, 0, 32, 6, 3.5, 6, concrete, { tile: 3 });
+    A.box(-10, 0, 4, 1, 8, 30, concrete, { tile: 3 });
+    A.box(-9.2, 1.6, 7, 0.25, 4.8, 24, runMat, { kind: 'run', tile: 3 });
+    for (const [x, y, z] of [[-6, 1.6, 8], [-6.5, 3, 13], [-5.5, 4.4, 18], [-6.2, 5.8, 23]]) A.box(x, y, z, 2, 0.5, 2, concrete, { tile: 3 });
+    A.box(-24, 0, 26, 5, 16, 5, concrete, { tile: 3 });
+    A.box(-19.2, 0, 27, 0.25, 16, 3, climbMat, { kind: 'climb', tile: 1.5 });
+    A.box(-23, 14.8, 31, 3, 1.2, 26, runMat, { kind: 'run', tile: 3 });
+    A.box(-25, 0, 57, 5, 16, 5, concrete, { tile: 3 });
+    for (let i = 0; i < 6; i++) A.box(16 + (i % 2) * 3, 1 + i * 1.3, 8 + i * 4, 3, 0.6, 3, concrete, { tile: 3 });
     const exitPad = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 0.08, 40), pad);
-    exitPad.position.set(-4, 0.04, -4); S.add(exitPad);
-    const el = label('EXIT SIM', 'back to the deck'); el.position.set(-4, 2.6, -4); S.add(el);
-    A.interact.push({ pos: new THREE.Vector3(-4, 0, -4), r: 2, text: 'Leave the sim · back to the deck', act: 'deck' });
-    const hint = label('CLIMB', 'push into the glowing wall'); hint.position.set(0, 3.2, 16.8); S.add(hint);
+    exitPad.position.set(22, 0.04, -17); S.add(exitPad);
+    const el = label('EXIT SIM', 'back to the deck'); el.position.set(22, 2.6, -17); S.add(el);
+    A.interact.push({ pos: new THREE.Vector3(22, 0, -17), r: 2, text: 'Leave the sim · back to the deck', act: 'deck' });
+    const pk = label('PARKOUR COURSE', 'climb · wall run · ledges'); pk.position.set(12, 5, -4); pk.scale.set(6, 1.5, 1); S.add(pk);
+    const hint = label('CLIMB', 'push into the ladder wall'); hint.position.set(0, 3.2, 16.8); S.add(hint);
     const hint2 = label('WALL RUN', 'sprint beside it · jump at it'); hint2.position.set(6.5, 3.4, 4); S.add(hint2);
 
     // ===== wall-run gauntlet: alternating glowing walls between two raised platforms; wall-jump from one to the next =====
-    for (let i = 0; i < 3; i++) A.box(44, 0, 3 + i * 1.6, 4, 1 + i, 1.6, orange, { tile: T });     // stairs up
-    A.box(40, 0, 7.8, 12, 4, 5, orange, { tile: T });                                                // start platform (top 4 m)
-    A.box(40, 0, 14, 1, 9, 12, orange, { tile: T }); A.box(40.8, 2.4, 15, 0.25, 5, 10, hexMat, { kind: 'run', tile: 2 });   // left
-    A.box(47, 0, 22, 1, 9, 12, orange, { tile: T }); A.box(46.95, 2.4, 23, 0.25, 5, 10, hexMat, { kind: 'run', tile: 2 });  // right
-    A.box(40, 0, 30, 1, 9, 12, orange, { tile: T }); A.box(40.8, 2.4, 31, 0.25, 5, 10, hexMat, { kind: 'run', tile: 2 });   // left
-    A.box(40, 0, 44, 12, 4, 5, orange, { tile: T });                                                 // finish platform
+    for (let i = 0; i < 3; i++) A.box(44, 0, 3 + i * 1.6, 4, 1 + i, 1.6, concrete, { tile: 3 });     // stairs up
+    A.box(40, 0, 7.8, 12, 4, 5, concrete, { tile: 3 });                                                // start platform (top 4 m)
+    A.box(40, 0, 14, 1, 9, 12, concrete, { tile: 3 }); A.box(40.8, 2.4, 15, 0.25, 5, 10, runMat, { kind: 'run', tile: 3 });   // left
+    A.box(47, 0, 22, 1, 9, 12, concrete, { tile: 3 }); A.box(46.95, 2.4, 23, 0.25, 5, 10, runMat, { kind: 'run', tile: 3 });  // right
+    A.box(40, 0, 30, 1, 9, 12, concrete, { tile: 3 }); A.box(40.8, 2.4, 31, 0.25, 5, 10, runMat, { kind: 'run', tile: 3 });   // left
+    A.box(40, 0, 44, 12, 4, 5, concrete, { tile: 3 });                                                 // finish platform
     const gl = label('WALL RUN GAUNTLET', 'run the right wall · jump across to the next'); gl.position.set(46, 6.4, 9); gl.scale.set(6, 1.5, 1); S.add(gl);
     const gl2 = label('FINISH', ''); gl2.position.set(46, 6, 46.5); S.add(gl2);
-    A.box(-3, 0, 8, 6, 2.2, 1, orange, { tile: T });                                                // a 2.2 m wall to run up and over
+    A.box(-3, 0, 8, 6, 2.2, 1, concrete, { tile: 3 });                                                // a 2.2 m wall to run up and over
     const hint3 = label('LEDGE', 'sprint into it to run up and climb over'); hint3.position.set(0, 3.4, 7.6); S.add(hint3);
 
     // ===== mech bay and the mech yard =====
     const bayPad = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 0.08, 40), amberPad);
-    bayPad.position.set(-12, 0.04, -6); S.add(bayPad);
-    const bl = label('MECH BAY', 'pilot the NEXORION', '#ffc46a'); bl.position.set(-12, 3, -6); S.add(bl);
-    A.interact.push({ pos: new THREE.Vector3(-12, 0, -6), r: 2.4, text: 'Pilot the NEXORION mech', act: 'mech' });
-    this.bayPos = new THREE.Vector3(-12, 0, -3.5);
+    bayPad.position.set(38, 0.04, -17); S.add(bayPad);
+    const bl = label('MECH BAY', 'board your mech', '#ffc46a'); bl.position.set(38, 3, -17); S.add(bl);
+    A.interact.push({ pos: new THREE.Vector3(38, 0, -17), r: 2.4, text: 'Board your mech', act: 'mech' });
+    this.bayPos = new THREE.Vector3(38, 0, -14);
     const YC = new THREE.Vector3(110, 0, 10);
     this.yard = { center: YC, R: 46 };
     const yl = label('MECH YARD', 'dummies · Enter: holo sparring', '#ffc46a'); yl.position.set(YC.x - 40, 8, YC.z); yl.scale.set(12, 3, 1); S.add(yl);
     // giant blocks around the yard for scale (outside the fence)
     for (let i = 0; i < 10; i++) {
       const a = (i / 10) * Math.PI * 2 + 0.3, r = 58 + (i % 3) * 6, h = 14 + (i % 4) * 8;
-      A.box(YC.x + Math.cos(a) * r - 5, 0, YC.z + Math.sin(a) * r - 5, 10, h, 10, orange, { tile: 2, collide: false });
+      if (Math.abs(YC.z + Math.sin(a) * r) < 60 && YC.x + Math.cos(a) * r < 150) building(YC.x + Math.cos(a) * r - 6, YC.z + Math.sin(a) * r - 6, 12, 12, h + 6, false);
     }
     // training dummies: posts that wobble when struck, burst when broken and come back
     this.dummies = [];
-    const postMat = new THREE.MeshStandardMaterial({ map: gridTexture('#d9772f'), roughness: 0.8 });
+    const postMat = new THREE.MeshStandardMaterial({ map: concreteTexture('#6c7078'), roughness: 0.7, metalness: 0.3 });
     const headMat = new THREE.MeshStandardMaterial({ color: 0x0f2230, emissive: 0x3fd8ff, emissiveIntensity: 1.2 });
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2, r = i % 2 ? 26 : 16;
@@ -408,8 +434,11 @@ export class ShipView {
     // ===== dojo: human-scale dummies for katana practice =====
     this.simFx = new SwordFx(S);
     this.dojo = [];
-    const dl = label('DOJO', 'katana practice · J / click slash · K heavy'); dl.position.set(30, 3.2, -14); S.add(dl);
-    const dojoPad = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 0.05, 48), new THREE.MeshStandardMaterial({ color: 0x8c6a48, roughness: 0.85 }));
+    const dl = label('PRACTICE RANGE', 'follow the tutorial · sword, shotgun and abilities'); dl.position.set(30, 4.2, 1); dl.scale.set(6, 1.5, 1); S.add(dl);
+    // a low wall behind the targets and two side walls frame the range
+    A.box(20, 0, 3.5, 20, 3, 0.8, concrete, { tile: 3 });
+    A.box(19.2, 0, -6, 0.8, 1.2, 9.5, concrete, { tile: 3 }); A.box(40, 0, -6, 0.8, 1.2, 9.5, concrete, { tile: 3 });
+    const dojoPad = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 0.05, 48), new THREE.MeshStandardMaterial({ color: 0x33373d, roughness: 0.9 }));
     dojoPad.position.set(30, 0.025, -6); dojoPad.receiveShadow = true; S.add(dojoPad);
     const wood = new THREE.MeshStandardMaterial({ color: 0xb08356, roughness: 0.8 });
     const straw = new THREE.MeshStandardMaterial({ color: 0xd6c08a, roughness: 0.95 });
@@ -437,7 +466,7 @@ export class ShipView {
     sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
     S.add(sun, sun.target);
     this.sun = sun;
-    A.spawn.pos.set(0, 0, 0); A.spawn.yaw = 0;
+    A.spawn.pos.set(30, 0, -13); A.spawn.yaw = 0;
     A.killY = -20;
     A.title = 'TRAINING SIM';
     return A;
@@ -578,7 +607,9 @@ export class ShipView {
     const st = P.stamina ?? 1, showS = st < 0.995 || (P.state === 'climb' && P.wall?.box.kind !== 'climb');
     if (this.$stam.classList.contains('on') !== showS) this.$stam.classList.toggle('on', showS);
     if (showS) { this.$stamBar.style.width = `${Math.round(st * 100)}%`; this.$stam.classList.toggle('low', st < 0.25); }
-    this.kitHud.update(this.area === this.sim && this.sword && this.$ward.hidden ? this.sword.kit : null);
+    const kit = this.area === this.sim && this.sword && this.$ward.hidden ? this.sword.kit : null;
+    this.kitHud.update(kit);
+    this.tutorial.update(kit, this.app.hud?.keyboard !== false);
   }
   flash(color, a) {
     const f = this.$impact;
@@ -630,7 +661,7 @@ export class ShipView {
         <div class="sh-look"><div class="sh-sec">OUTFIT</div><div class="sh-cards sh-outfits"></div>
         <div class="sh-sec">OUTFIT COLOUR</div><div class="sh-sw" data-k="cloth"></div>
         <div class="sh-sec">HAIR COLOUR</div><div class="sh-sw" data-k="hair"></div></div>
-        <div class="sh-mechnote" hidden>The NEXORION is piloted in the training sim's mech yard.</div>
+        <div class="sh-mechnote" hidden>Mechs are piloted in the training sim's mech yard, and on the surface of other worlds.</div>
         <button class="sh-close">DONE</button></div></div>`;
     document.body.appendChild(el);
     this.hud = el;
@@ -645,17 +676,23 @@ export class ShipView {
     this.$stam = el.querySelector('.sh-stam'); this.$stamBar = el.querySelector('.sh-stam i');
     this.$charge = el.querySelector('.sh-charge');
     this.kitHud = new KitHud(el);
+    this.tutorial = new KitTutorial(el);
     el.querySelector('.sh-chars').innerHTML = CHARACTERS.map((c) => `
-      <button class="sh-card" data-id="${c.id}"><img src="/characters/${c.thumb}" alt=""><b>${c.name}</b><small>${c.blurb}</small></button>`).join('') + `
-      <button class="sh-card mech" data-id="mech"><div class="sh-mech-pic"><span>MECH</span></div><b>NEXORION</b><small>Training sim only</small></button>`;
+      <button class="sh-card" data-id="${c.id}"><img src="/characters/${c.thumb}" alt=""><b>${c.name}</b><small>${c.blurb}</small></button>`).join('') + FRAMES.map((f) => `
+      <button class="sh-card mech" data-id="mech:${f.id}"><div class="sh-mech-pic"><span>${f.name}</span></div><b>${f.name}</b><small>${f.blurb} · mech</small></button>`).join('');
     const swatches = SWATCHES.map((h) => `<button class="sw${h ? '' : ' orig'}" data-c="${h || ''}" style="${h ? `background:${h}` : ''}" title="${h || 'Original'}"></button>`).join('');
     el.querySelectorAll('.sh-sw').forEach((d) => (d.innerHTML = swatches));
     el.querySelector('.sh-chars').addEventListener('click', (e) => {
       const b = e.target.closest('.sh-card');
       if (!b) return;
-      if (b.dataset.id === 'mech') {
+      if (b.dataset.id.startsWith('mech:')) {
+        const id = b.dataset.id.slice(5), f = FRAMES.find((x) => x.id === id);
         this.simMech = true; store.set(MECH_KEY, '1');
-        this.app.hud?.toast('You\'ll pilot the NEXORION in the training sim · or board it at the MECH BAY there', 'good');
+        // the frame is yours everywhere: the sim's mech yard and the surface of other worlds
+        saveFrame(id);
+        this.mech?.setFrame(id);
+        this.app.surfaceView?.pilot?.setFrame(id);
+        this.app.hud?.toast(`You'll pilot the ${f.name} in the training sim · or board it at the MECH BAY there`, 'good');
       } else {
         this.simMech = false; store.set(MECH_KEY, '0');
         this.wardSel = b.dataset.id;
@@ -712,7 +749,7 @@ export class ShipView {
   }
   renderWardrobe() {
     const W = this.$ward, mech = this.simMech;
-    W.querySelectorAll('.sh-chars .sh-card').forEach((b) => b.classList.toggle('on', mech ? b.dataset.id === 'mech' : b.dataset.id === this.wardSel));
+    W.querySelectorAll('.sh-chars .sh-card').forEach((b) => b.classList.toggle('on', mech ? b.dataset.id === 'mech:' + loadFrame() : b.dataset.id === this.wardSel));
     W.querySelector('.sh-look').hidden = mech;
     W.querySelector('.sh-mechnote').hidden = !mech;
     if (mech) return;
@@ -834,6 +871,7 @@ export class ShipView {
     M.update(dt, I, ctx);
     A.update(dt, dt);
     this.kitHud.update(M.kit);
+    this.tutorial.update(A.fighting ? null : M.kit, this.app.hud?.keyboard !== false);
     const wasFighting = this.sparBtnState;
     if (wasFighting !== A.fighting) { this.sparBtnState = A.fighting; this.syncButtons(); }
 

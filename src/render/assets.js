@@ -2,6 +2,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { upgrade } from './materials.js';
 import { trimMechPlayer } from './mech/trimMech.js';
+import { buildX12, buildOmega } from './mech/frames.js';
 
 // Hero models built by blender/build_models.py (Draco-compressed). Any that fail to
 // load fall back to procedural meshes.
@@ -27,7 +28,11 @@ export async function loadAssets(timeoutMs = 15000, onProgress) {
       SKIN[n] = { gltf, meta };
     })
     .catch((e) => console.warn(`skinned model ${n} failed, using procedural fallback`, e))));
-  await Promise.race([Promise.all([all, skins]), new Promise((r) => setTimeout(r, timeoutMs))]);
+  // the player's mech frames come as the artists' files and are rigged here (mech/frames.js)
+  const frames = Promise.all([['mech_x12', buildX12], ['mech_omega', buildOmega]].map(([n, build]) => loader.loadAsync(`${base}${n}.glb`)
+    .then((gltf) => { const a = build(gltf); if (a) SKIN[n] = a; })
+    .catch((e) => console.warn(`mech frame ${n} failed`, e))));
+  await Promise.race([Promise.all([all, skins, frames]), new Promise((r) => setTimeout(r, timeoutMs))]);
   draco.dispose();
 }
 

@@ -186,3 +186,16 @@ export function rmAt(r, key, t) {
   const f = t * 30, i = Math.min(n - 2, Math.floor(f)), k = f - i;
   return V[i] + (V[i + 1] - V[i]) * k;
 }
+
+// A looping clip that plays `legs` on the given lower-body nodes while every other node holds `upper`'s pose at
+// time t: walking under a held guard.
+export function layerClip(name, legs, upper, t, lowerNames) {
+  const lower = new Set(lowerNames), tracks = [];
+  for (const tr of legs.tracks) if (lower.has(tr.name.split('.')[0])) tracks.push(tr.clone());
+  for (const tr of upper.tracks) {
+    if (lower.has(tr.name.split('.')[0])) continue;
+    const v = Array.from(tr.createInterpolant().evaluate(Math.min(t, tr.times[tr.times.length - 1])));
+    tracks.push(new tr.constructor(tr.name, [0, legs.duration], [...v, ...v]));
+  }
+  return new THREE.AnimationClip(name, legs.duration, tracks);
+}
