@@ -31,6 +31,14 @@ export const BONES = {
   rightUpperLeg: 'thigh_r', rightLowerLeg: 'calf_r', rightFoot: 'foot_r', rightToes: 'ball_r',
 };
 const NAMES = Object.keys(BONES);
+// The pack does not animate fingers (they stay in the mannequin's relaxed pose), so only their rest positions are
+// kept: the knuckles give each hand its direction and roll, and place the handle in the fist. The game curls the
+// fingers around the handle itself.
+const REST_ONLY = {};
+for (const [S, s] of [['left', 'l'], ['right', 'r']]) {
+  for (const [vr, ue] of [['Index', 'index'], ['Middle', 'middle'], ['Ring', 'ring'], ['Little', 'pinky']]) REST_ONLY[`${S}${vr}Proximal`] = `${ue}_01_${s}`;
+  REST_ONLY[`${S}ThumbProximal`] = `thumb_02_${s}`;
+}
 // [game name, file, folder, loop]
 const CLIPS = [
   ['combo1', 'AS_Anime_KC_Combo_V1_RM', 'Root_Motion'], ['combo2', 'AS_Anime_KC_Combo_V2_RM', 'Root_Motion'],
@@ -66,7 +74,7 @@ const first = load(path.join(PACK, 'In_Place', 'AS_Anime_KC_Idle.fbx'));
 first.updateMatrixWorld(true);
 const fb = bonesOf(first);
 const restW = {};
-for (const n of [...Object.values(BONES), 'root']) restW[n] = world(fb[n]);
+for (const n of [...Object.values(BONES), ...Object.values(REST_ONLY), 'root']) restW[n] = world(fb[n]);
 const left = restW.thigh_l.p.clone().sub(restW.thigh_r.p).normalize();
 const up = restW.head.p.clone().sub(restW.pelvis.p); up.addScaledVector(left, -up.dot(left)).normalize();
 const fwd = V().crossVectors(left, up);
@@ -129,6 +137,9 @@ for (const [name, file, folder, loop] of CLIPS) {
     const e = new THREE.Euler().setFromQuaternion(dq, 'YXZ');
     rm[f * 4] = d.z; rm[f * 4 + 1] = d.x; rm[f * 4 + 2] = d.y; rm[f * 4 + 3] = e.y;
   }
+  // two-handed weight per frame: 1 while the left hand is on the handle
+  const two = new Float32Array(n);
+  for (let f = 0; f < n; f++) { const d = handR[f].distanceTo(handL[f]); two[f] = Math.max(0, Math.min(1, (0.27 - d) / 0.09)); }
   // These files carry their travel in the pelvis (no root bone track). The root motion is the pelvis's ground track,
   // smoothed (0.4 s window) so steps and sway stay in the pose; it is taken out of the pose and kept as data.
   if (!loop) {
@@ -146,7 +157,7 @@ for (const [name, file, folder, loop] of CLIPS) {
       handR[f].x -= mx; handR[f].z -= mz; handL[f].x -= mx; handL[f].z -= mz; handR[f].y -= my; handL[f].y -= my;
     }
   }
-  sampled.push({ name, loop: !!loop, n, dur: clip.duration, quats, pelvis, rm, handR, handL, qHandR });
+  sampled.push({ name, loop: !!loop, n, dur: clip.duration, quats, pelvis, rm, handR, handL, qHandR, two });
 }
 if (pass === 0) {
   let fz = 0, fx = 0;
@@ -160,6 +171,8 @@ if (pass === 0) {
   }
 }
 }
+const restOnly = {};
+for (const n of Object.keys(REST_ONLY)) restOnly[n] = { p: toCanon(restW[REST_ONLY[n]].p).multiplyScalar(unit).toArray().map((x) => +x.toFixed(5)) };
 
 // ---------------- the grip, from two-handed frames ----------------
 const acc = V(); let cnt = 0;
@@ -171,7 +184,19 @@ for (const s of sampled) for (let f = 0; f < s.n; f++) {
   cnt++;
 }
 acc.normalize();
-const bladeLocal = V(0.06, 1, 0).normalize();
+// the fist, in the right hand's frame: the handle lies along the knuckle row under the first finger bones
+const restHandQ = Q().fromArray(rest.rightHand.q), restHandP = V().fromArray(rest.rightHand.p);
+const inHand = (n) => V().fromArray(restOnly[n].p).sub(restHandP).applyQuaternion(restHandQ.clone().invert());
+const K4 = ['Index', 'Middle', 'Ring', 'Little'].map((f) => inHand(`right${f}Proximal`));
+const knuckles = K4.reduce((a, k) => a.add(k), V()).multiplyScalar(0.25);
+const fistA = K4[0].clone().sub(K4[3]).normalize(), fistW = K4[0].distanceTo(K4[3]);
+const fingerDir = knuckles.clone().addScaledVector(fistA, -knuckles.dot(fistA)).normalize();
+const palmN = V().crossVectors(fistA, fingerDir).normalize();
+if (palmN.dot(inHand('rightThumbProximal')) < 0) palmN.negate();          // the thumb sits on the palm side
+const fistC = knuckles.clone().addScaledVector(fingerDir, 0.012).addScaledVector(palmN, 0.03);
+console.log('fist centre', fistC.toArray().map((x) => x.toFixed(3)).join(','), 'axis little->index', fistA.toArray().map((x) => x.toFixed(2)).join(','), 'width', fistW.toFixed(3), 'palm normal', palmN.toArray().map((x) => x.toFixed(2)).join(','));
+// the blade runs through the fist, out of the thumb side (a hammer grip): the knuckle row, little finger to index
+const bladeLocal = fistA.clone();
 // spread: how consistent the axis is
 let spread = 0, sc = 0;
 for (const s of sampled) for (let f = 0; f < s.n; f++) {
@@ -180,11 +205,10 @@ for (const s of sampled) for (let f = 0; f < s.n; f++) {
   spread += Math.acos(Math.min(1, d.normalize().applyQuaternion(s.qHandR[f].clone().invert()).dot(bladeLocal))); sc++;
 }
 // the palm: a little past the wrist along the forearm (hand bone origin is the wrist)
-const restHandQ = Q().fromArray(rest.rightHand.q);
 const forearmLocal = V().fromArray(rest.rightHand.p).sub(V().fromArray(rest.rightLowerArm.p)).normalize().applyQuaternion(restHandQ.clone().invert());
-const palmLocal = forearmLocal.clone().multiplyScalar(0.075);
+const palmLocal = fistC.clone();
 // edge: the direction the blade sweeps toward in fast frames, perpendicular to the blade
-const BLADE = 0.8, GUARD = 0.05;
+const BLADE = 0.8, GUARD = +(fistW / 2 + 0.022).toFixed(4);     // the tsuba sits just above the index finger
 const tipAt = (s, f) => s.handR[f].clone().add(palmLocal.clone().applyQuaternion(s.qHandR[f])).add(bladeLocal.clone().applyQuaternion(s.qHandR[f]).multiplyScalar(GUARD + BLADE));
 const edgeAcc = V();
 for (const s of sampled) for (let f = 1; f < s.n; f++) {
@@ -195,7 +219,8 @@ for (const s of sampled) for (let f = 1; f < s.n; f++) {
   edgeAcc.add(l.normalize());
 }
 const edgeMeasured = edgeAcc.clone().normalize();
-const edgeLocal = V(-1, 0.06, 0).addScaledVector(bladeLocal, -V(-1, 0.06, 0).dot(bladeLocal)).normalize();
+// the edge leads with the knuckles: along the forearm, squared to the blade
+const edgeLocal = forearmLocal.clone().addScaledVector(bladeLocal, -forearmLocal.dot(bladeLocal)).normalize();
 console.log('edge measured from fast frames', edgeMeasured.toArray().map((x) => x.toFixed(2)).join(','));
 // diagnostics: per clip two-handed axis in hand frame, angle to the forearm
 if (process.env.GRIPDIAG) {
@@ -272,6 +297,7 @@ for (const s of sampled) {
   parts.push(Buffer.from(q16.buffer)); off += q16.byteLength;
   rec.pelvis = off; parts.push(Buffer.from(s.pelvis.buffer)); off += s.pelvis.byteLength;
   rec.rm = off; parts.push(Buffer.from(s.rm.buffer)); off += s.rm.byteLength;
+  rec.two = off; parts.push(Buffer.from(s.two.buffer)); off += s.two.byteLength;
   const last = (s.n - 1) * 4;
   rec.travel = [+s.rm[last].toFixed(3), +s.rm[last + 1].toFixed(3), +s.rm[last + 2].toFixed(3), +s.rm[last + 3].toFixed(3)];
   rec.swings = s.swings;
@@ -280,8 +306,9 @@ for (const s of sampled) {
 fs.mkdirSync(OUT, { recursive: true });
 fs.writeFileSync(path.join(OUT, 'katana.bin'), Buffer.concat(parts));
 fs.writeFileSync(path.join(OUT, 'katana.json'), JSON.stringify({
-  fps: FPS, bones: NAMES, rest, height: +height.toFixed(3), blade: BLADE, guard: GUARD,
-  grip: { blade: bladeLocal.toArray().map((x) => +x.toFixed(4)), edge: edgeLocal.toArray().map((x) => +x.toFixed(4)), palm: palmLocal.toArray().map((x) => +x.toFixed(4)) },
+  fps: FPS, bones: NAMES, rest, restOnly, height: +height.toFixed(3), blade: BLADE, guard: GUARD,
+  grip: { blade: bladeLocal.toArray().map((x) => +x.toFixed(4)), edge: edgeLocal.toArray().map((x) => +x.toFixed(4)), palm: palmLocal.toArray().map((x) => +x.toFixed(4)),
+    fist: fistC.toArray().map((x) => +x.toFixed(4)), fistAxis: fistA.toArray().map((x) => +x.toFixed(4)), fistWidth: +fistW.toFixed(4), palmNormal: palmN.toArray().map((x) => +x.toFixed(4)) },
   clips,
 }));
 console.log(`wrote ${sampled.length} clips, ${(off / 1024).toFixed(0)} KB`);

@@ -22,7 +22,7 @@ const GLOW_FS = `uniform vec3 color; uniform float alpha, uTime; varying vec3 vN
 
 export class Saber {
   // length: beam length (m); size: hilt scale reference (m, roughly the hand height)
-  constructor(length, size, color = 0x52d8ff) {
+  constructor(length, size, color = 0x52d8ff, hilt = 1) {
     this.length = length;
     this.group = new THREE.Group();
     this.k = 0;          // ignition 0..1
@@ -32,7 +32,7 @@ export class Saber {
     const metal = new THREE.MeshStandardMaterial({ color: 0x3a3f47, metalness: 0.9, roughness: 0.32, envMapIntensity: 1.3 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x14161a, metalness: 0.6, roughness: 0.55 });
     this.ringMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(1.6), toneMapped: false });
-    const r = size * 0.11, hl = size * 0.66;
+    const r = size * 0.11, hl = size * 0.66 * hilt;
     const cyl = (rt, rb, h, y, mat, seg = 16) => {
       const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
       m.position.y = y; m.castShadow = true;
@@ -40,11 +40,12 @@ export class Saber {
       return m;
     };
     cyl(r, r, hl, -hl * 0.5, dark);                                          // grip
-    for (let i = 0; i < 5; i++) cyl(r * 1.12, r * 1.12, hl * 0.045, -hl * (0.18 + i * 0.15), metal);   // ribs
-    cyl(r * 1.25, r * 1.4, hl * 0.12, -hl - hl * 0.06, metal);               // pommel
-    cyl(r * 1.35, r * 1.1, hl * 0.22, hl * 0.11, metal);                     // emitter shroud
-    cyl(r * 1.0, r * 1.0, hl * 0.03, hl * 0.235, this.ringMat);              // glowing emitter ring
-    this.base = hl * 0.24;
+    const ribs = Math.round(5 * hilt);
+    for (let i = 0; i < ribs; i++) cyl(r * 1.12, r * 1.12, size * 0.03, -hl * (0.18 + i * 0.75 / ribs), metal);   // ribs
+    cyl(r * 1.25, r * 1.4, size * 0.08, -hl - size * 0.04, metal);               // pommel
+    cyl(r * 1.35, r * 1.1, size * 0.145, size * 0.0725, metal);                     // emitter shroud
+    cyl(r * 1.0, r * 1.0, size * 0.02, size * 0.155, this.ringMat);              // glowing emitter ring
+    this.base = size * 0.158;
 
     // ---- beam ----
     this.coreMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0xffffff), toneMapped: false });

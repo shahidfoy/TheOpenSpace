@@ -4,8 +4,11 @@ import { MOVES } from './swordAnim.js';
 import { applyLivery, loadLivery } from './livery.js';
 import { SUIT_GLOW } from '../materials.js';
 import { Saber } from './saber.js';
-import { loadKatanaPack, retargetPack } from '../chars/katanaPack.js';
+import { loadPack, retargetPack } from '../chars/katanaPack.js';
 import { makeKatana } from '../chars/katana.js';
+import { twoBoneIK } from '../chars/handIK.js';
+import { makeShotgun } from '../chars/gun.js';
+import { RAGE_COLOR } from '../chars/bladeKit.js';
 
 // The katana pack (see chars/katanaPack.js) retargeted onto a mech's own skeleton: clips, swings, root motion and
 // the sword grip, computed once per asset on a bind-posed clone and shared by every body made from it.
@@ -19,7 +22,9 @@ const MECH_BONES = {
 // pack clips that replace the baked ones (same names) and the new ones the mech gains
 const PACK_CLIPS = ['idle', 'run', 'dash', 'dodge', 'dodge2', 'block', 'block_hit', 'hit', 'hit2', 'circle', 'combo1', 'charge', 'aerial',
   'combo_down', 'rush', 'jump_attack', 'double_slash', 'strikes', 'run_attack', 'thrust'];
-function mechKatana(asset, pack) {
+// locomotion loops from the Mixamo pack (scripts/build-loco.mjs) that replace the baked ones
+const LOCO_CLIPS = ['walk', 'walk_b', 'sprint'];
+function mechKatana(asset, pack, loco) {
   if (asset._katana) return asset._katana;
   const clone = SkeletonUtils.clone(asset.gltf.scene);
   clone.traverse((o) => { if (o.isSkinnedMesh) o.skeleton.pose(); });
@@ -27,14 +32,57 @@ function mechKatana(asset, pack) {
   const bones = {};
   clone.traverse((o) => { if (o.isBone) bones[o.name] = o; });
   if (!Object.values(MECH_BONES).every((n) => bones[n])) return (asset._katana = null);
-  const r = retargetPack(pack, { root: clone, node: (b) => bones[MECH_BONES[b]] || null }, PACK_CLIPS);
+  // The suit has no finger bones: its hands are rigid claws on the hand bones (+Y along the hand, the palm on +X of
+  // the right hand and -X of the left, the thumb side toward -Z). Knuckle points measured on that geometry give the
+  // retarget each hand's direction and roll, and place a handle in the fist.
+  const rootInv = new THREE.Matrix4().copy(clone.matrixWorld).invert();
+  const knuckle = (side, z) => new THREE.Vector3(0, HAND.knuckle, z).applyMatrix4(bones[side + 'Hand'].matrixWorld).applyMatrix4(rootInv);
+  const point = (b) => {
+    const m = /^(left|right)(Index|Middle|Little)Proximal$/.exec(b);
+    if (!m) return null;
+    return knuckle(m[1] === 'left' ? 'Left' : 'Right', m[2] === 'Index' ? -HAND.half : m[2] === 'Little' ? HAND.half : 0);
+  };
+  const r = retargetPack(pack, { root: clone, node: (b) => bones[MECH_BONES[b]] || null, point }, PACK_CLIPS);
   // the bind-pose height of the lowest foot (model units), for keeping feet on the ground
   let foot = Infinity;
   for (const n of ['LeftFoot', 'RightFoot', 'LeftToeBase', 'RightToeBase']) foot = Math.min(foot, new THREE.Vector3().setFromMatrixPosition(bones[n].matrixWorld).y);
   r.footRest = foot;
+  // where the weapon that is not in hand rides, in thigh-bone space: the shotgun on the right thigh (barrels down,
+  // grip to the rear), the saber hilt on the left (emitter down)
+  {
+    const P = (n) => new THREE.Vector3().setFromMatrixPosition(bones[n].matrixWorld);
+    const left = P('LeftUpLeg').sub(P('RightUpLeg')).normalize();
+    const up = P('Head').sub(P('Hips')); up.addScaledVector(left, -up.dot(left)).normalize();
+    const fwd = new THREE.Vector3().crossVectors(left, up), down = up.clone().negate();
+    const local = (bone, pos, X, Y) => {
+      const m = new THREE.Matrix4().makeBasis(X, Y, new THREE.Vector3().crossVectors(X, Y)).setPosition(pos);
+      m.premultiply(new THREE.Matrix4().copy(bones[bone].matrixWorld).invert());
+      const q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
+      m.decompose(p, q, sc);
+      return { bone, p, q };
+    };
+    r.stow = {
+      gun: local('RightUpLeg', P('RightUpLeg').addScaledVector(left, -0.62).addScaledVector(up, -0.35).addScaledVector(fwd, 0.05), down, fwd),
+      saber: local('LeftUpLeg', P('LeftUpLeg').addScaledVector(left, 0.62).addScaledVector(up, -0.2), fwd.clone().negate(), down),
+    };
+  }
+  if (loco) {
+    const l = retargetPack(loco, { root: clone, node: (b) => bones[MECH_BONES[b]] || null, point }, LOCO_CLIPS);
+    for (const n of Object.keys(l.clips)) {
+      r.clips[n] = l.clips[n]; r.rm[n] = l.rm[n];
+      // metres per second (model units) the feet cover at normal speed
+      r.meta.clips[n] = { ...l.meta.clips[n], pace: loco.json.clips[n].travel[0] * l.scale / l.meta.clips[n].dur };
+    }
+  }
   return (asset._katana = r);
 }
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
+// the suit's hands in hand-bone units: knuckle row distance from the wrist, half its width, where a handle sits in
+// the claw (toward the palm: x is mirrored on the left hand) and the handle's axis out of the thumb side
+const HAND = { knuckle: 0.36, half: 0.13, palm: 0.17, along: 0.44, axis: new THREE.Vector3(0, 0, -1) };
+const _hv = new THREE.Vector3(), _hv2 = new THREE.Vector3(), _hv3 = new THREE.Vector3();
+const _ax = new THREE.Vector3(), _ay = new THREE.Vector3(), _az = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
+const _aq = new THREE.Quaternion(), _aq2 = new THREE.Quaternion(), _am = new THREE.Matrix4();
 
 // Skinned mechs built by blender/build_mech_player.py: the player suit ("NEXORION // The Neon Vanguard" by Atahan3D)
 // and the arena enemies ("JSDF MECHA" by Kussa), both Sketchfab CC-BY 4.0, with a long sword and katana-pack / Mixamo
@@ -182,7 +230,7 @@ export class SkinnedMechBody {
         if (o.isMesh && (/^mech_blade/.test(o.material.name) || (suit && /^Secondary_Color/.test(o.material.name)))) o.visible = false;
       });
       const H = asset.meta.height * this.k;
-      this.saber = new Saber(this.blade * this.k * 1.04, H * 0.165);
+      this.saber = new Saber(this.blade * this.k * 1.04, H * 0.165, 0x52d8ff, 1.45);     // a two-handed hilt
       this.grip.getWorldScale(ws);
       this.saber.group.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
       this.saber.group.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
@@ -207,7 +255,7 @@ export class SkinnedMechBody {
     this.rm = {};
     this.charge = 0;
     // the player frame takes the anime katana pack: clean retargeted clips, root motion, the true grip
-    if (saber) loadKatanaPack().then((pack) => this.applyPack(pack, asset)).catch((e) => console.warn('katana pack failed', e));
+    if (saber) Promise.all([loadPack('katana'), loadPack('loco').catch(() => null)]).then(([pack, loco]) => this.applyPack(pack, asset, loco)).catch((e) => console.warn('katana pack failed', e));
 
     this.thr = { back: 0, wing: 0, sh: 0, calf: 0, foot: 0 };
     this.tintColor = new THREE.Color(); this.tintK = 0; this.tintWant = 0; this.flash = 0;
@@ -226,8 +274,8 @@ export class SkinnedMechBody {
     this.saber?.setColor(l.blade);
   }
 
-  applyPack(pack, asset) {
-    const r = mechKatana(asset, pack);
+  applyPack(pack, asset, loco) {
+    const r = mechKatana(asset, pack, loco);
     if (!r) return;
     const loops = new Set(asset.meta.loops || []);
     for (const [name, clip] of Object.entries(r.clips)) {
@@ -252,17 +300,71 @@ export class SkinnedMechBody {
     if (this.saber && hand) {
       const g = this.saber.group, ws = new THREE.Vector3();
       hand.add(g);
-      g.position.copy(r.grip.p);
-      g.quaternion.copy(r.grip.q);
       hand.getWorldScale(ws);
       g.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
+      // in the claw: the hilt along the knuckle row, the emitter just clear of the index finger
+      g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), HAND.axis);
+      g.position.set(HAND.palm, HAND.along, 0).addScaledVector(HAND.axis, HAND.half + 0.1);
       this.saberOnHand = true;
+      this.armL = ['LeftArm', 'LeftForeArm', 'LeftHand'].map((n) => this.model.getObjectByName(n));
+      this.armR = ['RightArm', 'RightForeArm', 'RightHand'].map((n) => this.model.getObjectByName(n));
+      this.twoK = 0;
+      // the shotgun, sized to the claw; mounts: in the right hand / stowed on the thigh
+      const gun = (this.gun = makeShotgun(0.37 * asset.meta.height * this.k, { metal: 0x2a2f38, trim: 0x16191f, glow: 0xff5a3a }));
+      gun.scale.set(1 / ws.x, 1 / ws.y, 1 / ws.z);
+      const X = new THREE.Vector3(0, 1, 0), Y = HAND.axis.clone();
+      this.gunGrip = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, new THREE.Vector3().crossVectors(X, Y)));
+      this.gripP = new THREE.Vector3(HAND.palm, HAND.along, 0);
+      this.mount = { hand, saberP: g.position.clone(), saberQ: g.quaternion.clone(), stow: r.stow };
+      this.weapon = null;
+      this.setWeapon('sword');
     }
     this.packed = true;
     this.onPack?.();
   }
 
+  // which weapon is in the right hand: 'sword' (the saber hilt) or 'gun'; the other rides on a thigh
+  setWeapon(w) {
+    if (!this.mount || this.weapon === w) return;
+    this.weapon = w;
+    const M = this.mount, g = this.saber.group, gun = this.gun;
+    const put = (obj, st) => { const b = this.model.getObjectByName(st.bone); if (b) { b.add(obj); obj.position.copy(st.p); obj.quaternion.copy(st.q); } };
+    if (w === 'gun') { put(g, M.stow.saber); M.hand.add(gun); gun.position.copy(this.gripP); gun.quaternion.copy(this.gunGrip); }
+    else { put(gun, M.stow.gun); M.hand.add(g); g.position.copy(M.saberP); g.quaternion.copy(M.saberQ); }
+  }
+  // Raise the gun arm onto `dir` (world, unit) by weight k, kicked by the recoil (0..1). Called after the clip pose.
+  aimGun(dir, k, recoil = 0) {
+    if (!this.armR || this.weapon !== 'gun' || k < 0.01) return;
+    const [up, lo, hd] = this.armR;
+    up.updateWorldMatrix(true, false); lo.updateWorldMatrix(true, false); hd.updateWorldMatrix(true, false);
+    const sh = _hv.setFromMatrixPosition(up.matrixWorld);
+    const len = sh.distanceTo(_hv2.setFromMatrixPosition(lo.matrixWorld)) + _hv2.distanceTo(_hv3.setFromMatrixPosition(hd.matrixWorld));
+    const X = _ax.copy(dir).addScaledVector(_up, recoil * 0.35).normalize();
+    const Z = _az.crossVectors(X, _up).normalize(), Y = _ay.crossVectors(Z, X);
+    _aq.setFromRotationMatrix(_am.makeBasis(X, Y, Z)).multiply(_aq2.copy(this.gunGrip).invert());
+    const ws = hd.getWorldScale(_hv2).x;
+    const wrist = _hv3.copy(sh).addScaledVector(X, len * (0.8 - recoil * 0.14)).addScaledVector(_up, len * (recoil * 0.06 - 0.04));
+    wrist.sub(_hv2.copy(this.gripP).multiplyScalar(ws).applyQuaternion(_aq));
+    twoBoneIK(up, lo, hd, wrist, k, { handQ: _aq, pole: _ay.set(0, -1, 0) });
+  }
+  // the gun's muzzle in world space
+  muzzle(out) { this.gun.updateWorldMatrix(true, false); return out.copy(this.gun.userData.muzzle).applyMatrix4(this.gun.matrixWorld); }
+  // Bloodline Awakening: the blade, its light and the glow lines turn blood red
+  setRage(on) {
+    if (this.rage === on) return;
+    this.rage = on;
+    if (on) {
+      this.saber?.setColor(RAGE_COLOR);
+      this.light.color.set(RAGE_COLOR);
+      this.trail.mesh.material.uniforms.color.value.set(RAGE_COLOR).multiplyScalar(2.6);
+      this.slashColor = 0xff6a6a;
+      this.setTint(RAGE_COLOR, 0.1);
+    } else { this.setLivery(this.livery); this.setTint(0x000000, 0); }
+  }
+
   has(name) { return !!this.actions[name]; }
+  // ground speed (m/s) a locomotion loop's feet match at normal playback, if known
+  pace(name) { const p = this.meta.clips[name]?.pace; return p ? p * this.k : 0; }
   snapPose() {}
 
   // hold a clip at time t (the caller scrubs it, e.g. an enemy's windup stretched to its telegraph)
@@ -338,6 +440,9 @@ export class SkinnedMechBody {
     root.position.copy(o.pos).add(_pv).sub(_pv2);
     if (o.lift) root.position.y += o.lift;
     this.mixer.update(dt);
+    if (this.armL && this.weapon === 'sword') this.twoHands();
+    this.gun?.userData.update(dt);
+    o.afterPose?.(this);
     if (o.grounded && this.feet && this.hipsBone) this.groundFeet();
 
     // recoil spring + run lean on the spine, on top of the clip
@@ -357,6 +462,24 @@ export class SkinnedMechBody {
     this.updateThrusters(dt, o.thr);
     this.updateSword(dt, o.swinging, o.lit);
     this.updateTint(dt);
+  }
+
+  // in the pack's two-handed frames the left claw is brought onto the hilt below the right
+  twoHands() {
+    const a = this.current, two = a ? this.meta.clips[this.currentName]?.two : null;
+    let tw = 0;
+    if (two) {
+      const f = a.time * 30, i = Math.max(0, Math.min(two.length - 1, Math.floor(f))), j = Math.min(two.length - 1, i + 1);
+      tw = two[i] + (two[j] - two[i]) * (f - i);
+    }
+    this.twoK += (tw - this.twoK) * 0.35;
+    if (this.twoK < 0.02) return;
+    const [up, lo, hd] = this.armL, g = this.saber.group;
+    hd.updateWorldMatrix(true, false); g.updateWorldMatrix(true, false);
+    const below = (HAND.half * 3 + 0.16) * this.k * 1.008;            // metres down the hilt from the emitter
+    _hv.set(0, -below, 0).applyMatrix4(g.matrixWorld);
+    _hv2.set(-HAND.palm, HAND.along, 0).applyMatrix4(hd.matrixWorld).sub(_hv3.setFromMatrixPosition(hd.matrixWorld));
+    twoBoneIK(up, lo, hd, _hv.sub(_hv2), this.twoK);
   }
 
   // keep the lowest foot on the ground plane: move the hips up / down by the difference to the bind-pose foot height
@@ -394,7 +517,7 @@ export class SkinnedMechBody {
   updateSword(dt, swinging, lit) {
     const flick = 0.92 + Math.sin(this.time * 61) * 0.04 + Math.sin(this.time * 37) * 0.04;
     if (this.saber) {
-      if (this.saber.update(dt, lit || this.charge > 0, swinging || this.charge > 0)) {
+      if (this.saber.update(dt, (lit || this.charge > 0) && this.weapon !== 'gun', swinging || this.charge > 0)) {
         // ignition crackle at the emitter
         const p = this.saber.group.localToWorld(_v.set(0, this.saber.base, 0));
         this.fx.sparksAt(p, 8, { color: this.light.color.getHex(), speed: 6, life: 0.22, width: 0.04, grav: 0 });

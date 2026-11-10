@@ -107,7 +107,9 @@ export class Parkour {
       v.x = lerp(v.x, wish.x * top, k); v.z = lerp(v.z, wish.z * top, k);
       v.y -= G * dt;
       const hs = Math.hypot(v.x, v.z);
-      if (hs > 0.4 && wish.lengthSq() > 0.01) this.yaw += angDiff(this.yaw, Math.atan2(v.x, v.z)) * (1 - Math.exp(-(this.grounded ? 12 : 5) * dt));
+      // faceYaw: something else decides the facing for a moment (aiming the shotgun)
+      if (this.faceYaw != null) this.yaw += angDiff(this.yaw, this.faceYaw) * (1 - Math.exp(-20 * dt));
+      else if (hs > 0.4 && wish.lengthSq() > 0.01) this.yaw += angDiff(this.yaw, Math.atan2(v.x, v.z)) * (1 - Math.exp(-(this.grounded ? 12 : 5) * dt));
       // wall kick: in the air, pushing into any wall, jump kicks you off it (two close walls make a chimney)
       const K = this.wall;
       const kick = jumpEdge && !this.grounded && this.coyote <= 0 && K && K.box !== this.kickWall && -wish.dot(K.n) > 0.2;

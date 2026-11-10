@@ -143,6 +143,6 @@ export class ArenaHud {
 
     const keys = this.q('.ah-keys');
     keys.style.display = fight && keyboard ? '' : 'none';
-    if (fight && keyboard) this.set('keys', keys, 'J slash · K heavy · L launcher · Q arc · F guard / parry · E dodge · Tab lock · Space jump');
+    if (fight && keyboard) this.set('keys', keys, 'J attack · R swap · E dash · F block / parry · K awaken · Q ultimate · L launcher · Tab lock · Space jump');
   }
 }

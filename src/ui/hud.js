@@ -12,6 +12,7 @@ import { US_STATES } from '../data/usStates.js';
 import { groupOrigin } from '../data/ransomwareGroups.js';
 import { COUNTRIES } from '../data/countries.js';
 import { ArenaHud } from './arenaHud.js';
+import { KitHud } from './kitHud.js';
 import { CRAFTS } from '../render/models.js';
 import { LIVERIES, FINISHES, ZONES, loadLivery, saveLivery } from '../render/mech/livery.js';
 
@@ -109,11 +110,11 @@ const TEMPLATE = `
   <div class="joy" id="joy"><div class="knob" id="knob"></div></div>
   <div class="btns">
     <button class="hold up" data-hold="up"><svg viewBox="0 0 24 24"><path d="M5 15l7-7 7 7" fill="none"/></svg></button>
-    <button class="hold heavy" data-hold="down" hidden>HEAVY</button>
-    <button class="hold arc" data-hold="arc" hidden>ARC</button>
-    <button class="hold guard" data-hold="guard" hidden>GUARD</button>
-    <button class="hold dodge" data-hold="dodge" hidden>DODGE</button>
-    <button class="hold launch" data-hold="launch" hidden>LAUNCH</button>
+    <button class="hold heavy" data-hold="down" hidden>AWAKEN</button>
+    <button class="hold arc" data-hold="arc" hidden>ULT</button>
+    <button class="hold guard" data-hold="guard" hidden>BLOCK</button>
+    <button class="hold dodge" data-hold="dodge" hidden>DASH</button>
+    <button class="hold launch" data-hold="launch" hidden>SWAP</button>
     <button class="hold boost" data-hold="boost">BOOST</button>
     <button class="hold mine" data-hold="mine"><span>MINE</span></button>
   </div>
@@ -152,6 +153,7 @@ export class Hud {
     app.input.bindJoystick(this.$('joy'), this.$('knob'));
     root.querySelectorAll('[data-hold]').forEach((el) => app.input.bindHold(el, el.dataset.hold));
     this.arenaHud = new ArenaHud(root);
+    this.kitHud = new KitHud(root);
     this.keyboard = matchMedia('(hover: hover) and (pointer: fine)').matches;
 
     root.addEventListener('click', (e) => {
@@ -348,7 +350,7 @@ export class Hud {
     const earth = this.app.mode === 'earth';
     this.root.classList.toggle('mode-earth', earth);
     const surf = this.app.mode === 'surface';
-    this.root.querySelector('.hold.mine span').textContent = earth ? 'BRAKE' : surf ? 'SLASH' : voyage ? 'SALVAGE' : 'MINE';
+    this.root.querySelector('.hold.mine span').textContent = earth ? 'BRAKE' : surf ? 'ATTACK' : voyage ? 'SALVAGE' : 'MINE';
     this.root.querySelector('.hold.boost').textContent = surf ? 'SPRINT' : 'BOOST';
     this.$('attrib').textContent = earth ? ATTRIBUTION : '';
     this.$('hint').textContent = earth
@@ -427,6 +429,7 @@ export class Hud {
       es.hidden = !canEnter;
       if (canEnter) setHtml(es, `<small>DOCKING RANGE</small>⬢ ENTER ${BODY[s.presence].base.toUpperCase()}${isTouch() ? '' : ' <kbd>G</kbd>'}`);
     }
+    this.kitHud.update(this.app.mode === 'surface' ? this.app.surfaceView.pilot?.kit : null);
     if (this.app.mode === 'surface') this.arenaHud.update(this.app.surfaceView, this.keyboard);
     else if (this.app.mode === 'ship' && this.app.shipView.mechActive && this.app.shipView.arenaView) this.arenaHud.update(this.app.shipView.arenaView, this.keyboard);
     else this.arenaHud.hide();

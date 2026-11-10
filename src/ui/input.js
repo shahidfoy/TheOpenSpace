@@ -1,15 +1,17 @@
 // Touch: left virtual joystick moves, drag anywhere else on the canvas to steer, hold buttons.
 // Desktop: WASD move, mouse-drag / arrows steer, R/F up/down (jetpack on foot), Shift boost/sprint, Space mine.
-// Surface mech: Space jump (again in the air = double jump, hold = fly up; Shift in the air = rocket boost), click / J slash, right-click / K heavy, Q arc slash.
-// Arena: F hold guard (press just before a hit to parry), E dodge, L / middle-click launcher, Tab switch lock-on, Enter start a battle.
+// Surface mech: Space jump (again in the air = double jump, hold = fly up; Shift in the air = rocket boost).
+// Fighting (mech and characters, the Daywalker kit): click / J attack (hold to keep going), R / middle-click swap sword and
+// shotgun, E dash, F / right-click hold block (press just before a hit to parry), K / C awakening, Q ultimate, L launcher.
+// Arena: Tab switch lock-on, Enter start a battle.
 export function createInput(app) {
   const keys = {};
   const joy = { x: 0, y: 0, id: null };
   const held = { up: false, down: false, boost: false, mine: false };
   const look = { x: 0, y: 0 };
   let zoom = 1; // camera distance factor gathered from the wheel / pinch since the last sample
-  const out = { move: { x: 0, y: 0 }, lift: 0, lookX: 0, lookY: 0, mine: false, boost: false, zoom: 1, jump: false, slashHold: false, attack: 0, heavy: 0, spin: 0, guard: false, dodge: 0, launch: 0, lockSwitch: 0, arena: 0 };
-  const taps = { attack: 0, heavy: 0, spin: 0, dodge: 0, launch: 0, lock: 0, arena: 0 }; // edge-triggered presses since the last sample
+  const out = { move: { x: 0, y: 0 }, lift: 0, lookX: 0, lookY: 0, mine: false, boost: false, zoom: 1, jump: false, slashHold: false, attack: 0, heavy: 0, spin: 0, guard: false, dodge: 0, launch: 0, lockSwitch: 0, arena: 0, swap: 0, rage: 0, attackHold: false };
+  const taps = { attack: 0, heavy: 0, spin: 0, dodge: 0, launch: 0, lock: 0, arena: 0, swap: 0, rage: 0 }; // edge-triggered presses since the last sample
   let prevDown = false, prevArc = false, prevDodge = false, prevLaunch = false;
 
   addEventListener('keydown', (e) => {
@@ -20,6 +22,8 @@ export function createInput(app) {
       else if (e.code === 'KeyQ') taps.spin++;
       else if (e.code === 'KeyE') taps.dodge++;
       else if (e.code === 'KeyL') taps.launch++;
+      else if (e.code === 'KeyR') taps.swap++;
+      else if (e.code === 'KeyC') taps.rage++;
       else if (e.code === 'Tab' && (app.mode === 'surface' || app.mode === 'ship')) taps.lock++;
       else if (e.code === 'Enter' && (app.mode === 'surface' || app.mode === 'ship')) taps.arena++;
     }
@@ -34,7 +38,7 @@ export function createInput(app) {
   const drags = new Map();
   canvas.addEventListener('pointerdown', (e) => {
     if (app.mode === 'map') return;
-    drags.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), button: e.button });
+    drags.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: performance.now(), button: e.button, mouse: e.pointerType === 'mouse', still: true });
     canvas.setPointerCapture?.(e.pointerId);
   });
   const spread = () => { const [a, b] = [...drags.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
@@ -51,6 +55,7 @@ export function createInput(app) {
     }
     look.x += e.clientX - p.x;
     look.y += e.clientY - p.y;
+    if (Math.hypot(e.clientX - p.x0, e.clientY - p.y0) > 8) p.still = false;
     p.x = e.clientX; p.y = e.clientY;
   });
   canvas.addEventListener('wheel', (e) => {
@@ -60,11 +65,10 @@ export function createInput(app) {
   }, { passive: false });
   const end = (e) => drags.delete(e.pointerId);
   canvas.addEventListener('pointerup', (e) => {
-    // a quick mouse click (not a drag) is a sword strike on the surface: left = slash, right = heavy
+    // a quick mouse click (not a drag) on the surface: left = attack, middle = swap weapons (right is held: block)
     const p = drags.get(e.pointerId);
     if (p && e.pointerType === 'mouse' && (app.mode === 'surface' || app.mode === 'ship') && Math.hypot(e.clientX - p.x0, e.clientY - p.y0) < 6 && performance.now() - p.t0 < 350) {
-      if (p.button === 2) taps.heavy++;
-      else if (p.button === 1) taps.launch++;
+      if (p.button === 1) taps.swap++;
       else if (p.button === 0) taps.attack++;
     }
     end(e);
@@ -121,23 +125,30 @@ export function createInput(app) {
     out.boost = held.boost || !!keys.ShiftLeft || !!keys.ShiftRight;
     out.jump = held.up || !!keys.Space;
     out.slashHold = held.mine;
+    // primary held: J, the attack button, or the left mouse button held still (a drag steers the camera instead)
+    let lmb = false;
+    const nowT = performance.now();
+    for (const d of drags.values()) if (d.mouse && d.button === 0 && d.still && nowT - d.t0 > 240) lmb = true;
+    out.attackHold = !!keys.KeyJ || held.mine || lmb;
     out.attack = taps.attack;
     out.heavy = taps.heavy + (held.down && !prevDown ? 1 : 0);
     out.spin = taps.spin + (held.arc && !prevArc ? 1 : 0);
-    out.guard = !!held.guard || !!keys.KeyF;
-    // held heavy (K, the right mouse button, or the HEAVY button): characters charge a sword dash with it
+    // block: F, the BLOCK button, or the right mouse button held
     let rmb = false;
-    for (const d of drags.values()) if (d.button === 2) rmb = true;
-    out.heavyHold = !!keys.KeyK || rmb || !!held.down;
+    for (const d of drags.values()) if (d.mouse && d.button === 2) rmb = true;
+    out.guard = !!held.guard || !!keys.KeyF || rmb;
+    out.heavyHold = false;
+    out.swap = taps.swap + (held.launch && !prevLaunch ? 1 : 0);
+    out.rage = taps.rage;
     out.dodge = taps.dodge + (held.dodge && !prevDodge ? 1 : 0);
-    out.launch = taps.launch + (held.launch && !prevLaunch ? 1 : 0);
+    out.launch = taps.launch;
     out.lockSwitch = taps.lock;
     out.arena = taps.arena;
     prevDown = held.down;
     prevArc = held.arc;
     prevDodge = held.dodge;
     prevLaunch = held.launch;
-    taps.attack = taps.heavy = taps.spin = taps.dodge = taps.launch = taps.lock = taps.arena = 0;
+    taps.attack = taps.heavy = taps.spin = taps.dodge = taps.launch = taps.lock = taps.arena = taps.swap = taps.rage = 0;
     return out;
   }
 

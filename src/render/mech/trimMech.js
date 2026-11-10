@@ -86,6 +86,56 @@ const belt = (s) => {
   return false;
 };
 
+// The suit is a shell of hundreds of loose plates. Around the hips each plate was skinned on its own, so in a run
+// neighbouring plates follow different bones: some swing out with the thigh, others shear into long shards behind
+// the pelvis. Here the hips are re-skinned by position instead, so neighbours always agree: what sits within reach
+// of a thigh's axis follows that thigh (easing in from the hip joint down), what stands off it (the pelvis and the
+// armour around it) stays on the pelvis, and the few triangles that bridge the two are dropped. Returns the index.
+const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const REACH = 0.62, HIP_BAND = 0.6;      // model units off the thigh axis; fraction of the thigh the rule covers
+function reskinHips(mesh, index) {
+  const g = mesh.geometry, P = g.attributes.position, SI = g.attributes.skinIndex, SW = g.attributes.skinWeight, sk = mesh.skeleton;
+  const bi = (n) => sk.bones.findIndex((b) => b.name === n);
+  const H = bi('Hips'), L = bi('LeftUpLeg'), R = bi('RightUpLeg'), KL = bi('LeftLeg'), KR = bi('RightLeg');
+  if (!SI || !SW || [H, L, R, KL, KR].some((i) => i < 0)) return index;
+  // joints in the geometry's bind space
+  const joint = (i) => { const e = sk.boneInverses[i].clone().invert().premultiply(mesh.bindMatrixInverse).elements; return [e[12], e[13], e[14]]; };
+  const legs = [[joint(L), joint(KL), L], [joint(R), joint(KR), R]].map(([a, b, bone]) => {
+    const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], len = Math.hypot(d[0], d[1], d[2]);
+    return { a, d: d.map((x) => x / len), len, bone };
+  });
+  const left = legs[0].a[0] > 0 ? 0 : 1;
+  const N = P.count, T = new Float32Array(N), cls = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const w = new Map();
+    for (let k = 0; k < 4; k++) { const ww = SW.getComponent(i, k); if (ww > 0) { const b = SI.getComponent(i, k); w.set(b, (w.get(b) || 0) + ww); } }
+    const wl = (w.get(L) || 0) + (w.get(R) || 0), tot = (w.get(H) || 0) + wl;
+    if (tot < 0.02) continue;
+    const x = P.getX(i), leg = legs[x >= 0 ? left : 1 - left];
+    const rx = x - leg.a[0], ry = P.getY(i) - leg.a[1], rz = P.getZ(i) - leg.a[2];
+    const al = rx * leg.d[0] + ry * leg.d[1] + rz * leg.d[2], u = al / leg.len;
+    const r = u < 0 ? Math.hypot(rx, ry, rz) : Math.hypot(rx - leg.d[0] * al, ry - leg.d[1] * al, rz - leg.d[2] * al);
+    let t;
+    if (r > REACH && u < HIP_BAND) { t = 0; cls[i] = 1; }
+    else { t = smooth(-0.15, 0.45, u); t += (wl / tot - t) * smooth(0.5, 0.8, u); cls[i] = 2; }
+    T[i] = t;
+    w.delete(H); w.delete(L); w.delete(R);
+    if (t < 0.999) w.set(H, tot * (1 - t));
+    if (t > 0.001) w.set(leg.bone, tot * t);
+    const e = [...w.entries()].sort((p, q) => q[1] - p[1]).slice(0, 4), sum = e.reduce((p, q) => p + q[1], 0);
+    for (let k = 0; k < 4; k++) { SI.setComponent(i, k, e[k] ? e[k][0] : 0); SW.setComponent(i, k, e[k] ? e[k][1] / sum : 0); }
+  }
+  SI.needsUpdate = SW.needsUpdate = true;
+  const out = [];
+  for (let t = 0; t < index.length; t += 3) {
+    const a = index[t], b = index[t + 1], c = index[t + 2];
+    const bridge = (cls[a] === 1 || cls[b] === 1 || cls[c] === 1) && (cls[a] === 2 || cls[b] === 2 || cls[c] === 2);
+    if (bridge && Math.max(T[a], T[b], T[c]) > 0.25) continue;
+    out.push(a, b, c);
+  }
+  return out;
+}
+
 export function trimMechPlayer(gltf) {
   let mesh = null;
   gltf.scene.traverse((o) => { if (!mesh && o.isSkinnedMesh && o.material?.name === 'suit' && o.geometry.index) mesh = o; });
@@ -97,7 +147,7 @@ export function trimMechPlayer(gltf) {
     out.push(src[t], src[t + 1], src[t + 2]);
   }
   const removed = src.length / 3 - out.length / 3;
-  g.setIndex(out);
+  g.setIndex(reskinHips(mesh, out));
   g.computeBoundingSphere();
   g.computeBoundingBox();
   return removed;

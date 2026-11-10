@@ -8,9 +8,11 @@ import {
 import { SwordFx } from './swordFx.js';
 import { SkinnedMechBody, buildSkinCombos, makeWarp, clipTime, clipRate } from './mechSkin.js';
 import { rmAt } from '../chars/katanaPack.js';
-// sword dash (hold heavy): the Rush clip's phases and the dash per charge level
+import { BladeKit, KIT, RAGE_COLOR, shotgun, wound, woundMul } from '../chars/bladeKit.js';
+// the Rush clip's phases: its dash carries the Daywalker Dash and the Thousand-Fold Slash's entry
 const RUSH = { crouch: 0.6, holdA: 0.85, holdB: 2.2, dash0: 2.45, dash1: 4.15, end: 4.9 };
-const RUSH_LV = [0.4, 0.9, 1.5], RUSH_DIST = [16, 24, 32], RUSH_DUR = [0.45, 0.55, 0.65];
+const GUN_RANGE = 75, PELLET_DMG = 4.4;       // metres; damage per pellet (nine to a shell)
+const ULT_RANGE = [12, 52], ULT_R = 13;       // metres: how far the ultimate reaches, and its zone
 const distSeg = (p, a, b) => {
   const abx = b.x - a.x, abz = b.z - a.z, l2 = abx * abx + abz * abz;
   const t = l2 > 1e-6 ? Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.z - a.z) * abz) / l2)) : 0;
@@ -20,8 +22,9 @@ import { skinned } from '../assets.js';
 
 // Surface mech controller: run / sprint, jump + double jump (thruster burst), rocket flight (hold jump in the air
 // to climb on the foot / calf / back thrusters, Shift in the air to boost along the stick on the back and wing
-// thrusters, leaning into it), and laser-sword combat driven by the Noir move set (4-hit ground combo, heavy shockwave,
-// launcher, 3-hit aerial combo ending in a slam, plunge, and a 360° arc slash).
+// thrusters, leaning into it), and the Daywalker kit (chars/bladeKit.js, Blade's kit from Marvel Rivals): a saber slash
+// chain or shotgun blasts as the primary (swap between them), the Daywalker Dash, the Scarlet Shroud block, Bloodline
+// Awakening and the Thousand-Fold Slash, plus a launcher and a 3-hit aerial combo.
 // Defence for the arena: hold GUARD to block (press it just before a hit lands to PARRY: the attacker staggers and
 // time slows), DODGE for a thruster step with invulnerability frames. Enemies can hurt, launch and knock you down.
 // Physics use the world's real gravity (or the arena's grav plating); jump heights are set in metres so they feel
@@ -33,7 +36,7 @@ const SPIN_COST = 30, SPIN_T = 0.6;
 const FLY_TOP = 34, CLIMB = 11;   // m/s: rocket boost top speed, climb rate
 const BURN_BOOST = 9, BURN_CLIMB = 8, RECHARGE = 22;   // thruster charge %/s
 const PIVOT = 3.0;                // metres above the feet the flight lean pivots around
-const DODGE_T = 0.34, DODGE_V = 27, DODGE_IFRAME = [0.02, 0.26], AIR_DODGE_COST = 14;
+const DODGE_T = 0.34, DODGE_V = 58, DODGE_IFRAME = [0.02, 0.3], AIR_DODGE_COST = 14;      // the Daywalker Dash
 const PARRY_WIN = 0.24;           // seconds after pressing guard that a hit is parried instead of blocked
 export const MAX_HP = 100;
 const UP = new THREE.Vector3(0, 1, 0);
@@ -64,6 +67,12 @@ export class MechPilot {
     this.H = { p: new THREE.Vector3(), d: new THREE.Vector3(), u: new THREE.Vector3(), w: 1, snap: false, rate: 18, force: false };
     this.thrWant = { back: 0, wing: 0, sh: 0, calf: 0, foot: 0 };
     this.dodgeDir = new THREE.Vector3();
+    this.kit = new BladeKit();
+    this.aimDir = new THREE.Vector3(0, 0, 1);
+    // the Thousand-Fold Slash's zone on the ground
+    this.zoneMesh = new THREE.Mesh(new THREE.RingGeometry(0.95, 1, 96), new THREE.MeshBasicMaterial({ color: new THREE.Color(RAGE_COLOR).multiplyScalar(2.2), transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }));
+    this.zoneMesh.rotation.x = -Math.PI / 2; this.zoneMesh.visible = false; this.zoneMesh.frustumCulled = false;
+    scene.add(this.zoneMesh);
     this.reset();
   }
 
@@ -95,6 +104,10 @@ export class MechPilot {
     this.lock = null;
     this.hurtT = 0;
     this.lean = 0;
+    this.kit.reset();
+    this.aimK = 0; this.recoil = 0; this.dash = null;
+    this.zone = null; this.zoneMesh.visible = false;
+    this.skin?.setWeapon('sword');
   }
 
   forward(out = _v) { return out.set(Math.sin(this.yaw), 0, Math.cos(this.yaw)); }
@@ -118,7 +131,9 @@ export class MechPilot {
     if (this.iframe > 0) this.iframe -= dt;
     // the blade only exists while fighting: it ignites on an attack or guard and stays lit just long enough for the
     // next press of a combo, then retracts (the saber suit keeps it out for less time than the procedural frame)
-    const fighting = this.state === 'attack' || this.state === 'spin' || this.state === 'charge' || this.state === 'rush' || this.state === 'rushEnd' || this.guarding;
+    this.kit.update(dt);
+    this.recoil = Math.max(0, this.recoil - rawDt * 7);
+    const fighting = this.state === 'attack' || this.state === 'rush' || this.state === 'rushEnd' || this.guarding || !!this.zone || (this.state === 'dodge' && this.dash && !this.dash.gun);
     if (fighting) this.swordHold = this.skin ? 0.55 : 1.4; else this.swordHold = Math.max(0, this.swordHold - rawDt);
 
     const g = (this.g = ctx.g);
@@ -188,6 +203,12 @@ export class MechPilot {
       }
     }
 
+    this.updateZone(dt, ctx);
+    this.skin?.setRage(this.kit.raging && this.alive);
+    if (this.kit.raging && Math.random() < rawDt * 16) {
+      const a = Math.random() * Math.PI * 2;
+      this.fx.sparksAt(_v.set(this.pos.x + Math.cos(a) * 1.2, this.pos.y + Math.random() * 1.5 * S, this.pos.z + Math.sin(a) * 1.2), 1, { speed: 6, dir: UP, spread: 0.3, life: 0.5, width: 0.05, grav: -3, color: RAGE_COLOR });
+    }
     this.animate(dt);
     this.fx.update(rawDt);
   }
@@ -199,22 +220,19 @@ export class MechPilot {
     const heldSlash = I.slashHold && !this.slashHeldPrev;
     this.slashHeldPrev = I.slashHold;
     if (I.slashHold) this.slashHoldT += rawDt; else this.slashHoldT = 0;
-    if (I.attack || heldSlash || (this.slashHoldT > 0.3 && !this.buf)) { this.buf = 'attack'; this.bufT = 0.35; }
-    // heavy: a tap; holding it (frame with the katana pack) charges the sword dash instead
-    if (this.C.rush) {
-      const held = !!I.heavyHold;
-      if (held) this.heavyT = (this.wasHeavy ? this.heavyT : 0) + rawDt;
-      if (!held && this.wasHeavy && this.heavyT < 0.28 && this.state !== 'charge') { this.buf = 'heavy'; this.bufT = 0.35; }
-      this.wasHeavy = held;
-    } else if (I.heavy) { this.buf = 'heavy'; this.bufT = 0.35; }
+    const K = this.kit;
+    if (K.gun) { if ((I.attack || I.attackHold || I.slashHold) && K.canFire() && this.state === 'idle' && !this.guarding) this.fireGun(ctx); }
+    else if (I.attack || heldSlash || ((I.attackHold || this.slashHoldT > 0.3) && !this.buf)) { this.buf = 'attack'; this.bufT = 0.35; }
+    if (I.swap && this.state === 'idle') this.swapWeapon();
+    if ((I.heavy || I.rage) && K.canRage()) this.startRage();
     if (I.launch) { this.buf = 'launch'; this.bufT = 0.35; }
-    if (I.spin) { this.buf = 'spin'; this.bufT = 0.35; }
+    if (I.spin) { this.buf = 'ult'; this.bufT = 0.35; }
     if (I.dodge) { this.buf = 'dodge'; this.bufT = 0.3; }
     if (this.bufT > 0) this.bufT -= rawDt; else this.buf = null;
 
     // ---- guard (held) ----
     const wantGuard = !!I.guard && this.grounded && this.state !== 'attack' && this.state !== 'spin' && this.state !== 'dodge';
-    if (wantGuard && !this.guarding) this.guardT = 0;
+    if (wantGuard && !this.guarding) { this.guardT = 0; if (K.gun) this.swapWeapon('sword'); }
     this.guarding = wantGuard;
     this.guardT += rawDt;
     this.guardK += ((this.guarding ? 1 : 0) - this.guardK) * Math.min(1, dt * 18);
@@ -224,31 +242,23 @@ export class MechPilot {
     const canAct = this.state === 'idle' || recovering || (this.state === 'dodge' && this.moveE > DODGE_T * 0.6);
     if (this.buf && canAct && !this.guarding) {
       const b = this.buf;
-      if (b === 'spin') {
-        if (this.fuel >= SPIN_COST) { this.fuel -= SPIN_COST; this.startSpin(); }
-        else ctx.onSpend?.();
+      if (b === 'ult') {
+        if (K.canUlt() && this.C.rush && this.grounded) this.startUlt(ctx);
         this.buf = null;
       } else if (b === 'dodge') {
-        if (this.state !== 'dodge' && (this.grounded || this.fuel >= AIR_DODGE_COST)) { this.startDodge(wish, ctx); this.buf = null; }
-      } else { this.startAttack(b, wish, ctx); this.buf = null; }
-    } else if (this.buf === 'dodge' && this.guarding) { this.guarding = false; this.startDodge(wish, ctx); this.buf = null; }
-    if (this.C.rush) {
-      if (I.heavyHold && this.heavyT > 0.28 && canAct && this.grounded && !this.guarding && this.state !== 'charge') this.startCharge();
-      if (this.state === 'charge' && !I.heavyHold) this.startRush(ctx);
-    }
-
+        if (this.state !== 'dodge' && K.canDash() && (this.grounded || this.fuel >= AIR_DODGE_COST)) { this.startDodge(wish, ctx); this.buf = null; }
+      } else { if (K.gun) this.swapWeapon('sword'); this.startAttack(b, wish, ctx); this.buf = null; }
+    } else if (this.buf === 'dodge' && this.guarding && K.canDash()) { this.guarding = false; this.startDodge(wish, ctx); this.buf = null; }
     // ---- jumping (jump-cancels the launcher and attack recovery, so you can chase a launched target) ----
-    if (jumpEdge && this.state !== 'spin' && !(this.move?.plunge)) {
+    if (jumpEdge && this.state !== 'rush' && !(this.move?.plunge)) {
       if (this.grounded) { if (this.state === 'attack' && recovering) this.endMove(); if (this.state !== 'attack') this.jump(0, wish); }
       else if (this.jumps < 2) this.jump(1, wish);
     }
 
     // ---- horizontal motion ----
     if (this.state === 'attack') this.updateAttack(dt, ctx);
-    else if (this.state === 'charge') this.updateCharge(dt, wish);
     else if (this.state === 'rush' || this.state === 'rushEnd') this.updateRush(dt, ctx);
-    else if (this.state === 'spin') this.updateSpin(dt, ctx);
-    else if (this.state === 'dodge') this.updateDodge(dt);
+    else if (this.state === 'dodge') this.updateDodge(dt, ctx);
     else {
       if (this.comboGap < 9) this.comboGap += dt;
       const boosting = !this.grounded && I.boost && this.fuel > 0;
@@ -271,7 +281,8 @@ export class MechPilot {
       this.vel.z = lerp(this.vel.z, dir.z * top, k);
       this.accelX = (this.vel.x - prevX) / Math.max(dt, 1e-4); this.accelZ = (this.vel.z - prevZ) / Math.max(dt, 1e-4);
       const hs = Math.hypot(this.vel.x, this.vel.z);
-      if (this.guarding && this.lock) this.faceTarget(this.lock, dt, 12);
+      if (K.gun && K.aimT > 0.3) this.yaw += angDiff(this.yaw, Math.atan2(this.aimDir.x, this.aimDir.z)) * (1 - Math.exp(-18 * dt));   // onto the aim
+      else if (this.guarding && this.lock) this.faceTarget(this.lock, dt, 12);
       else if (hs > 0.6 && (wish.lengthSq() > 0.01 || boosting)) this.yaw += angDiff(this.yaw, Math.atan2(this.vel.x, this.vel.z)) * (1 - Math.exp(-(this.grounded ? 10 : boosting ? 5 : 3) * dt));
     }
   }
@@ -351,31 +362,54 @@ export class MechPilot {
   endMove() { this.state = 'idle'; this.move = null; this.comboGap = 0; }
 
   // ---------------- defence ----------------
+  // Daywalker Dash: a thruster dash with invulnerability frames, along the stick or straight ahead. With the saber
+  // it cuts everything on the way and leaves it wounded; with the shotgun it ends in a wide blast.
   startDodge(wish, ctx) {
     if (!this.grounded) this.fuel -= AIR_DODGE_COST;
-    const d = this.dodgeDir;
+    const K = this.kit, d = this.dodgeDir;
+    K.useDash();
     if (wish.lengthSq() > 0.05) d.copy(wish).normalize();
-    else this.forward(d).negate();                 // no stick: back-step
+    else this.forward(d);
     this.state = 'dodge';
     this.move = null;
     this.moveE = 0;
+    this.moveHit.clear();
+    this.dash = { from: this.pos.clone(), gun: K.gun };
     this.iframe = DODGE_IFRAME[1];
     this.vel.x = d.x * DODGE_V; this.vel.z = d.z * DODGE_V;
     this.burstT = 0.3;
-    // keep facing the fight while stepping around it
-    if (this.lock) this.faceTarget(this.lock, 1, 1);
-    else if (wish.lengthSq() > 0.05) this.yaw = Math.atan2(d.x, d.z);
+    this.yaw = Math.atan2(d.x, d.z);
     ctx.puff?.(this.pos, 0.9);
-    this.fx.sparksAt(_v.copy(this.pos).setY(this.pos.y + 1.2 * S), 14, { color: 0x8fd4ff, speed: 10, dir: _v2.copy(d).negate(), spread: 0.6, life: 0.35, width: 0.04 });
+    const col = K.raging ? RAGE_COLOR : 0x8fd4ff;
+    this.fx.ring(_v.copy(this.pos).setY(this.pos.y + 0.3), 2.4 * S, { life: 0.35, color: col });
+    this.fx.sparksAt(_v.copy(this.pos).setY(this.pos.y + 1.2 * S), 18, { color: col, speed: 12, dir: _v2.copy(d).negate(), spread: 0.6, life: 0.35, width: 0.05 });
     ctx.haptic?.('light');
   }
 
-  updateDodge(dt) {
+  updateDodge(dt, ctx) {
     this.moveE += dt;
-    const k = Math.max(0, 1 - this.moveE / DODGE_T);
-    const v = DODGE_V * (0.25 + 0.75 * ease.outCubic(k));
+    const k = Math.max(0, 1 - this.moveE / DODGE_T), D = this.dash;
+    const v = DODGE_V * (0.2 + 0.8 * ease.outCubic(k));
     this.vel.x = this.dodgeDir.x * v; this.vel.z = this.dodgeDir.z * v;
-    if (this.moveE >= DODGE_T) { this.state = 'idle'; this.vel.multiplyScalar(0.45); }
+    if (D && !D.gun) {
+      for (const t of ctx.targets) {
+        if (!t.alive || this.moveHit.has(t)) continue;
+        if (distSeg(t.pos, D.from, this.pos) < t.radius + 1.2 * S && Math.abs(t.pos.y - this.pos.y) < 3 * S) {
+          this.moveHit.add(t);
+          wound(t, this.time);
+          this.hit(t, { dmg: 24, heavy: true, hitstop: 0.09, wound: true, cone: Math.PI, range: 3 }, ctx);
+        }
+      }
+    }
+    if (this.moveE >= DODGE_T) {
+      this.state = 'idle'; this.vel.multiplyScalar(0.3); this.comboGap = 0;
+      if (D?.gun) this.fireGun(ctx, { free: true, wide: true });
+      else if (D) {
+        const fw = this.forward(_v), right = _v2.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+        this.fx.crescent(_C.copy(this.pos).setY(this.pos.y + 1.2 * S), right, fw, -1.2, 1.2, 0.08, { radius: 2.4 * S, innerFrac: 0.6, life: 0.3, color: this.skin?.slashColor ?? 0xd8f0ff });
+      }
+      this.dash = null;
+    }
   }
 
   // An attack reaches the player. hit: { dmg, mv, from (Vector3), attacker, kind: light|heavy|launch|slam|beam, unblockable }
@@ -400,9 +434,12 @@ export class MechPilot {
         this.shake = Math.max(this.shake, 0.35);
         this.body.recoil(dx / d * 0.2, 0.25, 0.4);
         ctx.haptic?.('heavy');
+        this.kit.blocked(); this.kit.blocked();
         return 'parry';
       }
+      // Scarlet Shroud: the blade takes most of the blow, and each one brings the dash back sooner
       this.hp -= hit.dmg * 0.15;
+      this.kit.blocked();
       this.fuel = Math.max(0, this.fuel - (hit.mv?.heavy ? 14 : 6));
       this.vel.x -= dx / d * 7; this.vel.z -= dz / d * 7;
       this.fx.sparksAt(p.addScaledVector(_v2.set(dx / d, 0, dz / d), 1.4), 18, { color: 0xbfe8ff, speed: 16, life: 0.4 });
@@ -536,6 +573,12 @@ export class MechPilot {
     const prev = this.state === 'attack' ? this.move : null, prevE = this.moveE;
     // each attack gets its own copy: a chained clip move re-times its windup from where the last one left off
     this.move = { ...MOVES[id], t: MOVES[id].t.slice() };
+    const sp = this.kit.speed;
+    if (sp !== 1) {                      // Bloodline Awakening: every cut is faster
+      const m = this.move;
+      if (m.path === 'clip') { m.speed *= sp; m.arcs = m.arcs.map((a) => ({ ...a, dt: a.dt / sp, dur: a.dur / sp })); }
+      else m.t = m.t.map((x) => x / sp);
+    }
     this.moveE = 0;
     this.moveHit.clear();
     this.slashed = false;
@@ -645,42 +688,121 @@ export class MechPilot {
     if (this.moveE >= tw + ts + mv.t[2]) this.endMove();
   }
 
-  // ---------------- sword dash: hold heavy to charge, release to cut through everything in a line ----------------
-  startCharge() {
-    this.state = 'charge'; this.moveE = 0; this.rushLv = 0; this.move = null;
-    this.skin.play('rush', { fade: 0.12, time: 0, speed: 0, restart: true });
+  // ---------------- weapons ----------------
+  swapWeapon(to = null) {
+    const w = this.kit.swap(to);
+    this.skin?.setWeapon(w);
+    this.combo = 0;
+    this.fx.sparksAt(_v.copy(this.pos).setY(this.pos.y + 1.1 * S), 8, { speed: 8, life: 0.25, width: 0.05, grav: 0, color: w === 'gun' ? 0xffb080 : 0xcfe9ff });
   }
-  updateCharge(dt, wish) {
-    this.moveE += dt;
-    if (wish.lengthSq() > 0.05) this.yaw += angDiff(this.yaw, Math.atan2(wish.x, wish.z)) * Math.min(1, dt * 6);
-    this.vel.x *= Math.exp(-dt * 12); this.vel.z *= Math.exp(-dt * 12);
-    const lv = this.moveE > RUSH_LV[2] ? 3 : this.moveE > RUSH_LV[1] ? 2 : this.moveE > RUSH_LV[0] ? 1 : 0;
-    if (lv > this.rushLv) {
-      this.rushLv = lv;
-      this.fx.ring(_v.copy(this.pos).setY(this.pos.y + 0.3), (1.2 + lv * 0.8) * S, { life: 0.4, color: [0, 0x9fe8ff, 0xd8f4ff, 0xffd27a][lv] });
-      this.shake = Math.max(this.shake, 0.12 * lv);
+
+  // one blast: at the locked target, else the nearest one in front of the camera, else straight along the camera
+  fireGun(ctx, { free = false, wide = false } = {}) {
+    const K = this.kit, d = this.aimDir;
+    if (free) this.forward(d); else d.set(-Math.sin(ctx.camYaw), 0, -Math.cos(ctx.camYaw));
+    const o = _C.copy(this.pos); o.y += 1.42 * S;
+    let t = this.lock && this.lock.alive && !free ? this.lock : null, best = wide ? 0.3 : 0.86;
+    if (!t) for (const c of ctx.targets) {
+      if (!c.alive) continue;
+      _v.copy(c.pos); _v.y += (c.height || 1.9 * S) * 0.55; _v.sub(o);
+      const L = _v.length(); if (L > GUN_RANGE) continue;
+      const dot = _v.dot(d) / Math.max(L, 1e-3);
+      if (dot > best) { best = dot; t = c; }
     }
-    this.skin.charge = lv;
-    const tc = this.moveE < RUSH.crouch ? this.moveE : RUSH.holdA + (Math.sin((this.moveE - RUSH.crouch) * 1.4) * 0.5 + 0.5) * (RUSH.holdB - RUSH.holdA) * 0.6;
-    this.skin.pose('rush', tc, 0.12);
-    if (Math.random() < dt * (6 + lv * 8)) {
-      const a = Math.random() * Math.PI * 2, r = 1.3 * S;
-      this.fx.sparksAt(_v.set(this.pos.x + Math.cos(a) * r, this.pos.y + (0.2 + Math.random() * 1.2) * S, this.pos.z + Math.sin(a) * r), 2,
-        { speed: 14, dir: _v2.set(-Math.cos(a), 0.2, -Math.sin(a)), spread: 0.2, life: 0.35, width: 0.06, grav: 0, color: lv >= 3 ? 0xffd27a : 0xbfe6ff });
+    if (t) { d.copy(t.pos); d.y += (t.height || 1.9 * S) * 0.55; d.sub(o).normalize(); }
+    const origin = o.clone().addScaledVector(d, 1.6 * S);
+    const res = shotgun(origin, d, ctx.targets, wide ? { range: 11 * S, spread: 0.3, pellets: 14, tall: 1.9 * S } : { range: GUN_RANGE, tall: 1.9 * S });
+    for (const [tg, n] of res.hits) {
+      const dist = Math.hypot(tg.pos.x - this.pos.x, tg.pos.z - this.pos.z);
+      const fall = wide ? 1 : clamp(1.25 - dist / GUN_RANGE * 1.1, 0.4, 1);
+      this.hit(tg, { dmg: n * PELLET_DMG * fall * (wide ? 1.3 : 1), gun: true, heavy: wide || n >= 7, hitstop: wide ? 0.07 : 0.03, cone: Math.PI, range: 3 }, ctx);
     }
+    for (const e of res.ends) {
+      _v.copy(e).sub(origin); const L = _v.length(); _v.multiplyScalar(1 / Math.max(L, 1e-3));
+      this.fx.sparksAt(origin, 1, { dir: _v, spread: 0, speed: Math.min(600, L / 0.07), life: 0.09, width: 0.07, grav: 0, color: K.raging ? 0xff8a7a : 0xffd9a0, intensity: 5 });
+      if (L < (wide ? 11 * S : GUN_RANGE) - 0.2) this.fx.sparksAt(e, 2, { speed: 10, life: 0.2, width: 0.05, color: 0xffe2a8 });
+    }
+    this.fx.sparksAt(origin, wide ? 18 : 10, { dir: d, spread: 0.5, speed: 26, life: 0.14, width: 0.08, grav: 0, color: 0xffc080 });
+    this.skin?.gun?.userData.fire();
+    this.recoil = 1; this.aimK = Math.max(this.aimK || 0, 0.55);
+    this.body.recoil(0, 0.4, wide ? 0.7 : 0.4);
+    this.shake = Math.max(this.shake, wide ? 0.45 : 0.25);
+    ctx.haptic?.(wide ? 'heavy' : 'medium');
+    K.fire(free);
+    if (free) K.aimT = 0.5;
   }
-  startRush(ctx) {
-    const lv = Math.max(1, this.rushLv);
+
+  // ---------------- Bloodline Awakening ----------------
+  startRage() {
+    this.kit.startRage();
+    this.fx.ring(_v.copy(this.pos).setY(this.pos.y + 0.3), 3.4 * S, { life: 0.5, color: RAGE_COLOR });
+    this.fx.sparksAt(_v.copy(this.pos).setY(this.pos.y + 1.2 * S), 40, { speed: 18, dir: UP, spread: 1.6, life: 0.7, width: 0.07, grav: -4, color: RAGE_COLOR });
+    this.shake = Math.max(this.shake, 0.3);
+  }
+
+  // ---------------- Thousand-Fold Slash: dash into a zone that is then cut to ribbons ----------------
+  startUlt(ctx) {
+    const K = this.kit;
+    if (K.gun) this.swapWeapon('sword');
+    const cf = _v.set(-Math.sin(ctx.camYaw), 0, -Math.cos(ctx.camYaw));
+    const saved = this.yaw; this.yaw = Math.atan2(cf.x, cf.z);
+    const t = this.pickTarget(ctx, ULT_RANGE[1]);
+    this.yaw = saved;
+    const to = t ? t.pos.clone() : this.pos.clone().addScaledVector(cf, 28);
+    const d = to.clone().sub(this.pos).setY(0), L = d.length();
+    if (L < ULT_RANGE[0]) to.copy(this.pos).addScaledVector(L > 0.1 ? d.normalize() : cf, ULT_RANGE[0]);
+    to.y = ctx.height(to.x, to.z);
+    d.copy(to).sub(this.pos).setY(0);
+    this.yaw = Math.atan2(d.x, d.z);
+    K.useUlt();
     const rm = this.skin.rm.rush;
     const span = (rmAt(rm, 'fwd', RUSH.dash1) - rmAt(rm, 'fwd', RUSH.dash0)) * this.skin.k;
-    this.state = 'rush'; this.moveE = 0; this.moveHit.clear();
-    this.rush = { lv, from: this.pos.clone(), warp: RUSH_DIST[lv - 1] / Math.max(1, span), dur: RUSH_DUR[lv - 1] };
-    this.iframe = this.rush.dur + 0.15;
-    this.skin.charge = 0;
-    this.fx.ring(_v.copy(this.pos).setY(this.pos.y + 0.3), (2 + lv) * S, { life: 0.35 });
-    this.fx.sparksAt(_v.copy(this.pos).setY(this.pos.y + 1), 20 + lv * 10, { speed: 16, dir: UP, spread: 1.6, floor: this.pos.y });
-    this.shake = Math.max(this.shake, 0.25 + lv * 0.1);
+    this.state = 'rush'; this.moveE = 0; this.moveHit.clear(); this.move = null;
+    this.rush = { from: this.pos.clone(), warp: d.length() / Math.max(1, span), dur: 0.45, zone: to };
+    this.iframe = this.rush.dur + 0.3;
+    this.skin.play('rush', { fade: 0.05, time: RUSH.dash0, speed: 0, restart: true });
+    this.fx.ring(_v.copy(this.pos).setY(this.pos.y + 0.3), 3.4 * S, { life: 0.35, color: RAGE_COLOR });
+    this.fx.sparksAt(_v.copy(this.pos).setY(this.pos.y + 1), 40, { speed: 16, dir: UP, spread: 1.6, floor: this.pos.y, color: RAGE_COLOR });
+    this.shake = Math.max(this.shake, 0.45);
     ctx.haptic?.('heavy');
+    ctx.onUlt?.();
+  }
+  openZone(c) {
+    this.zone = { c: c.clone(), t: 0, tick: 0 };
+    this.zoneMesh.position.copy(c).setY(c.y + 0.15);
+    this.zoneMesh.scale.setScalar(ULT_R);
+    this.zoneMesh.visible = true;
+    this.fx.ring(_v.copy(c).setY(c.y + 0.3), ULT_R * 1.15, { life: 0.5, color: RAGE_COLOR });
+  }
+  updateZone(dt, ctx) {
+    const Z = this.zone;
+    if (!Z) return;
+    Z.t += dt; Z.tick -= dt;
+    this.zoneMesh.material.opacity = 0.55 + Math.sin(Z.t * 30) * 0.25;
+    this.zoneMesh.rotation.z += dt * 2.4;
+    const done = Z.t >= KIT.ultT;
+    if (Z.tick <= 0 || done) {
+      Z.tick = KIT.ultTick;
+      for (let i = 0; i < (done ? 6 : 2); i++) {
+        const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * ULT_R * 0.6;
+        _C.set(Z.c.x + Math.cos(a) * r, Z.c.y + (0.5 + Math.random() * 1.4) * S, Z.c.z + Math.sin(a) * r);
+        const b = Math.random() * Math.PI * 2, tilt = (Math.random() - 0.5) * 2.2;
+        _U.set(Math.cos(b), 0, Math.sin(b));
+        _V.set(-Math.sin(b) * Math.sin(tilt), Math.cos(tilt), Math.cos(b) * Math.sin(tilt));
+        const a0 = Math.random() * 6.28, sw = (1.6 + Math.random() * 1.6) * (Math.random() < 0.5 ? -1 : 1);
+        this.fx.crescent(_C, _U, _V, a0, a0 + sw, 0.07, { radius: ((done ? 2.6 : 1.5) + Math.random() * 1.3) * S, innerFrac: 0.62, life: 0.2, color: i % 2 ? 0xffffff : 0xff4a55 });
+      }
+      for (const t of ctx.targets) {
+        if (!t.alive || Math.hypot(t.pos.x - Z.c.x, t.pos.z - Z.c.z) > ULT_R + t.radius || Math.abs(t.pos.y - Z.c.y) > 4 * S) continue;
+        this.hit(t, done ? { dmg: 42, heavy: true, finisher: true, hitstop: 0.12, zone: true, cone: Math.PI, range: 3 } : { dmg: 9, hitstop: 0.012, zone: true, light: true, cone: Math.PI, range: 3 }, ctx);
+      }
+    }
+    if (done) {
+      this.fx.ring(_v.copy(Z.c).setY(Z.c.y + 0.3), ULT_R * 1.5, { life: 0.5, color: 0xffffff });
+      this.fx.sparksAt(_v.copy(Z.c).setY(Z.c.y + S), 50, { speed: 26, dir: UP, spread: 1.6, color: RAGE_COLOR, width: 0.08, floor: Z.c.y });
+      this.shake = Math.max(this.shake, 0.6);
+      this.zone = null; this.zoneMesh.visible = false;
+    }
   }
   updateRush(dt, ctx) {
     const R = this.rush;
@@ -702,13 +824,14 @@ export class MechPilot {
       if (!t.alive || this.moveHit.has(t)) continue;
       if (distSeg(t.pos, R.from, this.pos) < t.radius + 1.1 * S && Math.abs(t.pos.y - this.pos.y) < 3 * S) {
         this.moveHit.add(t);
-        this.hit(t, { dmg: 30 + R.lv * 20, heavy: true, finisher: true, hitstop: 0.1 + R.lv * 0.03, cone: Math.PI, range: 3 }, ctx);
+        wound(t, this.time);
+        this.hit(t, { dmg: 30, heavy: true, hitstop: 0.1, wound: true, cone: Math.PI, range: 3 }, ctx);
       }
     }
     if (k >= 1) {
       const right = _v2.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
-      this.fx.crescent(_C.copy(this.pos).setY(this.pos.y + 1.2 * S), right, fw, -1.2, 1.2, 0.08, { radius: (2.2 + R.lv * 0.4) * S, innerFrac: 0.6, life: 0.3, color: R.lv >= 3 ? 0xffe2a8 : 0xd8f0ff });
-      this.slowmo = Math.max(this.slowmo, this.moveHit.size ? 0.35 : 0);
+      this.fx.crescent(_C.copy(this.pos).setY(this.pos.y + 1.2 * S), right, fw, -1.2, 1.2, 0.08, { radius: 3 * S, innerFrac: 0.6, life: 0.3, color: 0xff9a8a });
+      this.openZone(R.zone);
       this.state = 'rushEnd'; this.moveE = 0;
     }
   }
@@ -745,49 +868,22 @@ export class MechPilot {
     }
   }
 
-  hit(t, mv, ctx) {
+  // every hit goes through here: the frenzy and a wound scale it, the frenzy steals life, and it charges the ultimate
+  hit(t, mv0, ctx) {
+    const K = this.kit, dmg = mv0.dmg * K.dmg * woundMul(t, this.time);
+    const mv = { ...mv0, dmg };
     const p = _v.copy(t.pos); p.y += t.height ? t.height * 0.6 : t.radius * 0.6;
-    const color = ctx.onHit(t, mv, p, this) ?? 0xbff4ff;
-    this.fx.sparksAt(p, mv.heavy || mv.finisher ? 40 : 22, { color, speed: 18, life: 0.6, floor: t.pos.y - 0.5 });
-    this.fx.sparksAt(p, 10, { color: 0xeaffff, speed: 26, life: 0.25, width: 0.05 });
-    this.hitstop = Math.max(this.hitstop, mv.hitstop);
-    this.shake = Math.max(this.shake, mv.heavy || mv.finisher ? 0.45 : 0.22);
-    ctx.haptic?.(mv.heavy ? 'heavy' : 'medium');
-  }
-
-  // ---------------- arc slash: two spins, hits everything in reach ----------------
-  startSpin() {
-    this.state = 'spin';
-    this.moveE = 0;
-    this.moveHit.clear();
-    this.spinHits = 0;
-    this.move = null;
-    this.vel.x *= 0.3; this.vel.z *= 0.3;
-    if (!this.grounded) this.vel.y = Math.max(this.vel.y, 1.5);
-  }
-
-  updateSpin(dt, ctx) {
-    this.moveE += dt;
-    this.vel.x *= Math.exp(-dt * 6); this.vel.z *= Math.exp(-dt * 6);
-    const hitsAt = [0.12, 0.34];
-    if (this.spinHits < hitsAt.length && this.moveE >= hitsAt[this.spinHits]) {
-      this.spinHits++;
-      this.moveHit.clear();
-      const r = 2.7 * S;
-      _C.copy(this.pos); _C.y += 1.2 * S;
-      _U.set(1, 0, 0); _V.set(0, 0, -1);
-      this.fx.crescent(_C, _U, _V, 0, Math.PI * 2 - 0.01, 0.2, { radius: r, innerFrac: 0.62, life: 0.3, tail: 3 });
-      this.fx.crescent(_C, _U, _V, 0, Math.PI * 2 - 0.01, 0.18, { radius: r * 0.75, innerFrac: 0.5, life: 0.25, tail: 3, color: 0xe8fbff });
-      this.shake = Math.max(this.shake, 0.35);
-      const mv = { dmg: 18, hitstop: 0.05, heavy: this.spinHits === 2, spin: true };
-      for (const t of ctx.targets) {
-        if (!t.alive) continue;
-        if (Math.hypot(t.pos.x - this.pos.x, t.pos.z - this.pos.z) > r + t.radius) continue;
-        if (Math.abs(t.pos.y - this.pos.y) > 3 * S) continue;
-        this.hit(t, mv, ctx);
-      }
+    let color = ctx.onHit(t, mv, p, this) ?? 0xbff4ff;
+    if (K.raging) { this.hp = Math.min(MAX_HP, this.hp + dmg * KIT.lifesteal * 0.25); color = 0xff6a5a; }
+    if (!mv.zone) K.dealt(dmg);
+    if (mv.light) this.fx.sparksAt(p, 8, { color: 0xff6a5a, speed: 14, life: 0.35, floor: t.pos.y - 0.5 });
+    else {
+      this.fx.sparksAt(p, mv.heavy || mv.finisher ? 40 : 22, { color, speed: 18, life: 0.6, floor: t.pos.y - 0.5 });
+      this.fx.sparksAt(p, 10, { color: 0xeaffff, speed: 26, life: 0.25, width: 0.05 });
     }
-    if (this.moveE >= SPIN_T) { this.state = 'idle'; this.combo = 0; }
+    this.hitstop = Math.max(this.hitstop, mv.hitstop ?? 0.06);
+    this.shake = Math.max(this.shake, mv.heavy || mv.finisher ? 0.45 : mv.light ? 0.1 : 0.22);
+    if (!mv.light) ctx.haptic?.(mv.heavy ? 'heavy' : 'medium');
   }
 
   // ---------------- animation ----------------
@@ -915,20 +1011,18 @@ export class MechPilot {
     let wantPitch = 0, wantRoll = 0, pivot = PIVOT;
     const cur = B.currentName;
     const done = !B.current || (B.current.loop === THREE.LoopOnce && B.current.time >= B.current.getClip().duration - 1e-3);
-    if (st === 'charge' || st === 'rush' || st === 'rushEnd') {
-      // posed by the rush (updateCharge / updateRush)
+    // the gun arm: up on the aim line while a shot is fresh
+    const K = this.kit, aiming = K.gun && K.aimT > 0 && st === 'idle' && this.guardK < 0.05;
+    this.aimK = (this.aimK || 0) + ((aiming ? 1 : 0) - (this.aimK || 0)) * Math.min(1, dt * (aiming ? 22 : 7));
+    if (st === 'rush' || st === 'rushEnd') {
+      // posed by the rush (updateRush)
     } else if (st === 'attack') {
       // the move's clip was started in startAttack; its time follows the move's warp curve
       if (this.move?.warp && cur === this.move.clip) B.scrub(clipTime(this.move, this.moveE));
-    } else if (st === 'spin') {
-      if (enter) B.play('circle', { time: 0.25, fade: 0.05, speed: 2.1, restart: true });
     } else if (st === 'dodge') {
-      if (enter) {
-        const f = this.forward(_v), d = this.dodgeDir;
-        const fwd = d.x * f.x + d.z * f.z;
-        if (fwd > 0.4) B.play('dash', { time: 0.0, fade: 0.05, speed: 2.2, restart: true });
-        else B.play(Math.random() < 0.5 ? 'dodge' : 'dodge2', { time: 0.0, fade: 0.05, speed: 2.0, restart: true });
-      }
+      // the saber's dash rides the rush clip's lunge; the shotgun's a plain thruster dash
+      if (this.dash && !this.dash.gun && B.rm?.rush) B.pose('rush', RUSH.dash0 + (RUSH.dash1 - RUSH.dash0) * Math.min(1, this.moveE / DODGE_T) * 0.8, 0.05);
+      else if (enter) B.play('dash', { time: 0.0, fade: 0.05, speed: 2.2, restart: true });
     } else if (st === 'hit') {
       if (enter) B.play(Math.random() < 0.5 ? 'hit' : 'hit2', { time: 0, fade: 0.05, speed: 1.4, restart: true });
     } else if (st === 'launched') {
@@ -958,12 +1052,13 @@ export class MechPilot {
       if (this.landEdge) B.play('land', { time: 0.4, fade: 0.06, speed: 2.4, restart: true });
     } else if (sp < 0.6) {
       B.play('idle', { fade: 0.3 });
-    } else if (sp < 6) {
-      B.play('walk', { fade: 0.25, speed: clamp(sp / 4.5, 0.6, 1.4) });
-    } else if (sp < 12) {
-      B.play('run', { fade: 0.2, speed: clamp(sp / 12, 0.55, 1.2) });
+    } else if (sp < 5) {
+      // a heavy walk whose feet keep pace with the ground
+      B.play('walk', { fade: 0.25, speed: clamp(sp / (B.pace('walk') || 4.5), 0.5, 1.3) });
+    } else if (sp < 12.5) {
+      B.play('run', { fade: 0.22, speed: clamp(sp / 14, 0.6, 1.1) });
     } else {
-      B.play('sprint', { fade: 0.2, speed: clamp(sp / 17, 0.7, 1.3) });
+      B.play('sprint', { fade: 0.22, speed: clamp(sp / (B.pace('sprint') || 17), 0.7, 1.2) });
     }
     this.landEdge = false;
     // lean into acceleration on foot
@@ -982,10 +1077,12 @@ export class MechPilot {
     this.prevPitch = this.pitch;
     const want = thrustFor({ boost: this.boostK, climb: this.climb, burst, steer });
     if (st === 'dodge') { want.back = Math.max(want.back, 1.2); want.sh = Math.max(want.sh, 0.9); }
-    const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'spin' || st === 'rush';
-    const lit = (st === 'attack' || st === 'spin' || st === 'charge' || st === 'rush' || st === 'rushEnd' || this.swordHold > 0 || this.guardK > 0.3) && !REACT.has(st);
-    const grounded = this.grounded && !this.flying && (st === 'idle' || st === 'attack' || st === 'charge' || st === 'rushEnd') && !this.move?.air;
-    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean, grounded });
+    const cutDash = st === 'dodge' && this.dash && !this.dash.gun;
+    const swinging = (st === 'attack' && this.mv.phase === 'swing') || st === 'rush' || cutDash;
+    const lit = (st === 'attack' || st === 'rush' || st === 'rushEnd' || cutDash || this.swordHold > 0 || this.guardK > 0.3) && !REACT.has(st) && !K.gun;
+    const grounded = this.grounded && !this.flying && (st === 'idle' || st === 'attack' || st === 'rushEnd') && !this.move?.air;
+    B.solve(dt, { pos: this.pos, yaw: this.yaw, pitch: this.pitch, roll: this.roll, pivot, thr: want, swinging, lit, lean: this.lean, grounded,
+      afterPose: this.aimK > 0.01 ? (b) => b.aimGun(this.aimDir, this.aimK, this.recoil) : null });
   }
 
   // sword low and forward at idle (run = 0), trailing behind while running (run = 1); w = arm IK weight

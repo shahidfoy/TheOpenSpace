@@ -4,6 +4,7 @@ import { Parkour } from './chars/parkour.js';
 import { MechPilot } from './mech/mechPilot.js';
 import { SwordFx } from './mech/swordFx.js';
 import { HumanSword } from './chars/katana.js';
+import { KitHud } from '../ui/kitHud.js';
 import { LunarArena, ARENA } from './arena.js';
 import { S as MECH_S } from './mech/mechRig.js';
 import { gridTexture, floorTexture, deckTexture, wallTexture, hexStoneTextures, worldBox } from './chars/simTextures.js';
@@ -577,12 +578,7 @@ export class ShipView {
     const st = P.stamina ?? 1, showS = st < 0.995 || (P.state === 'climb' && P.wall?.box.kind !== 'climb');
     if (this.$stam.classList.contains('on') !== showS) this.$stam.classList.toggle('on', showS);
     if (showS) { this.$stamBar.style.width = `${Math.round(st * 100)}%`; this.$stam.classList.toggle('low', st < 0.25); }
-    const lv = this.sword?.act?.kind === 'charge' ? this.sword.level : -1;
-    if (this.chargeShown !== lv) {
-      this.chargeShown = lv;
-      this.$charge.classList.toggle('on', lv >= 0);
-      this.$charge.querySelectorAll('b').forEach((b, i) => b.classList.toggle('lit', i < lv));
-    }
+    this.kitHud.update(this.area === this.sim && this.sword && this.$ward.hidden ? this.sword.kit : null);
   }
   flash(color, a) {
     const f = this.$impact;
@@ -648,6 +644,7 @@ export class ShipView {
     this.$impact = el.querySelector('.sh-impact');
     this.$stam = el.querySelector('.sh-stam'); this.$stamBar = el.querySelector('.sh-stam i');
     this.$charge = el.querySelector('.sh-charge');
+    this.kitHud = new KitHud(el);
     el.querySelector('.sh-chars').innerHTML = CHARACTERS.map((c) => `
       <button class="sh-card" data-id="${c.id}"><img src="/characters/${c.thumb}" alt=""><b>${c.name}</b><small>${c.blurb}</small></button>`).join('') + `
       <button class="sh-card mech" data-id="mech"><div class="sh-mech-pic"><span>MECH</span></div><b>NEXORION</b><small>Training sim only</small></button>`;
@@ -695,9 +692,9 @@ export class ShipView {
     this.$btns.querySelector('[data-act="spar"]').hidden = !this.mechActive || !!this.arena?.fighting;
     this.$help.hidden = this.mechActive;             // the arena HUD shows the mech's controls
     this.$help.textContent = this.mechActive
-      ? 'WASD move · Space jump/fly · J/click slash · K heavy · L launch · Q arc · F guard · E dodge · X leave'
+      ? 'WASD move · Space jump/fly · J/click attack · R swap · E dash · F/right-click block · K awaken · Q ultimate · X leave'
       : this.helm ? 'Drag to look around · E to stand up'
-      : this.area === this.sim ? 'J slash · K heavy · hold K: charge dash · L launcher · Q spin · E dodge / interact · F guard · Space jump, wall kick, climb leap'
+      : this.area === this.sim ? 'J/click attack · R sword ⇄ shotgun · E dash / interact · F/right-click block · K awaken · Q ultimate · L launcher · Space jump, wall kick'
       : 'WASD move · Shift sprint · Space jump (again in the air) · drag to look · E interact';
     if (this.helm || this.mechActive) { this.near = null; this.$prompt.hidden = true; }
   }
@@ -762,7 +759,7 @@ export class ShipView {
   update(dt, input) {
     this.time += dt;
     const I = input.sample(dt);
-    if (!this.$ward.hidden) { I.move.x = I.move.y = 0; I.jump = false; I.dodge = 0; I.attack = I.heavy = 0; }
+    if (!this.$ward.hidden) { I.move.x = I.move.y = 0; I.jump = false; I.dodge = 0; I.attack = I.heavy = I.swap = I.rage = I.spin = I.launch = 0; I.attackHold = I.guard = false; }
     this.camYaw -= I.lookX * 0.006;
     this.camPitch = THREE.MathUtils.clamp(this.camPitch + I.lookY * 0.004, -0.6, 1.2);
     if (this.mechActive) this.mechDist = THREE.MathUtils.clamp(this.mechDist * I.zoom, 10, 45);
@@ -836,6 +833,7 @@ export class ShipView {
     for (const d of this.dummies) d.group.visible = d.alive && !fight;
     M.update(dt, I, ctx);
     A.update(dt, dt);
+    this.kitHud.update(M.kit);
     const wasFighting = this.sparBtnState;
     if (wasFighting !== A.fighting) { this.sparBtnState = A.fighting; this.syncButtons(); }
 

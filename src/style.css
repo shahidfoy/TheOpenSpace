@@ -700,3 +700,25 @@ b, strong { font-weight: 600; }
 .sh-charge b { width: 22px; height: 8px; background: rgba(10,14,22,0.6); border: 1px solid var(--line-2); transform: skewX(-20deg); }
 .sh-charge b.lit { background: linear-gradient(90deg, #9fe8ff, #fff); box-shadow: 0 0 10px rgba(159,232,255,0.9); }
 .sh-charge b.lit:nth-child(3) { background: linear-gradient(90deg, #ffd27a, #fff3d0); box-shadow: 0 0 12px rgba(255,210,122,0.9); }
+
+/* Daywalker kit readout: weapon + shells, dash, awakening, ultimate (ui/kitHud.js) */
+.kit-hud { position: absolute; left: 50%; bottom: calc(var(--bot) + 108px); transform: translateX(-50%); display: flex; gap: 8px; pointer-events: none; font-family: var(--mono); }
+.kit-hud[hidden] { display: none; }
+.kit-chip { --fill: 100%; position: relative; display: flex; align-items: center; gap: 6px; min-width: 86px; height: 26px; padding: 0 9px; background: rgba(8,11,16,0.72); border: 1px solid var(--line-2); border-left: 2px solid #cfe9ff; font-size: 10.5px; letter-spacing: 0.1em; color: #e9f1f8; overflow: hidden; }
+.kit-chip::before { content: ''; position: absolute; left: 0; bottom: 0; height: 2px; width: var(--fill); background: #cfe9ff; transition: width 0.1s linear; }
+.kit-chip kbd { font-family: var(--mono); font-size: 10px; padding: 0 4px; color: var(--dim); border: 1px solid var(--line-2); border-radius: 3px; }
+.kit-chip b { font-weight: 400; }
+.kit-chip em { margin-left: auto; font-style: normal; color: var(--dim); font-size: 10px; }
+.kit-chip[data-state="cd"] { color: var(--dim); border-left-color: var(--line-2); }
+.kit-chip[data-state="cd"]::before { background: #6f7c8a; }
+.kit-rage[data-state="on"] { border-left-color: #ff2a3a; color: #ffd0d0; box-shadow: 0 0 12px rgba(255,42,58,0.45); }
+.kit-rage[data-state="on"]::before, .kit-ult[data-state="ready"]::before { background: #ff2a3a; }
+.kit-ult[data-state="ready"] { border-left-color: #ff2a3a; color: #fff; box-shadow: 0 0 12px rgba(255,42,58,0.4); }
+.kit-weapon[data-w="gun"] { border-left-color: #ffb080; }
+.kit-shells { display: none; gap: 2px; margin-left: auto; }
+.kit-weapon[data-w="gun"] .kit-shells { display: flex; }
+.kit-shells i { width: 4px; height: 11px; background: rgba(255,255,255,0.14); }
+.kit-shells i.on { background: #ffb080; box-shadow: 0 0 5px rgba(255,176,128,0.7); }
+.kit-weapon.reload .kit-shells { animation: kit-reload 0.5s linear infinite; }
+@keyframes kit-reload { 50% { opacity: 0.25; } }
+@media (max-width: 640px) { .kit-hud { bottom: auto; top: calc(var(--top) + 46px); gap: 4px; } .kit-chip { min-width: 0; padding: 0 6px; } .kit-chip kbd { display: none; } }

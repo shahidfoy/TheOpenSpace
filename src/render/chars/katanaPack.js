@@ -9,14 +9,13 @@ import * as THREE from 'three';
 // the root motion drives the character instead of being baked into the pose.
 
 const BASE = '/characters/anims/';
-let PACK = null;
-export function loadKatanaPack() {
-  if (!PACK) {
-    PACK = Promise.all([fetch(BASE + 'katana.json').then((r) => r.json()), fetch(BASE + 'katana.bin').then((r) => r.arrayBuffer())])
-      .then(([json, bin]) => ({ json, bin }));
-  }
-  return PACK;
+const PACKS = {};
+// 'katana': the sword pack; 'loco': Mixamo locomotion loops in the same format (scripts/build-loco.mjs)
+export function loadPack(name) {
+  return (PACKS[name] ||= Promise.all([fetch(`${BASE}${name}.json`).then((r) => r.json()), fetch(`${BASE}${name}.bin`).then((r) => r.arrayBuffer())])
+    .then(([json, bin]) => ({ json, bin })));
 }
+export const loadKatanaPack = () => loadPack('katana');
 
 // bone -> the bone whose position gives its direction
 const CHILD = {
@@ -25,6 +24,7 @@ const CHILD = {
   rightShoulder: 'rightUpperArm', rightUpperArm: 'rightLowerArm', rightLowerArm: 'rightHand',
   leftUpperLeg: 'leftLowerLeg', leftLowerLeg: 'leftFoot', leftFoot: 'leftToes',
   rightUpperLeg: 'rightLowerLeg', rightLowerLeg: 'rightFoot', rightFoot: 'rightToes',
+  leftHand: 'leftMiddleProximal', rightHand: 'rightMiddleProximal',
 };
 
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _m = new THREE.Matrix4();
@@ -40,6 +40,8 @@ function frameQuat(left, right, hips, head) {
 //   node(b)      the Object3D animated for canonical bone b (or null)
 //   root         the Object3D whose frame the rig is measured in (tracks' parent chain starts below it)
 //   G            quaternion: canonical frame (facing +Z) -> root frame (e.g. a VRM 0.x scene faces -Z: a half turn)
+//   point(b)     optional: rest position (root frame) of a canonical bone the rig has no node for. A rig without
+//                finger bones gives its hands a direction with 'leftMiddleProximal' / 'rightMiddleProximal'
 //   names        optional subset of clip names
 // Returns { clips: { name: AnimationClip }, meta: { height, clips: { name: { dur, swings } } }, rm: { name: {...} },
 //           grip: { q, p, length }, scale }.
@@ -67,6 +69,13 @@ export function retargetPack(pack, rig, names = null) {
   // target rest positions seen in the canonical frame
   const tC = {};
   for (const b of B) if (tRestP[b]) tC[b] = tRestP[b].clone().applyQuaternion(Ginv);
+  // knuckles: rest positions only (the pack does not animate fingers); they give the hands direction and roll
+  for (const b of Object.keys(json.restOnly || {})) {
+    sP[b] = v3(json.restOnly[b].p);
+    const n = rig.node(b);
+    const p = n ? new THREE.Vector3().setFromMatrixPosition(_m.multiplyMatrices(rootInv, n.matrixWorld)) : rig.point?.(b);
+    if (p) tC[b] = p.clone().applyQuaternion(Ginv);
+  }
   const qFace = frameQuat(sP.leftUpperLeg, sP.rightUpperLeg, sP.hips, sP.head)
     .multiply(frameQuat(tC.leftUpperLeg, tC.rightUpperLeg, tC.hips, tC.head).invert());
   const align = {}, sRestInv = {};
@@ -80,6 +89,15 @@ export function retargetPack(pack, rig, names = null) {
       const dt = tC[c].clone().sub(tC[b]).normalize().applyQuaternion(qFace);
       const ds = sP[c].clone().sub(sP[b]).normalize();
       A = new THREE.Quaternion().setFromUnitVectors(dt, ds).multiply(qFace);
+      // hands: the direction alone leaves the roll about it open; square the knuckle row (little -> index) too, so
+      // the palm faces the way the source's does
+      const side = /^(left|right)Hand$/.exec(b)?.[1];
+      const i = side && `${side}IndexProximal`, l = side && `${side}LittleProximal`;
+      if (side && tC[i] && tC[l]) {
+        const at = tC[i].clone().sub(tC[l]).applyQuaternion(A), as = sP[i].clone().sub(sP[l]);
+        at.addScaledVector(ds, -at.dot(ds)).normalize(); as.addScaledVector(ds, -as.dot(ds)).normalize();
+        A.premultiply(new THREE.Quaternion().setFromUnitVectors(at, as));
+      }
     } else A = qFace.clone();
     // W_target(t) = G * Qs(t) * Qs_rest^-1 * A * (G^-1 Rt)   ->  at rest: G * A * G^-1 Rt
     align[b] = A.multiply(tq);
@@ -140,10 +158,11 @@ export function retargetPack(pack, rig, names = null) {
     for (let f = 0; f < n; f++) { r.fwd.push(rm[f * 4] * scale); r.left.push(rm[f * 4 + 1] * scale); r.up.push(rm[f * 4 + 2] * scale); }
     out.rm[name] = r;
     out.meta.clips[name] = {
-      dur: c.dur,
+      dur: c.dur, two: c.two != null ? new Float32Array(bin, c.two, n) : null,
       swings: c.swings.map((s) => ({ ...s, c: s.c.map((x) => x * scale), r: s.r * scale, reach: s.reach * scale })),
     };
   }
+  if (!json.grip) return out;
   // the sword grip, relative to the right hand node: katana axes (+Y blade, +X edge) in the hand's frame
   const gb = v3(json.grip.blade), ge = v3(json.grip.edge);
   const K = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(ge, gb, new THREE.Vector3().crossVectors(ge, gb)));

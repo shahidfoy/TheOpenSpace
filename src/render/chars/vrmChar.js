@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { retargetKatanaVrm } from './katana.js';
+import { Hand } from './handIK.js';
 
 // Playable VRM characters (VRoid Hub models, see public/characters/CREDITS.txt) animated with Mixamo clips retargeted
 // at load time onto the VRM humanoid. The retarget follows three-vrm's Mixamo example: every Mixamo bone's rotation
@@ -192,6 +193,9 @@ export class VrmChar {
     c.outfit = outfit;
     Object.keys(CLIPS).forEach((name, i) => c.addClip(name, retarget(assets[i], vrm, name, CLIPS[name][1])));
     c.addClip('wallrun_m', mirrorClip(c.actions.wallrun.getClip(), vrm, 'wallrun_m'));
+    // hands, measured on the rest pose: finger grips and where a handle sits in the fist
+    const nb = (b) => vrm.humanoid.getNormalizedBoneNode(b);
+    c.hands = { left: new Hand(nb, vrm.scene, 'left'), right: new Hand(nb, vrm.scene, 'right') };
     // the anime katana pack, retargeted onto this body (needs the rest pose, so before anything plays)
     try {
       const kat = await retargetKatanaVrm(vrm);
