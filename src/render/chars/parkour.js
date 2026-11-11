@@ -64,6 +64,32 @@ export class Parkour {
       return;
     }
 
+    // deep water (ctx.water: { y, contains(x, z) }): float at the surface and swim; push into a quay or jump at it to
+    // haul out
+    const W = ctx.water;
+    if (W && st !== 'climb' && W.contains(this.pos.x, this.pos.z)) {
+      const floatY = W.y - this.H * 0.68;
+      if (st === 'swim' || (this.pos.y < floatY + 0.1 && v.y <= 0.5)) {
+        if (st !== 'swim') { this.state = 'swim'; this.splash = 1; v.y *= 0.25; }
+        this.grounded = false; this.airJumps = 0;
+        const top = I.boost ? 3.8 : 2.5, k = 1 - Math.exp(-2.5 * dt);
+        v.x = lerp(v.x, wish.x * top, k); v.z = lerp(v.z, wish.z * top, k);
+        this.bob = (this.bob || 0) + dt;
+        v.y += ((floatY + Math.sin(this.bob * 2.1) * 0.05 - this.pos.y) * 10 - v.y * 4.5) * dt;
+        const hs = Math.hypot(v.x, v.z);
+        if (hs > 0.3 && wish.lengthSq() > 0.01) this.yaw += angDiff(this.yaw, Math.atan2(v.x, v.z)) * (1 - Math.exp(-6 * dt));
+        const L = this.wall;
+        const into = L ? -wish.dot(L.n) : 0;
+        this.wallPush = L && into > 0.5 ? this.wallPush + dt : 0;
+        if (L && (into > 0.3 && jumpEdge || this.wallPush > 0.35) && this.tryMantle(L.box, L.n)) { this.wallPush = 0; return; }
+        if (jumpEdge) { v.y = 5; this.state = 'air'; this.ch.play('jump', { time: 0.22, fade: 0.08, restart: true }); }
+        this.integrate(dt, ctx.boxes);
+        if (this.state === 'ground') this.state = 'swim';
+        this.animate(dt);
+        return;
+      }
+    } else if (st === 'swim') this.state = 'air';
+
     if (st === 'climb') {
       const n = this.wall.n, b = this.wall.box;
       const free = b.kind !== 'climb';                               // a plain wall: on stamina
@@ -324,6 +350,10 @@ export class Parkour {
       c.play(c.actions.k_run ? 'k_run' : 'sprint', { fade: 0.12, speed: clamp((this.wrSpeed || WALLRUN_V) / WALLRUN_V, 0.95, 1.35) });
     } else if (st === 'mantle') {
       // the climb clip at speed sells the pull-up
+    } else if (st === 'swim') {
+      // treading water when still, a slow stroke (the run, leaned forward) when moving
+      if (hs > 0.4) c.play(run, { fade: 0.35, speed: clamp(hs / 4, 0.4, 0.8) });
+      else c.play(idle, { fade: 0.35, speed: 0.7 });
     } else if (this.grounded) {
       if (this.landT > 0 && c.currentName === 'land') { /* let the landing play */ }
       else if (hs < 0.35) c.play(idle, { fade: 0.25 });
@@ -352,7 +382,8 @@ export class Parkour {
     if (!contact) { this.climbOff *= 0.8; this.wrOff *= 0.8; }
     if (this.wall && (st === 'climb' || Math.abs(this.climbOff) > 1e-3)) root.position.addScaledVector(this.wall.n, this.climbOff);
     if (this.wall && (st === 'wallrun' || Math.abs(this.wrOff) > 1e-3)) root.position.addScaledVector(this.wall.n, this.wrOff);
-    root.rotation.set(0, this.yaw + (this.legs?.leg || 0), this.roll, 'YXZ');
+    this.pitch = (this.pitch || 0) + ((st === 'swim' ? 0.55 * clamp(hs / 2.5, 0, 1) : 0) - (this.pitch || 0)) * Math.min(1, dt * 5);
+    root.rotation.set(this.pitch, this.yaw + (this.legs?.leg || 0), this.roll, 'YXZ');
     c.update(dt);
     if (contact) {
       root.updateMatrixWorld(true);

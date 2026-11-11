@@ -498,6 +498,8 @@ export class ShipView {
     this.setHelm(false);
     this.area = area;
     this.scene = area.scene;
+    const far = area.far || 2000;
+    if (this.camera.far !== far) { this.camera.far = far; this.camera.updateProjectionMatrix(); }
     const sp = at ? { pos: new THREE.Vector3(...at.pos), yaw: at.yaw } : area.spawn;
     if (this.ctrl) { this.ctrl.spawn(sp.pos, sp.yaw); area.scene.add(this.char.root); this.char.root.visible = true; }
     this.camYaw = sp.yaw + Math.PI; this.snapCam = true;
@@ -534,9 +536,7 @@ export class ShipView {
     setTimeout(() => {
       try {
         const t0 = performance.now();
-        this.sg = buildSingapore();
-        this.sg.scene.environment = this.deck.scene.environment;
-        this.sg.scene.environmentIntensity = this.deck.scene.environmentIntensity;
+        this.sg = buildSingapore(this.app.renderer);
         console.info(`Singapore built in ${Math.round(performance.now() - t0)} ms · ${this.sg.boxes.length} colliders · ${this.sg.treeCount} trees`);
         this.go(this.sg, spot);
       } catch (e) {
@@ -912,7 +912,7 @@ export class ShipView {
       if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.ads = this.gunView.adsK > 0.05; this.sword.world = this.simWorld ||= worldOfBoxes(this.sim.boxes); this.sword.onFire = () => this.gunView.fired(); this.sword.onGunHit = (k) => this.gunView.hit(k); this.sword.vm = this.gunView.vm; }
       const pdt = this.sword ? this.sword.update(dt, I, P, this.simTargets, fighting) : dt;
       if (this.sword && this.area === this.sim) this.bots.update(pdt, P, this.sword, fighting);
-      P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn });
+      P.update(pdt, I, { boxes: this.area.boxes, camYaw: this.camYaw, killY: this.area.killY, spawn: this.area.spawn, water: this.area.water });
       this.updateMeters(P);
       if (!this.$ward.hidden && this.area === this.deck) {
         // wardrobe preview: face-on, framed to the left of the panel
@@ -1015,6 +1015,8 @@ export class ShipView {
     }
     const target = want.multiplyScalar(dist).add(head);
     if (!collide) target.y = Math.max(target.y, 1.2);
+    const W = this.area.water;                          // keep the lens above the surface
+    if (W && target.y < W.y + 0.45 && W.contains(target.x, target.z)) target.y = W.y + 0.45;
     if (this.snapCam) { this.camera.position.copy(target); this.snapCam = false; }
     else this.camera.position.lerp(target, 1 - Math.exp(-14 * dt));
     this.camera.lookAt(head);
