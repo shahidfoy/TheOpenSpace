@@ -644,7 +644,21 @@ b, strong { font-weight: 600; }
 .sh-help { position: absolute; bottom: calc(var(--bot) + 84px); left: 50%; transform: translateX(-50%); font-size: 11px; letter-spacing: 0.1em; color: var(--dim); white-space: nowrap; }
 .sh-prompt { position: absolute; bottom: calc(var(--bot) + 120px); left: 50%; transform: translateX(-50%); pointer-events: auto; padding: 10px 16px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.1em; color: #0a0e14; font-weight: 700; background: linear-gradient(90deg, var(--ice), #c4f0ff); border: 0; clip-path: var(--cut); cursor: pointer; }
 .sh-prompt kbd { padding: 0 6px; margin-right: 6px; background: rgba(10,14,22,0.2); border: 1px solid rgba(10,14,22,0.5); border-radius: 3px; }
-.sh-prompt[hidden], .sh-load[hidden], .sh-ward[hidden] { display: none; }
+.sh-prompt[hidden], .sh-load[hidden], .sh-ward[hidden], .sh-portal[hidden] { display: none; }
+/* portal: pick a simulated area and where to arrive in it */
+.sh-portal { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: auto; background: rgba(4,6,10,0.5); backdrop-filter: blur(4px); }
+.sh-portal .sh-card-wrap { width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 140px); overflow-y: auto; text-align: left; }
+.sh-portal h3 { text-align: center; }
+.sh-dest { margin-top: 12px; padding: 10px 12px; background: rgba(10,14,22,0.55); border: 1px solid var(--line-2); border-left: 2px solid #ff6a78; clip-path: var(--cut); }
+.sh-dest > b { font-size: 13px; letter-spacing: 0.16em; }
+.sh-dest > small { display: block; margin: 2px 0 8px; font-size: 10px; color: var(--dim); letter-spacing: 0.08em; }
+.sh-dest.off { opacity: 0.45; border-left-color: var(--dim); }
+.sh-spots { display: flex; flex-wrap: wrap; gap: 6px; }
+.sh-spot { display: grid; gap: 2px; min-width: 150px; padding: 6px 9px; text-align: left; font-family: var(--mono); color: var(--text); background: rgba(127,212,255,0.06); border: 1px solid var(--line-2); cursor: pointer; }
+.sh-spot b { font-size: 11px; letter-spacing: 0.06em; }
+.sh-spot small { font-size: 9px; color: var(--dim); }
+.sh-spot:hover { background: rgba(127,212,255,0.16); border-color: var(--ice); }
+.sh-portal .sh-close { display: block; margin: 16px auto 0; }
 .sh-load { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 12px 18px; font-size: 13px; letter-spacing: 0.2em; color: var(--ice); background: rgba(6,8,12,0.75); border: 1px solid var(--line-2); clip-path: var(--cut); }
 .sh-fade { position: absolute; inset: 0; background: #000; opacity: 0; transition: opacity 0.25s; }
 .sh-fade.on { opacity: 1; }

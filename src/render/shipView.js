@@ -13,6 +13,9 @@ import { KitTutorial } from '../ui/kitTutorial.js';
 import { LunarArena, ARENA } from './arena.js';
 import { S as MECH_S } from './mech/mechRig.js';
 import { gridTexture, floorTexture, deckTexture, wallTexture, hexStoneTextures, worldBox, concreteTexture, pavingTexture, facadeTexture, brickTexture, ladderTexture } from './chars/simTextures.js';
+import { Area, label } from './worlds/area.js';
+import { portalGate } from './worlds/portal.js';
+import { buildSingapore, SG_SPOTS } from './worlds/singapore.js';
 
 // Inside the mothership: you dock with the station and walk it as one of the playable characters.
 // Hangar deck: a long hall whose whole outer wall is glass, the airlock back to space, the door to the training
@@ -21,7 +24,8 @@ import { gridTexture, floorTexture, deckTexture, wallTexture, hexStoneTextures, 
 // frame from the station with the camera's own orientation and sampled in screen space, so Earth, the Sun, the
 // stars, drones and your parked ship sit where they really are, at infinity, with no fake backdrop.
 // Training sim: a holographic gray-box course for parkour, plus a mech yard with training dummies where you can
-// take the NEXORION mech out.
+// take the NEXORION mech out, and a portal atrium whose gates open onto simulated areas (worlds/), each built on its
+// first visit: Singapore's Marina Bay is the first.
 
 const CHAR_KEY = 'openspace_char', MECH_KEY = 'openspace_sim_mech', LOOK_KEY = 'openspace_look';
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4();
@@ -34,19 +38,6 @@ const DECK_FRAME_INV = (() => {
   return new THREE.Matrix4().makeBasis(NADIR, b, c).transpose();
 })();
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
-
-function label(text, sub = '', color = '#7fe6ff') {
-  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
-  const g = c.getContext('2d');
-  g.font = '700 54px "Rajdhani", "Segoe UI", sans-serif'; g.textAlign = 'center';
-  g.shadowColor = color; g.shadowBlur = 18; g.fillStyle = color;
-  g.fillText(text, 256, 66);
-  if (sub) { g.font = '500 26px "Rajdhani", "Segoe UI", sans-serif'; g.shadowBlur = 8; g.fillStyle = '#cfefff'; g.fillText(sub, 256, 108); }
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false, toneMapped: false }));
-  s.scale.set(4, 1, 1);
-  return s;
-}
 
 // a console screen: readouts drawn once
 function screenTexture(seed, tint = '#58e4ff') {
@@ -73,30 +64,6 @@ class HoloArena extends LunarArena {
     const st = this.view.app.state.stats, best = st.arenaBest;
     super.end(reason);
     st.arenaBest = best;
-  }
-}
-
-class Area {
-  constructor(name) {
-    this.name = name;
-    this.scene = new THREE.Scene();
-    this.boxes = [];
-    this.meshes = [];              // camera collision
-    this.interact = [];
-    this.spawn = { pos: new THREE.Vector3(), yaw: 0 };
-    this.killY = -30;
-  }
-  // a box from min corner + size; kind: solid (default), run, climb
-  box(x, y, z, w, h, d, mat, { kind = 'solid', tile = 1, collide = true, shadow = true } = {}) {
-    const m = new THREE.Mesh(worldBox(w, h, d, tile), mat);
-    m.position.set(x + w / 2, y + h / 2, z + d / 2);
-    m.castShadow = shadow; m.receiveShadow = true;
-    this.scene.add(m);
-    if (collide) { this.collider(x, y, z, w, h, d, kind); this.meshes.push(m); }
-    return m;
-  }
-  collider(x, y, z, w, h, d, kind = 'solid') {
-    this.boxes.push({ min: new THREE.Vector3(x, y, z), max: new THREE.Vector3(x + w, y + h, z + d), kind });
   }
 }
 
@@ -475,6 +442,26 @@ export class ShipView {
     ], (Z, n) => this.app.hud?.toast(`${Z.name} · WAVE ${n}`, 'good'));
     this.simTargets = [...this.dojo, ...this.bots.targets];
 
+    // ===== portal atrium: gates onto the simulated areas =====
+    const atrium = new THREE.MeshStandardMaterial({ map: this.hex.map, emissiveMap: this.hex.emissive, emissive: 0xffffff, emissiveIntensity: 0.9, bumpMap: this.hex.bump, bumpScale: 3, roughness: 0.4, metalness: 0.2 });
+    A.box(-70, 0, -24, 30, 0.4, 48, atrium, { tile: 4 });
+    const gates = [];
+    [[-12, { colA: 0xff3a4a, colB: 0xf2d6da, title: 'SINGAPORE', sub: 'Marina Bay · walk in to travel', labelColor: '#ff9aa4' }, 'portal'],
+     [0, { title: 'AREA 02', sub: 'offline · not yet simulated', online: false, labelColor: '#8a98a8' }, 'offline'],
+     [12, { title: 'AREA 03', sub: 'offline · not yet simulated', online: false, labelColor: '#8a98a8' }, 'offline']].forEach(([z, opt, act]) => {
+      const g = portalGate(opt);
+      g.group.position.set(-62, 0.4, z); g.group.rotation.y = Math.PI / 2; S.add(g.group);
+      A.collider(-63.1, 0.4, z - 3.2, 2.2, 0.5, 6.4);
+      A.collider(-62.3, 0.4, z - 2.75, 0.6, 2, 0.5); A.collider(-62.3, 0.4, z + 2.25, 0.6, 2, 0.5);
+      A.interact.push({ pos: new THREE.Vector3(-59, 0.4, z), r: 2.6, text: act === 'portal' ? 'Step through · choose where to arrive' : 'Gate offline', act });
+      gates.push(g);
+    });
+    const pal = label('PORTAL ATRIUM', 'gates to simulated areas'); pal.position.set(-50, 9, 0); pal.scale.set(10, 2.5, 1); S.add(pal);
+    const pal2 = label('PORTAL ATRIUM', 'simulated areas · head west', '#ff9aa4'); pal2.position.set(14, 3.4, -14); pal2.scale.set(5, 1.25, 1); S.add(pal2);
+    this.atriumSpot = { name: 'Portal atrium', sub: 'the gates', pos: [-54, 0.4, 0], yaw: -Math.PI / 2 };
+    let gt = 0;
+    A.tick = (dt) => { gt += dt; for (const g of gates) g.tick(gt); };
+
     S.add(new THREE.HemisphereLight(0xcfe6ff, 0x8a8f96, 1.1));
     const sun = new THREE.DirectionalLight(0xfff2dd, 2.4);
     sun.position.set(30, 60, -20); sun.castShadow = true;
@@ -482,7 +469,7 @@ export class ShipView {
     Object.assign(sun.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 1, far: 180 });
     sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.02;
     S.add(sun, sun.target);
-    this.sun = sun;
+    this.sun = sun; A.sun = sun;
     A.spawn.pos.set(30, 0, -13); A.spawn.yaw = 0;
     A.killY = -20;
     A.title = 'TRAINING SIM';
@@ -506,16 +493,59 @@ export class ShipView {
     if (craft) craft.visible = true;
   }
 
-  go(area) {
+  go(area, at = null) {
     if (this.area === this.sim && area !== this.sim) this.stopMech(false);
     this.setHelm(false);
     this.area = area;
     this.scene = area.scene;
-    if (this.ctrl) { this.ctrl.spawn(area.spawn.pos, area.spawn.yaw); area.scene.add(this.char.root); this.char.root.visible = true; }
-    this.camYaw = area.spawn.yaw + Math.PI; this.snapCam = true;
+    const sp = at ? { pos: new THREE.Vector3(...at.pos), yaw: at.yaw } : area.spawn;
+    if (this.ctrl) { this.ctrl.spawn(sp.pos, sp.yaw); area.scene.add(this.char.root); this.char.root.visible = true; }
+    this.camYaw = sp.yaw + Math.PI; this.snapCam = true;
     this.zone = '';
     this.syncButtons();
-    if (area === this.sim && this.simMech) this.startMech();
+    if (area === this.sim && this.simMech && !at) this.startMech();
+  }
+
+  // ---------------- portals: simulated areas, each built the first time you go ----------------
+  get portalAreas() {
+    return [
+      { id: 'sim', name: 'TRAINING SIM', sub: 'holo course · mech yard · portal atrium', spots: [this.atriumSpot, { name: 'Practice range', sub: 'where you came in', pos: this.sim.spawn.pos.toArray(), yaw: this.sim.spawn.yaw }] },
+      { id: 'sg', name: 'SINGAPORE', sub: 'Marina Bay · half-scale city sim', spots: SG_SPOTS },
+      { id: '', name: 'AREA 02', sub: 'offline · not yet simulated', spots: [] },
+    ];
+  }
+  openPortal() {
+    const spot = (a, s, i) => '<button class="sh-spot" data-area="' + a.id + '" data-i="' + i + '"><b>' + s.name + '</b><small>' + (s.sub || '') + '</small></button>';
+    this.$portal.querySelector('.sh-dests').innerHTML = this.portalAreas.map((a) =>
+      '<div class="sh-dest' + (a.id ? '' : ' off') + '"><b>' + a.name + '</b><small>' + a.sub + '</small><div class="sh-spots">' + a.spots.map((s, i) => spot(a, s, i)).join('') + '</div></div>').join('');
+    this.$portal.hidden = false;
+  }
+  closePortal() { this.$portal.hidden = true; }
+  get uiOpen() { return !this.$ward.hidden || !this.$portal.hidden; }
+  travel(id, i) {
+    const spot = this.portalAreas.find((a) => a.id === id)?.spots[i];
+    if (!spot) return;
+    this.closePortal();
+    if (id === 'sim') { this.fade(() => this.go(this.sim, spot)); return; }
+    if (this.sg) { this.fade(() => this.go(this.sg, spot)); return; }
+    // first visit: build the city behind the fade
+    this.$fade.classList.add('on');
+    this.$load.hidden = false; this.$load.textContent = 'SIMULATING SINGAPORE…';
+    setTimeout(() => {
+      try {
+        const t0 = performance.now();
+        this.sg = buildSingapore();
+        this.sg.scene.environment = this.deck.scene.environment;
+        this.sg.scene.environmentIntensity = this.deck.scene.environmentIntensity;
+        console.info(`Singapore built in ${Math.round(performance.now() - t0)} ms · ${this.sg.boxes.length} colliders · ${this.sg.treeCount} trees`);
+        this.go(this.sg, spot);
+      } catch (e) {
+        console.error('singapore build failed', e);
+        this.app.hud?.toast("Couldn't simulate Singapore", 'bad');
+      }
+      this.$load.hidden = true;
+      setTimeout(() => this.$fade.classList.remove('on'), 120);
+    }, 320);
   }
 
   look(id) { return (this.looks[id] ||= { outfit: null, cloth: null, hair: null }); }
@@ -625,7 +655,7 @@ export class ShipView {
     const st = P.stamina ?? 1, showS = st < 0.995 || (P.state === 'climb' && P.wall?.box.kind !== 'climb');
     if (this.$stam.classList.contains('on') !== showS) this.$stam.classList.toggle('on', showS);
     if (showS) { this.$stamBar.style.width = `${Math.round(st * 100)}%`; this.$stam.classList.toggle('low', st < 0.25); }
-    const kit = this.area === this.sim && this.sword && this.$ward.hidden ? this.sword.kit : null;
+    const kit = this.area === this.sim && this.sword && !this.uiOpen ? this.sword.kit : null;
     this.kitHud.update(kit);
     this.tutorial.update(kit, this.app.hud?.keyboard !== false);
   }
@@ -654,6 +684,8 @@ export class ShipView {
     else if (a === 'leaveMech') this.fade(() => this.stopMech(true));
     else if (a === 'spar') { if (this.arena && !this.arena.fighting && this.mech?.alive) this.arena.start(); }
     else if (a === 'helm') this.setHelm(!this.helm);
+    else if (a === 'portal') this.openPortal();
+    else if (a === 'offline') this.app.hud?.toast('This gate is offline · that area has not been simulated yet', 'bad');
   }
 
   fade(fn) {
@@ -667,7 +699,7 @@ export class ShipView {
     el.className = 'ship-hud'; el.hidden = true;
     el.innerHTML = `
       <div class="sh-title"></div>
-      <div class="sh-btns"><button class="sh-btn" data-act="leaveMech" hidden>⏏ LEAVE MECH <kbd>X</kbd></button><button class="sh-btn" data-act="deck" hidden>⟲ EXIT SIM</button><button class="sh-btn" data-act="helm" hidden>STAND UP <kbd>E</kbd></button><button class="sh-btn spar" data-act="spar" hidden>⚔ START SPARRING <kbd>Enter</kbd></button></div>
+      <div class="sh-btns"><button class="sh-btn" data-act="leaveMech" hidden>⏏ LEAVE MECH <kbd>X</kbd></button><button class="sh-btn" data-act="portal" hidden>◎ PORTALS</button><button class="sh-btn" data-act="deck" hidden>⟲ EXIT SIM</button><button class="sh-btn" data-act="helm" hidden>STAND UP <kbd>E</kbd></button><button class="sh-btn spar" data-act="spar" hidden>⚔ START SPARRING <kbd>Enter</kbd></button></div>
       <div class="sh-help"></div>
       <button class="sh-prompt" hidden></button>
       <div class="sh-load" hidden></div>
@@ -680,7 +712,10 @@ export class ShipView {
         <div class="sh-sec">OUTFIT COLOUR</div><div class="sh-sw" data-k="cloth"></div>
         <div class="sh-sec">HAIR COLOUR</div><div class="sh-sw" data-k="hair"></div></div>
         <div class="sh-mechnote" hidden>Mechs are piloted in the training sim's mech yard, and on the surface of other worlds.</div>
-        <button class="sh-close">DONE</button></div></div>`;
+        <button class="sh-close">DONE</button></div></div>
+      <div class="sh-portal" hidden><div class="sh-card-wrap"><h3>PORTAL</h3>
+        <div class="sh-sec">SIMULATED AREAS · CHOOSE WHERE TO ARRIVE</div><div class="sh-dests"></div>
+        <button class="sh-close sh-pclose">CLOSE</button></div></div>`;
     document.body.appendChild(el);
     this.hud = el;
     this.$title = el.querySelector('.sh-title');
@@ -689,6 +724,13 @@ export class ShipView {
     this.$load = el.querySelector('.sh-load');
     this.$fade = el.querySelector('.sh-fade');
     this.$ward = el.querySelector('.sh-ward');
+    this.$portal = el.querySelector('.sh-portal');
+    this.$portal.addEventListener('click', (e) => {
+      const b = e.target.closest('.sh-spot');
+      if (b) this.travel(b.dataset.area, +b.dataset.i);
+      else if (e.target.closest('.sh-pclose') || e.target === this.$portal) this.closePortal();
+    });
+    addEventListener('keydown', (e) => { if (e.code === 'Escape' && !this.$portal.hidden) this.closePortal(); });
     this.$btns = el.querySelector('.sh-btns');
     this.$impact = el.querySelector('.sh-impact');
     this.$stam = el.querySelector('.sh-stam'); this.$stamBar = el.querySelector('.sh-stam i');
@@ -733,7 +775,7 @@ export class ShipView {
       if (this.char?.def.id === this.wardSel) applyColours(this.char.vrm, this.look(this.wardSel));
       this.renderWardrobe();
     }));
-    el.querySelector('.sh-close').addEventListener('click', () => this.closeWardrobe());
+    el.querySelector('.sh-ward .sh-close').addEventListener('click', () => this.closeWardrobe());
     this.$prompt.addEventListener('click', () => { if (this.near) this.act(this.near.act); });
     this.$btns.addEventListener('click', (e) => { const b = e.target.closest('[data-act]'); if (b) this.act(b.dataset.act); });
     // X leaves the mech (E is the mech's dodge)
@@ -741,15 +783,17 @@ export class ShipView {
   }
   syncButtons() {
     if (!this.$btns) return;
-    const inSim = this.area === this.sim;
+    const inSim = this.area !== this.deck;
     this.$btns.querySelector('[data-act="leaveMech"]').hidden = !this.mechActive;
     this.$btns.querySelector('[data-act="deck"]').hidden = !inSim;
+    this.$btns.querySelector('[data-act="portal"]').hidden = !inSim || this.mechActive;
     this.$btns.querySelector('[data-act="helm"]').hidden = !this.helm;
     this.$btns.querySelector('[data-act="spar"]').hidden = !this.mechActive || !!this.arena?.fighting;
     this.$help.hidden = this.mechActive;             // the arena HUD shows the mech's controls
     this.$help.textContent = this.mechActive
       ? 'WASD move · Space jump/fly · click attack · wheel swap · gun: right-click aims · E dash · F/right-click block · K awaken · Q ultimate · X leave'
       : this.helm ? 'Drag to look around · E to stand up'
+      : this.sg && this.area === this.sg ? 'WASD move · Shift sprint · Space jump (again in the air) · climb any wall · drag to look · E interact · ◎ portals'
       : this.area === this.sim ? 'click attack · wheel: sword ⇄ pistol · gun: right-click aims · E dash / interact · F/right-click block · K awaken · Q ultimate · L launcher · Space jump, wall kick'
       : 'WASD move · Shift sprint · Space jump (again in the air) · drag to look · E interact';
     if (this.helm || this.mechActive) { this.near = null; this.$prompt.hidden = true; }
@@ -814,11 +858,12 @@ export class ShipView {
   // ---------------- per frame ----------------
   update(dt, input) {
     this.time += dt;
+    this.area.tick?.(dt, this);
     const I = input.sample(dt);
-    if (!this.$ward.hidden) { I.move.x = I.move.y = 0; I.jump = false; I.dodge = 0; I.attack = I.heavy = I.swap = I.rage = I.spin = I.launch = 0; I.attackHold = I.guard = false; }
+    if (this.uiOpen) { I.move.x = I.move.y = 0; I.jump = false; I.dodge = 0; I.attack = I.heavy = I.swap = I.rage = I.spin = I.launch = 0; I.attackHold = I.guard = false; }
     // the kit in play (mech, or a character in the sim): the wheel swaps weapons; with the shotgun out the right
     // button looks down the sights instead of blocking, and the mouse is captured to aim
-    const kit = this.app.mode !== 'ship' || !this.$ward.hidden ? null : this.mechActive ? this.mech.kit : this.area === this.sim && !this.helm ? this.sword?.kit : null;
+    const kit = this.app.mode !== 'ship' || this.uiOpen ? null : this.mechActive ? this.mech.kit : this.area === this.sim && !this.helm ? this.sword?.kit : null;
     let ads = false;
     if (kit) {
       if (I.wheel) { I.swap = (I.swap || 0) + 1; I.zoom = 1; }
@@ -854,7 +899,7 @@ export class ShipView {
     } else {
       // interaction prompt first: E interacts when something is in reach, otherwise it's the dodge
       let near = null;
-      if (this.$ward.hidden) for (const it of this.area.interact) if (_v.copy(it.pos).setY(P.pos.y).distanceTo(P.pos) < it.r && Math.abs(P.pos.y - it.pos.y) < 2) near = it;
+      if (!this.uiOpen) for (const it of this.area.interact) if (_v.copy(it.pos).setY(P.pos.y).distanceTo(P.pos) < it.r && Math.abs(P.pos.y - it.pos.y) < 2) near = it;
       if (near !== this.near) {
         this.near = near;
         this.$prompt.hidden = !near;
@@ -863,7 +908,7 @@ export class ShipView {
       if (near && I.dodge) { this.act(near.act); I.dodge = 0; }
       // the katana: drawn in the sim, sheathed on the deck. Its hitstop slows the whole body for a beat
       if (this.sword) this.sword.camYaw = this.camYaw;
-      const fighting = this.area === this.sim && this.$ward.hidden;
+      const fighting = this.area === this.sim && !this.uiOpen;
       if (this.sword) { this.sword.aim = this.gunView.ray(); this.sword.cam = this.camera; this.sword.ads = this.gunView.adsK > 0.05; this.sword.world = this.simWorld ||= worldOfBoxes(this.sim.boxes); this.sword.onFire = () => this.gunView.fired(); this.sword.onGunHit = (k) => this.gunView.hit(k); this.sword.vm = this.gunView.vm; }
       const pdt = this.sword ? this.sword.update(dt, I, P, this.simTargets, fighting) : dt;
       if (this.sword && this.area === this.sim) this.bots.update(pdt, P, this.sword, fighting);
@@ -886,7 +931,7 @@ export class ShipView {
       this.camRoll = (this.camRoll || 0) + ((wr ? -0.09 * (P.wallSide || 1) : 0) - (this.camRoll || 0)) * Math.min(1, dt * 6);
       if (Math.abs(this.camRoll) > 1e-3) this.camera.rotateZ(this.camRoll);
       const hs = Math.hypot(P.vel.x, P.vel.z);
-      const fovWant = THREE.MathUtils.lerp(this.area === this.sim ? 60 + (wr ? 7 : THREE.MathUtils.clamp((hs - 6.5) * 1.2, 0, 4)) : 60, ADS_FOV, adsK);
+      const fovWant = THREE.MathUtils.lerp(this.area !== this.deck ? 60 + (wr ? 7 : THREE.MathUtils.clamp((hs - 6.5) * 1.2, 0, 4)) : 60, ADS_FOV, adsK);
       if (Math.abs(this.camera.fov - fovWant) > 0.05) { this.camera.fov += (fovWant - this.camera.fov) * Math.min(1, dt * (adsK > 0 ? 14 : 5)); this.camera.updateProjectionMatrix(); }
       const sk = this.sword?.shake || 0;
       if (sk > 0) { const k = sk * sk * 0.12; this.camera.position.x += (Math.random() - 0.5) * k; this.camera.position.y += (Math.random() - 0.5) * k; }
@@ -894,7 +939,8 @@ export class ShipView {
 
     const zone = this.area.zoneTitle ? this.area.zoneTitle(P.pos) : this.area.title;
     if (zone !== this.zone) { this.zone = zone; this.$title.textContent = `${this.baseName} · ${zone}`; }
-    if (this.area === this.sim) { this.sun.position.set(P.pos.x + 30, 60, P.pos.z - 20); this.sun.target.position.copy(P.pos); }
+    const sun = this.area.sun;
+    if (sun) { const o = this.area.sunOff || [30, 60, -20]; sun.position.set(P.pos.x + o[0], P.pos.y + o[1], P.pos.z + o[2]); sun.target.position.copy(P.pos); }
     else { this.app.localView.tickWorld(dt); this.camera.updateMatrixWorld(); this.renderSpace(); }
   }
 
