@@ -2,7 +2,7 @@ name: PR title
 
 # PRs are squash-merged, so the title becomes the commit on main: enforce Conventional Commits.
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, edited, reopened, synchronize]
 
 permissions:
@@ -30,4 +30,4 @@ jobs:
             chore
             revert
           subjectPattern: ^(?![A-Z]).+$
-          subjectPatternError: Start the summary with a lowercase letter, e.g. "fix(hud): stop the button overlap".
+          subjectPatternError: 'Start the summary with a lowercase letter, e.g. "fix(hud): stop the button overlap".'
