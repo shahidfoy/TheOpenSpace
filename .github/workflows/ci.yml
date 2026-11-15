@@ -27,7 +27,8 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Version is valid semver
-        run: node -e "const v=require('./package.json').version; if(!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(v)){console.error('package.json version is not semver: '+v);process.exit(1)}"
+        run: |
+          node -e "const v=require('./package.json').version; if(!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(v)){console.error('package.json version is not semver: '+v);process.exit(1)}"
       - name: Syntax-check serverless functions
         run: for f in functions/packages/*/*/index.js; do node --check "$f"; done
       - run: npm run build
