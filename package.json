@@ -2,6 +2,16 @@
   "name": "the-open-space",
   "private": true,
   "version": "0.1.0",
+  "description": "Real-time space economy game set in the real solar system, built with Three.js.",
+  "license": "MIT",
+  "homepage": "https://tamamogram.com/p/the-open-space",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shahidfoy/TheOpenSpace.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shahidfoy/TheOpenSpace/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite --host",

@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in the game is broken or wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: And what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Fly to Eden
+        2. Tap ENTER EDEN
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Where are you playing?
+      options:
+        - Telegram (phone)
+        - Telegram (desktop)
+        - Mobile browser
+        - Desktop browser
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and browser
+      placeholder: Pixel 8, Chrome 131
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, video or console errors

@@ -1,0 +1,9 @@
+* text=auto eol=lf
+*.glb binary
+*.vrm binary
+*.fbx binary
+*.bin binary
+*.jpg binary
+*.png binary
+*.webp binary
+*.wasm binary

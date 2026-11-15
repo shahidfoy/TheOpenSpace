@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Required status check on main (see .github/rulesets/main.json). Keep the job id "build".
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Version is valid semver
+        run: node -e "const v=require('./package.json').version; if(!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(v)){console.error('package.json version is not semver: '+v);process.exit(1)}"
+      - name: Syntax-check serverless functions
+        run: for f in functions/packages/*/*/index.js; do node --check "$f"; done
+      - run: npm run build
+      - name: No secrets in the build output
+        run: |
+          if grep -rEl '(CLOUDFLARE_RADAR_TOKEN|SKETCHFAB_API_TOKEN|ABUSECH_KEY|OTX_KEY|ABUSEIPDB_KEY|NVD_API_KEY)=' dist; then
+            echo "::error::A secret-looking assignment ended up in dist/"; exit 1
+          fi
