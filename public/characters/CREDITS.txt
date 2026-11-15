@@ -20,4 +20,6 @@ Ayame Remi / 文目 冷美 by ゔぁんそこ  (https://hub.vroid.com/en/charact
 "emo" (shown in game as Kuro) by Em0 MFXXX
   https://hub.vroid.com/en/characters/6863584576599604529/models/3401553006779611336  (emo.vrm)
 
-Animations: Mixamo (Adobe), retargeted at runtime onto the VRM humanoid.
+Animations: Mixamo (Adobe) clips, baked into the game-only packs vrm.bin and loco.bin (scripts/build-vrm-clips.mjs,
+scripts/build-loco.mjs) and retargeted at runtime onto the VRM humanoid. The raw FBX files are not distributed.
+The sword clips in katana.bin come from an anime katana animation pack, baked the same way (scripts/build-katana.mjs).

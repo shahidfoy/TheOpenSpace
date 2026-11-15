@@ -5,3 +5,6 @@ dist
 blender/vendor/
 .env.local
 .env.*.local
+
+# raw source animations stay outside the repo (see scripts/build-vrm-clips.mjs)
+public/**/*.fbx

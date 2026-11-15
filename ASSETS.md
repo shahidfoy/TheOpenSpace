@@ -10,7 +10,7 @@ Full per-file credits live next to the files:
 |---|---|---|---|
 | `public/models/` | Player mechs, enemy mech, ships, drone, satellite | CC BY 4.0 (Sketchfab creators); others procedural (MIT, built by `blender/`) | [CREDITS.txt](public/models/CREDITS.txt) |
 | `public/characters/*.vrm` | Playable VRoid characters and outfits | VRoid Hub terms set by each author: modification, redistribution and commercial use allowed | [CREDITS.txt](public/characters/CREDITS.txt) |
-| `public/characters/anims/` | Character animation clips | Mixamo (Adobe) terms (see note below) | [CREDITS.txt](public/characters/CREDITS.txt) |
+| `public/characters/anims/` | Character animation clips, baked into game-only `.bin` packs | Mixamo (Adobe) and the katana pack's terms (see note below) | [CREDITS.txt](public/characters/CREDITS.txt) |
 | `public/planets/` | Planet and moon surface maps | CC BY 4.0 (Solar System Scope) and NASA / USGS public domain | [CREDITS.txt](public/planets/CREDITS.txt) |
 | `public/sky/` | Star catalogue, constellation lines and names | BSD-3-Clause (d3-celestial, Olaf Frohn) | [LICENSE-d3-celestial.txt](public/sky/LICENSE-d3-celestial.txt) |
 | `public/data/cables.json` | Submarine cable routes | **CC BY-NC-SA 3.0** (TeleGeography): non-commercial, share-alike | [planets/CREDITS.txt](public/planets/CREDITS.txt) |
@@ -23,8 +23,9 @@ subject to its provider's terms.
 ## Notes for forks
 
 - **Commercial forks** must drop or replace `public/data/cables.json` (non-commercial licence).
-- **Mixamo animations** may be used inside a game or project, but Adobe's terms do not allow redistributing
-  the raw animation files on their own. Ship them only as part of the game, or replace them with your own clips.
+- **Animations** are shipped only as baked game data (`vrm.bin`, `loco.bin`, `katana.bin`), never as raw FBX:
+  Mixamo's terms allow animations inside a game but not redistributing the source files. To rebuild or change
+  them, download your own copies and run the matching script in `scripts/`. Don't commit `.fbx` files.
 - Keep the CC BY 4.0 credits when you ship the models or planet maps.
 
 Adding a new asset? Add its source, author, licence and any modifications to the `CREDITS.txt` in its folder in
