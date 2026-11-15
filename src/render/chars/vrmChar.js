@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { retargetKatanaVrm } from './katana.js';
 import { Hand } from './handIK.js';
@@ -81,63 +80,43 @@ const CLIPS = {
 };
 const ONCE = new Set(['jump', 'land', 'wall_start']);
 
-const MIXAMO_TO_VRM = {
-  mixamorigHips: 'hips', mixamorigSpine: 'spine', mixamorigSpine1: 'chest', mixamorigSpine2: 'upperChest', mixamorigNeck: 'neck', mixamorigHead: 'head',
-  mixamorigLeftShoulder: 'leftShoulder', mixamorigLeftArm: 'leftUpperArm', mixamorigLeftForeArm: 'leftLowerArm', mixamorigLeftHand: 'leftHand',
-  mixamorigRightShoulder: 'rightShoulder', mixamorigRightArm: 'rightUpperArm', mixamorigRightForeArm: 'rightLowerArm', mixamorigRightHand: 'rightHand',
-  mixamorigLeftUpLeg: 'leftUpperLeg', mixamorigLeftLeg: 'leftLowerLeg', mixamorigLeftFoot: 'leftFoot', mixamorigLeftToeBase: 'leftToes',
-  mixamorigRightUpLeg: 'rightUpperLeg', mixamorigRightLeg: 'rightLowerLeg', mixamorigRightFoot: 'rightFoot', mixamorigRightToeBase: 'rightToes',
-};
-for (const side of ['Left', 'Right']) {
-  const s = side.toLowerCase();
-  for (const [mx, vr] of [['Thumb', 'Thumb'], ['Index', 'Index'], ['Middle', 'Middle'], ['Ring', 'Ring'], ['Pinky', 'Little']]) {
-    const parts = mx === 'Thumb' ? ['Metacarpal', 'Proximal', 'Distal'] : ['Proximal', 'Intermediate', 'Distal'];
-    for (let i = 1; i <= 3; i++) MIXAMO_TO_VRM[`mixamorig${side}Hand${mx}${i}`] = `${s}${vr}${parts[i - 1]}`;
-  }
-}
-
+// The clips ship baked (scripts/build-vrm-clips.mjs): rotations already re-expressed relative to the Mixamo rest
+// pose and keyed by VRM humanoid bone, so only the per-model part of the retarget happens here.
 const BASE = '/characters/';
-const fbxCache = new Map();
-const loadFbx = (name) => {
-  if (!fbxCache.has(name)) fbxCache.set(name, new FBXLoader().loadAsync(`${BASE}anims/${name}.fbx`));
-  return fbxCache.get(name);
-};
+let packPromise = null;
+const loadPack = () => (packPromise ||= Promise.all([
+  fetch(`${BASE}anims/vrm.json`).then((r) => { if (!r.ok) throw new Error(`vrm.json ${r.status}`); return r.json(); }),
+  fetch(`${BASE}anims/vrm.bin`).then((r) => { if (!r.ok) throw new Error(`vrm.bin ${r.status}`); return r.arrayBuffer(); }),
+]).then(([meta, bin]) => ({ meta, bin })).catch((e) => { packPromise = null; throw e; }));
 
-const _q = new THREE.Quaternion(), _restInv = new THREE.Quaternion(), _parentRest = new THREE.Quaternion(), _v = new THREE.Vector3();
+const _v = new THREE.Vector3();
 
-function retarget(asset, vrm, name, mode) {
+function retarget(pack, vrm, name, mode, file = name) {
   let curve = null;
-  const src = THREE.AnimationClip.findByName(asset.animations, 'mixamo.com') || asset.animations[0];
+  const src = pack.meta.clips[file];
   const tracks = [];
-  const motionHips = asset.getObjectByName('mixamorigHips').position.y;
   const vrmHips = vrm.humanoid.getNormalizedBoneNode('hips').getWorldPosition(_v).y - vrm.scene.getWorldPosition(new THREE.Vector3()).y;
-  const scale = Math.abs(vrmHips) / motionHips;
+  const scale = Math.abs(vrmHips) / src.hips;
   const v0 = vrm.meta?.metaVersion === '0';
   for (const track of src.tracks) {
-    const [rig, prop] = track.name.split('.');
-    const bone = MIXAMO_TO_VRM[rig];
-    const node = bone && vrm.humanoid.getNormalizedBoneNode(bone);
-    const mxNode = asset.getObjectByName(rig);
-    if (!node || !mxNode) continue;
-    mxNode.getWorldQuaternion(_restInv).invert();
-    mxNode.parent.getWorldQuaternion(_parentRest);
-    if (track instanceof THREE.QuaternionKeyframeTrack) {
-      const vals = new Float32Array(track.values.length);
-      for (let i = 0; i < vals.length; i += 4) {
-        _q.fromArray(track.values, i).premultiply(_parentRest).multiply(_restInv);
-        vals[i] = v0 ? -_q.x : _q.x; vals[i + 1] = _q.y; vals[i + 2] = v0 ? -_q.z : _q.z; vals[i + 3] = _q.w;
-      }
-      tracks.push(new THREE.QuaternionKeyframeTrack(`${node.name}.${prop}`, track.times, vals));
-    } else if (track instanceof THREE.VectorKeyframeTrack && bone === 'hips' && prop === 'position') {
-      const n = track.times.length, vals = new Float32Array(track.values.length);
-      for (let i = 0; i < vals.length; i++) vals[i] = (v0 && i % 3 !== 1 ? -track.values[i] : track.values[i]) * scale;
+    const { bone, prop } = track;
+    const node = vrm.humanoid.getNormalizedBoneNode(bone);
+    if (!node) continue;
+    const n = track.n, times = new Float32Array(pack.bin, track.t, n).slice();
+    if (prop === 'quaternion') {
+      const vals = new Float32Array(pack.bin, track.v, n * 4).slice();
+      if (v0) for (let i = 0; i < vals.length; i += 4) { vals[i] = -vals[i]; vals[i + 2] = -vals[i + 2]; }
+      tracks.push(new THREE.QuaternionKeyframeTrack(`${node.name}.${prop}`, times, vals));
+    } else if (bone === 'hips' && prop === 'position') {
+      const raw = new Float32Array(pack.bin, track.v, n * 3), vals = new Float32Array(raw.length);
+      for (let i = 0; i < vals.length; i++) vals[i] = (v0 && i % 3 !== 1 ? -raw[i] : raw[i]) * scale;
       // root motion: the controller owns translation. Remove the clip's drift so it plays in place
       const x0 = vals[0], y0 = vals[1], z0 = vals[2];
       const dx = vals[(n - 1) * 3] - x0, dy = vals[(n - 1) * 3 + 1] - y0, dz = vals[(n - 1) * 3 + 2] - z0;
       // 'curve': keep the clip's rise and forward travel as data (the controller moves the body along it) and play
       // the clip itself fully in place
       if (mode === 'curve') {
-        curve = { times: Array.from(track.times), rise: [], fwd: [] };
+        curve = { times: Array.from(times), rise: [], fwd: [] };
         for (let k = 0; k < n; k++) { curve.rise.push(vals[k * 3 + 1] - y0); curve.fwd.push(Math.hypot(vals[k * 3] - x0, vals[k * 3 + 2] - z0)); }
       }
       for (let k = 0; k < n; k++) {
@@ -147,10 +126,10 @@ function retarget(asset, vrm, name, mode) {
         else { vals[k * 3] -= dx * f; vals[k * 3 + 2] -= dz * f; }
         if (mode === 'loop') vals[k * 3 + 1] -= dy * f;
       }
-      tracks.push(new THREE.VectorKeyframeTrack(`${node.name}.${prop}`, track.times, vals));
+      tracks.push(new THREE.VectorKeyframeTrack(`${node.name}.${prop}`, times, vals));
     }
   }
-  const clip = new THREE.AnimationClip(name, src.duration, tracks);
+  const clip = new THREE.AnimationClip(name, src.dur, tracks);
   if (curve) clip.rootCurve = curve;
   return clip;
 }
@@ -180,7 +159,7 @@ export class VrmChar {
     outfit = outfit || def.outfits[0];
     const loader = new GLTFLoader();
     loader.register((p) => new VRMLoaderPlugin(p));
-    const fbx = Promise.all(Object.values(CLIPS).map(([f]) => loadFbx(f)));
+    const packP = loadPack();
     const gltf = await loader.loadAsync(BASE + outfit.file, (e) => onProgress?.(e.total ? e.loaded / e.total : 0));
     const vrm = gltf.userData.vrm;
     VRMUtils.removeUnnecessaryVertices(gltf.scene);
@@ -188,10 +167,10 @@ export class VrmChar {
     VRMUtils.rotateVRM0(vrm);             // VRM 0.x faces -Z; face +Z like everything else
     vrm.scene.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
     vrm.scene.updateMatrixWorld(true);
-    const assets = await fbx;
+    const pack = await packP;
     const c = new VrmChar(def, vrm);
     c.outfit = outfit;
-    Object.keys(CLIPS).forEach((name, i) => c.addClip(name, retarget(assets[i], vrm, name, CLIPS[name][1])));
+    for (const [name, [file, mode]] of Object.entries(CLIPS)) c.addClip(name, retarget(pack, vrm, name, mode, file));
     c.addClip('wallrun_m', mirrorClip(c.actions.wallrun.getClip(), vrm, 'wallrun_m'));
     // hands, measured on the rest pose: finger grips and where a handle sits in the fist
     const nb = (b) => vrm.humanoid.getNormalizedBoneNode(b);

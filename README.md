@@ -2,6 +2,12 @@
 
 A real-time space economy game for Telegram Mini Apps, built with Three.js. Planet and moon positions come from real ephemerides, so every distance and travel time matches the actual solar system right now. At light speed the Sun is 8.3 minutes away.
 
+**▶ Play it now: [tamamogram.com/p/the-open-space](https://tamamogram.com/p/the-open-space)** (runs in any modern browser, on phone or desktop).
+
+[![CI](https://github.com/shahidfoy/TheOpenSpace/actions/workflows/ci.yml/badge.svg)](https://github.com/shahidfoy/TheOpenSpace/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/shahidfoy/TheOpenSpace?sort=semver)](https://github.com/shahidfoy/TheOpenSpace/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ## Run
 
 ```bash
@@ -96,3 +102,16 @@ Browsers can't read most of these feeds (no CORS), so a **DigitalOcean Function*
 - **Phase 3:** automated trade routes, outpost-to-outpost logistics, ship classes and refits, crew/robot upgrades.
 - **Phase 4:** sky pirate factions, contracts and bounties, light combat and escorts (still exploration-first).
 - **Phase 5:** multiplayer economy: shared market, player stations, leaderboards, Telegram Stars cosmetics.
+
+## Contributing
+
+Pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: `main` is protected, PR titles use
+Conventional Commits, and releases are `vX.Y.Z` tags that publish a GitHub Release automatically. Please report
+security problems privately (see [SECURITY.md](SECURITY.md)). Notable changes are listed in
+[CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+The source code is released under the [MIT License](LICENSE). The 3D models, characters, animations, planet
+maps and data files in `public/` keep their own licences (mostly CC BY 4.0, and one non-commercial data set):
+see [ASSETS.md](ASSETS.md) before reusing them.
