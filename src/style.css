@@ -673,7 +673,9 @@ b, strong { font-weight: 600; }
 .sh-card.on { border-color: var(--ice); box-shadow: inset 0 0 0 1px var(--ice); }
 .sh-card:hover { background: rgba(127,212,255,0.12); }
 .sh-close { margin-top: 14px; padding: 8px 18px; font-family: var(--mono); letter-spacing: 0.2em; color: var(--text); background: transparent; border: 1px solid var(--line-2); cursor: pointer; }
-@media (max-width: 640px) { .sh-help { display: none; } .sh-card { width: 120px; } .enter-ship { bottom: 230px; } }
+@media (max-width: 640px) { .sh-help { display: none; } .sh-card { width: 120px; } }
+/* phones: BOARD / EXIT SHIP (.craft-swap) owns the row at --bot + 236px, so ENTER <station> stacks above it */
+@media (max-width: 899px) { .enter-ship { bottom: calc(var(--bot) + 300px); min-width: 0; padding: 7px 10px; font-size: 11px; } }
 .sh-btns { position: absolute; top: calc(var(--top) + 118px); right: 12px; display: grid; gap: 8px; pointer-events: auto; }
 .sh-btn { padding: 8px 12px; font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; color: var(--text); background: rgba(10,14,22,0.7); border: 1px solid var(--line-2); border-left: 2px solid var(--ice); clip-path: var(--cut); cursor: pointer; }
 .sh-btn[hidden] { display: none; }
